@@ -18,7 +18,8 @@ export default function MetricsChart({ metrics }: Props) {
     resp_rate: metrics.resp_rate[i],
     flow_lim: metrics.flow_lim[i],
   }))
-  const MIN_PRESSURE = 4.0
+  const pressureVals = rawData.map(d => d.pressure).filter((p): p is number => p !== null && p > 0)
+  const MIN_PRESSURE = pressureVals.length > 0 ? Math.min(...pressureVals) : 4.0
   const data: typeof rawData = []
   let inGap = false
   for (let i = 0; i < rawData.length; i++) {
