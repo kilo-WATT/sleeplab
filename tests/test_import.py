@@ -71,6 +71,7 @@ class TestTrigger:
         assert "credentials" in resp.json()["detail"].lower()
 
     def test_with_credentials(self, client: TestClient, auth_headers):
+        pytest.importorskip("sleephq")
         client.put("/import/settings", headers=auth_headers, json={
             "sleephq_client_id": "test-id",
             "sleephq_client_secret": "test-secret",
