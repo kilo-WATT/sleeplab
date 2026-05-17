@@ -12,10 +12,10 @@ def _seed_session(db, user_id: str, folder_date: date | None = None):
     db.execute(
         text("""
             INSERT INTO sessions (
-                id, folder_date, start_datetime, end_datetime, duration_seconds,
+                id, folder_date, start_datetime, duration_seconds,
                 device_serial, has_spo2, user_id
             ) VALUES (
-                CAST(:sid AS uuid), :fd, :start, :end, 28800,
+                CAST(:sid AS uuid), :fd, :start, 28800,
                 'SN12345', FALSE, CAST(:uid AS uuid)
             )
         """),
@@ -23,7 +23,6 @@ def _seed_session(db, user_id: str, folder_date: date | None = None):
             "sid": session_id,
             "fd": folder_date,
             "start": datetime(2025, 1, 15, 22, 0, 0, tzinfo=UTC),
-            "end": datetime(2025, 1, 16, 6, 0, 0, tzinfo=UTC),
             "uid": user_id,
         },
     )

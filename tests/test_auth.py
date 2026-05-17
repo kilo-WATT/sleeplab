@@ -9,11 +9,11 @@ class TestRegister:
             "first_name": "New",
             "last_name": "User",
         })
-        assert resp.status_code == 200
+        assert resp.status_code == 201
         data = resp.json()
-        assert data["email"] == "newuser@example.com"
-        assert "access_token" in data
-        assert "id" in data
+        assert "token" in data
+        assert data["user"]["email"] == "newuser@example.com"
+        assert "user_id" in data["user"]
 
     def test_register_duplicate_email(self, client: TestClient, test_user):
         resp = client.post("/auth/register", json={
@@ -22,7 +22,7 @@ class TestRegister:
             "first_name": "Another",
             "last_name": "User",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 409
 
     def test_register_weak_password(self, client: TestClient):
         resp = client.post("/auth/register", json={
@@ -42,8 +42,8 @@ class TestLogin:
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert "access_token" in data
-        assert data["email"] == test_user["email"]
+        assert "token" in data
+        assert data["user"]["email"] == test_user["email"]
 
     def test_login_wrong_password(self, client: TestClient, test_user):
         resp = client.post("/auth/login", json={

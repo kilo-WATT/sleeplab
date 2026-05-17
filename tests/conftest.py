@@ -18,6 +18,18 @@ def _get_test_db_url() -> str | None:
     return None
 
 
+@pytest.fixture(scope="session", autouse=True)
+def migrations_applied():
+    """Run migrations once per test session (autouse so every test gets a clean DB)."""
+    url = _get_test_db_url()
+    if url is None:
+        return
+    engine = create_engine(url, pool_pre_ping=True)
+    from server import run_migrations
+    run_migrations()
+    engine.dispose()
+
+
 @pytest.fixture(scope="session")
 def db_engine():
     url = _get_test_db_url()
@@ -46,15 +58,8 @@ def db(db_engine, db_session_factory):
     connection.close()
 
 
-@pytest.fixture(scope="session")
-def migrations_applied(db_engine):
-    """Run migrations once per test session."""
-    from server import run_migrations
-    run_migrations()
-
-
 @pytest.fixture
-def test_user(db, migrations_applied):
+def test_user(db):
     user_id = str(uuid.uuid4())
     email = f"test-{uuid.uuid4().hex[:8]}@example.com"
     hashed = hash_password("test-password-123")
