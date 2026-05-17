@@ -12,11 +12,11 @@ def _seed_session(db, user_id: str, folder_date: date | None = None):
     db.execute(
         text("""
             INSERT INTO sessions (
-                id, folder_date, start_datetime, duration_seconds,
-                device_serial, has_spo2, user_id
+                id, session_id, folder_date, start_datetime, pld_start_datetime,
+                duration_seconds, device_serial, has_spo2, user_id
             ) VALUES (
-                CAST(:sid AS uuid), :fd, :start, 28800,
-                'SN12345', FALSE, CAST(:uid AS uuid)
+                CAST(:sid AS uuid), :sid, :fd, :start, :start,
+                28800, 'SN12345', FALSE, CAST(:uid AS uuid)
             )
         """),
         {
