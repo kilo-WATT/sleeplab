@@ -125,11 +125,12 @@ class TestInferredEquipment:
             assert data.get(eq_type) is None
 
     def test_with_equipment(self, client: TestClient, auth_headers):
-        client.post("/equipment/", headers=auth_headers, json={
+        post_resp = client.post("/equipment/", headers=auth_headers, json={
             "equipment_type": "cushion",
             "start_date": "2025-01-01",
             "brand": "ResMed",
         })
+        assert post_resp.status_code == 201, f"create failed: {post_resp.text}"
         resp = client.get("/equipment/inferred?ref_date=2025-06-01", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
