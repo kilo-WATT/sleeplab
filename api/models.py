@@ -114,7 +114,8 @@ class EquipmentUpdate(BaseModel):
 
 
 class InferredEquipment(BaseModel):
-    mask: Optional[EquipmentResponse] = None
+    cushion: Optional[EquipmentResponse] = None
+    headgear: Optional[EquipmentResponse] = None
     tubing: Optional[EquipmentResponse] = None
     humidifier_chamber: Optional[EquipmentResponse] = None
     filter: Optional[EquipmentResponse] = None
