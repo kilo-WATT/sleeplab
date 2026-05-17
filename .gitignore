@@ -10,6 +10,13 @@
 .env.*
 !.env.example
 
+# Claude / OpenCode
+.claude/.sessionnotes/
+.claude/settings.local.json
+.opencode/
+opencode.json
+opencode.jsonc
+
 # Node / Nx
 node_modules/
 .nx/
