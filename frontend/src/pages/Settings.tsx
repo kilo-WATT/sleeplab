@@ -54,6 +54,7 @@ export default function SettingsPage() {
   const [sleephqMessage, setSleephqMessage] = useState<string | null>(null)
   const [sleephqError, setSleephqError] = useState<string | null>(null)
   const [isSleephqSubmitting, setIsSleephqSubmitting] = useState(false)
+  const [sleephqEnabled, setSleephqEnabled] = useState(false)
 
   useEffect(() => {
     if (!user) {
@@ -66,6 +67,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     api.getImportSettings().then((settings) => {
+      setSleephqEnabled(settings.sleephq_enabled ?? false)
       setSleephqClientId(settings.sleephq_client_id ?? '')
       setSleephqClientSecret(settings.sleephq_client_secret ?? '')
       setSleephqTeamId(settings.sleephq_team_id != null ? String(settings.sleephq_team_id) : '')
@@ -251,7 +253,7 @@ export default function SettingsPage() {
           </form>
         </CardContent>
       </Card>
-      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+      {sleephqEnabled && <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
           <CardTitle className="text-2xl">SleepHQ Integration</CardTitle>
           <CardDescription>
@@ -302,7 +304,7 @@ export default function SettingsPage() {
             </Button>
           </form>
         </CardContent>
-      </Card>
+      </Card>}
       <Card className="border-[var(--danger-text)] bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
           <CardTitle className="text-2xl text-[var(--danger-text)]">Danger Zone</CardTitle>
