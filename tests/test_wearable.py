@@ -1,4 +1,5 @@
 from api.wearable.base import WearablePayload, Sample, StageSample
+import pytest
 
 def test_wearable_payload_is_empty_when_default():
     assert WearablePayload().is_empty()
@@ -98,7 +99,6 @@ def test_open_wearables_401_raises():
         mock_client.get.side_effect = [auth_err_resp, ok_resp, ok_resp]
         mock_client_cls.return_value = mock_client
 
-        import pytest
         with pytest.raises(httpx.HTTPStatusError):
             adapter.fetch("user-123", date_type(2025, 1, 15))
 
@@ -127,3 +127,21 @@ def test_mirobody_connect_error_returns_empty():
         payload = adapter.fetch("user-456", date_type(2025, 1, 15))
 
     assert payload.is_empty()
+
+
+from api.wearable.registry import get_adapter
+
+
+def test_registry_returns_open_wearables():
+    adapter = get_adapter("open-wearables", "http://host", "key")
+    assert isinstance(adapter, OpenWearablesAdapter)
+
+
+def test_registry_returns_mirobody():
+    adapter = get_adapter("mirobody", "http://host", "key")
+    assert isinstance(adapter, MirobodyAdapter)
+
+
+def test_registry_raises_on_unknown_provider():
+    with pytest.raises(ValueError, match="Unknown wearable provider"):
+        get_adapter("nonexistent", "http://host", "key")
