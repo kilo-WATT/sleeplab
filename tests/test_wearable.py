@@ -145,3 +145,106 @@ def test_registry_returns_mirobody():
 def test_registry_raises_on_unknown_provider():
     with pytest.raises(ValueError, match="Unknown wearable provider"):
         get_adapter("nonexistent", "http://host", "key")
+
+
+# ── endpoint tests ────────────────────────────────────────────────────────────
+# These use the standard client + auth_headers fixtures from conftest.py.
+# They require TEST_DATABASE_URL to be set (see conftest.py).
+
+from unittest.mock import patch as _patch
+import httpx
+
+
+def test_wearable_data_no_provider_returns_empty(client, auth_headers):
+    resp = client.get("/wearable/data", params={"date": "2025-01-15"}, headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["hr"] == []
+    assert body["spo2"] == []
+    assert body["stages"] == []
+
+
+def test_wearable_data_unauthenticated(client):
+    resp = client.get("/wearable/data", params={"date": "2025-01-15"})
+    assert resp.status_code == 401
+
+
+def test_wearable_summary_no_provider_returns_empty(client, auth_headers):
+    resp = client.get(
+        "/wearable/summary",
+        params={"date_from": "2025-01-01", "date_to": "2025-01-03"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_wearable_data_connect_error_returns_empty(client, auth_headers, db):
+    from sqlalchemy import text
+    # Insert wearable settings for the test user so provider is configured.
+    # We need the user_id — read it from the auth token via /auth/me.
+    me = client.get("/auth/me", headers=auth_headers).json()
+    uid = me["user_id"]
+    db.execute(
+        text("""
+            INSERT INTO user_import_settings
+                (user_id, wearable_provider, wearable_base_url, wearable_api_key)
+            VALUES (CAST(:uid AS uuid), 'open-wearables', 'http://no-such-host.test', 'key')
+            ON CONFLICT (user_id) DO UPDATE
+                SET wearable_provider  = EXCLUDED.wearable_provider,
+                    wearable_base_url  = EXCLUDED.wearable_base_url,
+                    wearable_api_key   = EXCLUDED.wearable_api_key
+        """),
+        {"uid": uid},
+    )
+    db.commit()
+
+    with _patch("api.wearable.open_wearables.httpx.Client") as mock_cls:
+        mock_c = MagicMock()
+        mock_c.__enter__ = MagicMock(return_value=mock_c)
+        mock_c.__exit__ = MagicMock(return_value=False)
+        mock_c.get.side_effect = httpx.ConnectError("refused")
+        mock_cls.return_value = mock_c
+
+        resp = client.get("/wearable/data", params={"date": "2025-01-15"}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["hr"] == []
+
+
+def test_wearable_data_401_from_api_returns_502(client, auth_headers, db):
+    from sqlalchemy import text
+    me = client.get("/auth/me", headers=auth_headers).json()
+    uid = me["user_id"]
+    db.execute(
+        text("""
+            INSERT INTO user_import_settings
+                (user_id, wearable_provider, wearable_base_url, wearable_api_key)
+            VALUES (CAST(:uid AS uuid), 'open-wearables', 'http://host.test', 'bad-key')
+            ON CONFLICT (user_id) DO UPDATE
+                SET wearable_provider  = EXCLUDED.wearable_provider,
+                    wearable_base_url  = EXCLUDED.wearable_base_url,
+                    wearable_api_key   = EXCLUDED.wearable_api_key
+        """),
+        {"uid": uid},
+    )
+    db.commit()
+
+    with _patch("api.wearable.open_wearables.httpx.Client") as mock_cls:
+        mock_c = MagicMock()
+        mock_c.__enter__ = MagicMock(return_value=mock_c)
+        mock_c.__exit__ = MagicMock(return_value=False)
+        auth_err = MagicMock()
+        auth_err.status_code = 401
+        auth_err.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401", request=MagicMock(), response=MagicMock()
+        )
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.json.return_value = {"samples": []}
+        mock_c.get.side_effect = [auth_err, ok, ok]
+        mock_cls.return_value = mock_c
+
+        resp = client.get("/wearable/data", params={"date": "2025-01-15"}, headers=auth_headers)
+
+    assert resp.status_code == 502
