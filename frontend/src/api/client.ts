@@ -152,6 +152,31 @@ export interface ImportSettings {
   local_import_frequency: string
   last_local_import_at: string | null
   last_local_import_status: string | null
+  wearable_provider: string | null
+  wearable_base_url: string | null
+  wearable_api_key: string | null
+}
+
+export interface SpO2Response {
+  timestamps: string[]
+  spo2: (number | null)[]
+  pulse: (number | null)[]
+}
+
+export interface WearableData {
+  hr: { timestamp: string; value: number }[]
+  spo2: { timestamp: string; value: number }[]
+  stages: { timestamp: string; stage: number }[]
+}
+
+export interface WearableDailySummary {
+  date: string
+  avg_hr: number | null
+  avg_spo2: number | null
+  awake_h: number
+  light_h: number
+  deep_h: number
+  rem_h: number
 }
 
 export interface SummaryStats {
@@ -284,6 +309,10 @@ export const api = {
   saveImportSettings: (payload: Partial<ImportSettings>) => put<ImportSettings>('/import/settings', payload),
   triggerSleepHQImport: () => post<{ status: string; message: string }>('/import/trigger'),
   triggerLocalImport: () => post<{ status: string; message: string }>('/import/trigger-local'),
+  getSessionSpo2: (id: string) => get<SpO2Response>(`/sessions/${id}/spo2`),
+  getWearableData: (date: string) => get<WearableData>('/wearable/data', { date }),
+  getWearableSummary: (dateFrom: string, dateTo: string) =>
+    get<WearableDailySummary[]>('/wearable/summary', { date_from: dateFrom, date_to: dateTo }),
 }
 
 export const authTokenStore = {
