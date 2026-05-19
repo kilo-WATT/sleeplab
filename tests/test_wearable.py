@@ -375,3 +375,31 @@ def test_stages_to_hours_skips_malformed_timestamps():
     # Malformed first sample is skipped; second sample gets 30-min default
     assert hours[1] == pytest.approx(0.0)
     assert hours[2] == pytest.approx(0.5)
+
+
+def test_wearable_settings_round_trip(client, auth_headers):
+    resp = client.put(
+        "/import/settings",
+        json={
+            "wearable_provider": "open-wearables",
+            "wearable_base_url": "https://wearables.home.example.com",
+            "wearable_api_key": "my-secret-key",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["wearable_provider"] == "open-wearables"
+    assert body["wearable_base_url"] == "https://wearables.home.example.com"
+    assert body["wearable_api_key"] is None  # always masked
+
+
+def test_wearable_api_key_not_exposed_in_get(client, auth_headers):
+    client.put(
+        "/import/settings",
+        json={"wearable_api_key": "super-secret"},
+        headers=auth_headers,
+    )
+    resp = client.get("/import/settings", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["wearable_api_key"] is None

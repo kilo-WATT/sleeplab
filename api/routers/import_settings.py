@@ -33,6 +33,9 @@ class ImportSettingsResponse(BaseModel):
     local_import_frequency: str = "daily"
     last_local_import_at: Optional[str] = None
     last_local_import_status: Optional[str] = None
+    wearable_provider: Optional[str] = None
+    wearable_base_url: Optional[str] = None
+    wearable_api_key: Optional[str] = None  # always None in responses
 
 
 class ImportSettingsUpdate(BaseModel):
@@ -44,6 +47,9 @@ class ImportSettingsUpdate(BaseModel):
     lookback_days: Optional[int] = None
     local_datalog_path: Optional[str] = None
     local_import_frequency: Optional[str] = None
+    wearable_provider: Optional[str] = None
+    wearable_base_url: Optional[str] = None
+    wearable_api_key: Optional[str] = None
 
 
 def _validate_local_path(raw: str) -> Path:
@@ -88,6 +94,9 @@ def get_import_settings(
         local_import_frequency=row["local_import_frequency"] or "daily",
         last_local_import_at=last_at.isoformat() if last_at else None,
         last_local_import_status=row["last_local_import_status"],
+        wearable_provider=row["wearable_provider"],
+        wearable_base_url=row["wearable_base_url"],
+        wearable_api_key=None,  # never expose
     )
 
 
@@ -113,12 +122,14 @@ def save_import_settings(
                     (user_id, sleephq_client_id, sleephq_client_secret,
                      sleephq_team_id, sleephq_machine_id,
                      auto_import_sleephq, lookback_days,
-                     local_datalog_path, local_import_frequency, updated_at)
+                     local_datalog_path, local_import_frequency, updated_at,
+                     wearable_provider, wearable_base_url, wearable_api_key)
                 VALUES
                     (CAST(:uid AS uuid), :client_id, :client_secret,
                      :team_id, :machine_id,
                      :auto_import, :lookback,
-                     :local_path, :local_freq, NOW())
+                     :local_path, :local_freq, NOW(),
+                     :w_provider, :w_base_url, :w_api_key)
             """),
             {
                 "uid": current_user["id"],
@@ -130,6 +141,9 @@ def save_import_settings(
                 "lookback": body.lookback_days if body.lookback_days is not None else 30,
                 "local_path": body.local_datalog_path or None,
                 "local_freq": body.local_import_frequency or "daily",
+                "w_provider": body.wearable_provider,
+                "w_base_url": body.wearable_base_url,
+                "w_api_key": body.wearable_api_key,
             },
         )
     else:
@@ -167,6 +181,18 @@ def save_import_settings(
         if body.local_import_frequency is not None:
             set_clauses.append("local_import_frequency = :local_freq")
             fields["local_freq"] = body.local_import_frequency
+
+        if body.wearable_provider is not None:
+            set_clauses.append("wearable_provider = :w_provider")
+            fields["w_provider"] = body.wearable_provider
+
+        if body.wearable_base_url is not None:
+            set_clauses.append("wearable_base_url = :w_base_url")
+            fields["w_base_url"] = body.wearable_base_url
+
+        if body.wearable_api_key is not None:
+            set_clauses.append("wearable_api_key = :w_api_key")
+            fields["w_api_key"] = body.wearable_api_key
 
         db.execute(
             text(f"UPDATE user_import_settings SET {', '.join(set_clauses)} WHERE user_id = CAST(:uid AS uuid)"),
