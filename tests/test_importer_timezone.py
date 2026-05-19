@@ -5,12 +5,9 @@ These are pure-Python helpers with no DB or file I/O, so no fixtures needed.
 """
 
 import sys
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
-import pytest
 
 # importer/ is not a package — add it to sys.path so we can import directly
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "importer"))
@@ -60,7 +57,7 @@ class TestLocalize:
         # Jan 15 23:00 Eastern Standard Time = Jan 16 04:00 UTC
         naive = datetime(2025, 1, 15, 23, 0, 0)
         result = _localize(naive)
-        utc = result.astimezone(timezone.utc)
+        utc = result.astimezone(UTC)
         assert utc.day == 16
         assert utc.hour == 4
 
@@ -69,7 +66,7 @@ class TestLocalize:
         # Jan 15 08:00 JST (UTC+9) = Jan 14 23:00 UTC
         naive = datetime(2025, 1, 15, 8, 0, 0)
         result = _localize(naive)
-        utc = result.astimezone(timezone.utc)
+        utc = result.astimezone(UTC)
         assert utc.day == 14
         assert utc.hour == 23
 
@@ -78,7 +75,7 @@ class TestLocalize:
         # Jul 15 22:00 EDT (UTC-4) = Jul 16 02:00 UTC
         naive = datetime(2025, 7, 15, 22, 0, 0)
         result = _localize(naive)
-        utc = result.astimezone(timezone.utc)
+        utc = result.astimezone(UTC)
         assert utc.day == 16
         assert utc.hour == 2
 
@@ -88,5 +85,5 @@ class TestLocalize:
         result = _localize(naive)
         assert result.tzinfo == ZoneInfo("UTC")
         # UTC offset is 0 so UTC equivalent equals the naive time
-        utc = result.astimezone(timezone.utc)
+        utc = result.astimezone(UTC)
         assert utc.hour == 22
