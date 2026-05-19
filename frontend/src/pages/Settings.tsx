@@ -64,6 +64,14 @@ export default function SettingsPage() {
   const [localError, setLocalError] = useState<string | null>(null)
   const [isLocalSubmitting, setIsLocalSubmitting] = useState(false)
 
+  // Wearable settings
+  const [wearableProvider, setWearableProvider] = useState('')
+  const [wearableBaseUrl, setWearableBaseUrl] = useState('')
+  const [wearableApiKey, setWearableApiKey] = useState('')
+  const [wearableMessage, setWearableMessage] = useState<string | null>(null)
+  const [wearableError, setWearableError] = useState<string | null>(null)
+  const [isWearableSubmitting, setIsWearableSubmitting] = useState(false)
+
   useEffect(() => {
     if (!user) {
       return
@@ -82,6 +90,9 @@ export default function SettingsPage() {
       setLocalFrequency(settings.local_import_frequency ?? 'daily')
       setLastImportAt(settings.last_local_import_at)
       setLastImportStatus(settings.last_local_import_status)
+      setWearableProvider(settings.wearable_provider ?? '')
+      setWearableBaseUrl(settings.wearable_base_url ?? '')
+      // wearable_api_key is always null from server — leave blank
     }).catch(() => {
       // No settings saved yet — leave fields empty
     })
@@ -154,6 +165,26 @@ export default function SettingsPage() {
       setLocalError(err instanceof Error ? err.message : 'Could not save settings')
     } finally {
       setIsLocalSubmitting(false)
+    }
+  }
+
+  async function handleWearableSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setWearableError(null)
+    setWearableMessage(null)
+    setIsWearableSubmitting(true)
+    try {
+      await api.saveImportSettings({
+        wearable_provider: wearableProvider || null,
+        wearable_base_url: wearableBaseUrl || null,
+        wearable_api_key: wearableApiKey || null,
+      })
+      setWearableMessage('Settings saved.')
+      setWearableApiKey('')
+    } catch (err) {
+      setWearableError(err instanceof Error ? err.message : 'Could not save settings')
+    } finally {
+      setIsWearableSubmitting(false)
     }
   }
 
@@ -387,6 +418,62 @@ export default function SettingsPage() {
 
             <Button type="submit" disabled={isLocalSubmitting}>
               {isLocalSubmitting ? 'Saving...' : 'Save DATALOG settings'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+        <CardHeader>
+          <CardTitle className="text-2xl">Wearable Data</CardTitle>
+          <CardDescription>
+            Overlay heart rate, SpO₂, and sleep stages from a self-hosted wearable API onto your session charts. Supported providers: open-wearables, mirobody.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={handleWearableSubmit}>
+            <div className="space-y-3">
+              <Label htmlFor="wearableProvider">Provider</Label>
+              <select
+                id="wearableProvider"
+                value={wearableProvider}
+                onChange={(event) => setWearableProvider(event.target.value)}
+                className="flex h-9 w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+              >
+                <option value="">None</option>
+                <option value="open-wearables">open-wearables</option>
+                <option value="mirobody">mirobody</option>
+              </select>
+            </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="wearableBaseUrl">Base URL</Label>
+              <Input
+                id="wearableBaseUrl"
+                value={wearableBaseUrl}
+                onChange={(event) => setWearableBaseUrl(event.target.value)}
+                autoComplete="off"
+                placeholder="https://wearables.home.example.com"
+              />
+            </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="wearableApiKey">API key</Label>
+              <Input
+                id="wearableApiKey"
+                type="password"
+                value={wearableApiKey}
+                onChange={(event) => setWearableApiKey(event.target.value)}
+                autoComplete="new-password"
+                placeholder="Leave blank to keep existing key"
+              />
+            </div>
+
+            {wearableMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{wearableMessage}</p> : null}
+            {wearableError ? <p className="text-sm text-[var(--danger-text)]">{wearableError}</p> : null}
+
+            <Button type="submit" disabled={isWearableSubmitting}>
+              {isWearableSubmitting ? 'Saving...' : 'Save wearable settings'}
             </Button>
           </form>
         </CardContent>
