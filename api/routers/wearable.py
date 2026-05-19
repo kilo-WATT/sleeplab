@@ -6,7 +6,7 @@ GET /wearable/summary?date_from=&date_to= — daily aggregates for a date range
 
 import logging
 from datetime import date as date_type
-from datetime import timedelta
+from datetime import datetime, timedelta
 from statistics import mean
 
 import httpx
@@ -51,7 +51,16 @@ class WearableDailySummary(BaseModel):
 
 
 def _get_adapter_for_user(user_id: str, db: Session):
-    """Return a configured adapter or None if the user has no wearable set up."""
+    """Return a configured wearable adapter for the given user, or None.
+
+    Args:
+        user_id: The authenticated user's UUID string.
+        db: SQLAlchemy database session.
+
+    Returns:
+        A WearableAdapter instance, or None if no provider is configured
+        or the provider name is unrecognized.
+    """
     row = db.execute(
         text("""
             SELECT wearable_provider, wearable_base_url, wearable_api_key
@@ -89,13 +98,18 @@ def _stages_to_hours(stages: list[StageSample]) -> dict:
     The final epoch defaults to 30 minutes.
     """
     hours: dict[int, float] = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
-    from datetime import datetime
 
     for i, sample in enumerate(stages):
-        start = datetime.fromisoformat(sample.timestamp.replace("Z", "+00:00"))
+        try:
+            start = datetime.fromisoformat(sample.timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
         if i + 1 < len(stages):
             end_str = stages[i + 1].timestamp
-            end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            try:
+                end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
         else:
             end = start + timedelta(minutes=30)
 
@@ -123,10 +137,15 @@ def get_wearable_data(
     try:
         payload = adapter.fetch(current_user["id"], target)
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in (401, 403):
+        if exc.response.status_code == 401:
             raise HTTPException(
                 status_code=502,
-                detail=f"Wearable API returned {exc.response.status_code}. Check your credentials in Settings.",
+                detail="Wearable API rejected your credentials (401). Check your API key in Settings.",
+            )
+        if exc.response.status_code == 403:
+            raise HTTPException(
+                status_code=502,
+                detail="Wearable API denied access (403). Your account may lack permission.",
             )
         return WearableDataResponse(hr=[], spo2=[], stages=[])
 
@@ -156,10 +175,15 @@ def get_wearable_summary(
         try:
             payload = adapter.fetch(current_user["id"], current)
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (401, 403):
+            if exc.response.status_code == 401:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"Wearable API returned {exc.response.status_code}. Check your credentials in Settings.",
+                    detail="Wearable API rejected your credentials (401). Check your API key in Settings.",
+                )
+            if exc.response.status_code == 403:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Wearable API denied access (403). Your account may lack permission.",
                 )
             current += timedelta(days=1)
             continue

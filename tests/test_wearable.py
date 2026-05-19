@@ -1,5 +1,15 @@
-from api.wearable.base import WearablePayload, Sample, StageSample
+from datetime import date as date_type
+from unittest.mock import MagicMock, patch
+from unittest.mock import patch as _patch
+
+import httpx
 import pytest
+
+from api.wearable.base import Sample, StageSample, WearablePayload
+from api.wearable.mirobody import _MIROBODY_STAGE_MAP, MirobodyAdapter
+from api.wearable.open_wearables import _STAGE_MAP, OpenWearablesAdapter
+from api.wearable.registry import get_adapter
+
 
 def test_wearable_payload_is_empty_when_default():
     assert WearablePayload().is_empty()
@@ -7,11 +17,6 @@ def test_wearable_payload_is_empty_when_default():
 def test_wearable_payload_not_empty_with_hr():
     p = WearablePayload(hr=[Sample(timestamp="2025-01-01T02:00:00Z", value=62.0)])
     assert not p.is_empty()
-
-
-from unittest.mock import MagicMock, patch
-from datetime import date as date_type
-from api.wearable.open_wearables import OpenWearablesAdapter, _STAGE_MAP
 
 
 def test_stage_map_covers_all_expected_labels():
@@ -38,7 +43,6 @@ def _make_ok_response(json_data: dict):
 
 
 def _make_error_response(status_code: int):
-    import httpx
     r = MagicMock()
     r.status_code = status_code
     r.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -71,7 +75,6 @@ def test_open_wearables_fetch_returns_normalised_payload():
 
 
 def test_open_wearables_connect_error_returns_empty():
-    import httpx
     adapter = OpenWearablesAdapter(base_url="http://wearables.test", api_key="key")
 
     with patch("api.wearable.open_wearables.httpx.Client") as mock_client_cls:
@@ -87,7 +90,6 @@ def test_open_wearables_connect_error_returns_empty():
 
 
 def test_open_wearables_401_raises():
-    import httpx
     adapter = OpenWearablesAdapter(base_url="http://wearables.test", api_key="bad-key")
     auth_err_resp = _make_error_response(401)
     ok_resp = _make_ok_response({"samples": []})
@@ -103,18 +105,17 @@ def test_open_wearables_401_raises():
             adapter.fetch("user-123", date_type(2025, 1, 15))
 
 
-from api.wearable.mirobody import MirobodyAdapter, _MIROBODY_STAGE_MAP
-
-
 def test_mirobody_stage_map_normalises_correctly():
     assert _MIROBODY_STAGE_MAP["wake"] == 1
+    assert _MIROBODY_STAGE_MAP["awake"] == 1
     assert _MIROBODY_STAGE_MAP["light"] == 2
+    assert _MIROBODY_STAGE_MAP["nrem"] == 2
     assert _MIROBODY_STAGE_MAP["deep"] == 3
+    assert _MIROBODY_STAGE_MAP["slow_wave"] == 3
     assert _MIROBODY_STAGE_MAP["rem"] == 4
 
 
 def test_mirobody_connect_error_returns_empty():
-    import httpx
     adapter = MirobodyAdapter(base_url="http://mirobody.test", api_key="key")
 
     with patch("api.wearable.mirobody.httpx.Client") as mock_client_cls:
@@ -127,9 +128,6 @@ def test_mirobody_connect_error_returns_empty():
         payload = adapter.fetch("user-456", date_type(2025, 1, 15))
 
     assert payload.is_empty()
-
-
-from api.wearable.registry import get_adapter
 
 
 def test_registry_returns_open_wearables():
@@ -150,9 +148,6 @@ def test_registry_raises_on_unknown_provider():
 # ── endpoint tests ────────────────────────────────────────────────────────────
 # These use the standard client + auth_headers fixtures from conftest.py.
 # They require TEST_DATABASE_URL to be set (see conftest.py).
-
-from unittest.mock import patch as _patch
-import httpx
 
 
 def test_wearable_data_no_provider_returns_empty(client, auth_headers):
@@ -322,3 +317,34 @@ def test_wearable_data_401_from_api_returns_502(client, auth_headers, db):
         resp = client.get("/wearable/data", params={"date": "2025-01-15"}, headers=auth_headers)
 
     assert resp.status_code == 502
+
+
+# ── _stages_to_hours unit tests ───────────────────────────────────────────────
+
+def test_stages_to_hours_accumulates_correctly():
+    from api.routers.wearable import _stages_to_hours
+
+    stages = [
+        StageSample(timestamp="2025-01-01T22:00:00Z", stage=1),  # awake 1h
+        StageSample(timestamp="2025-01-01T23:00:00Z", stage=2),  # light 2h
+        StageSample(timestamp="2025-01-02T01:00:00Z", stage=3),  # deep 1h
+        StageSample(timestamp="2025-01-02T02:00:00Z", stage=4),  # rem → 30min default
+    ]
+    hours = _stages_to_hours(stages)
+    assert hours[1] == pytest.approx(1.0)
+    assert hours[2] == pytest.approx(2.0)
+    assert hours[3] == pytest.approx(1.0)
+    assert hours[4] == pytest.approx(0.5)  # 30 min default
+
+
+def test_stages_to_hours_skips_malformed_timestamps():
+    from api.routers.wearable import _stages_to_hours
+
+    stages = [
+        StageSample(timestamp="not-a-timestamp", stage=1),
+        StageSample(timestamp="2025-01-01T23:00:00Z", stage=2),  # light → 30min default
+    ]
+    hours = _stages_to_hours(stages)
+    # Malformed first sample is skipped; second sample gets 30-min default
+    assert hours[1] == pytest.approx(0.0)
+    assert hours[2] == pytest.approx(0.5)
