@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, WearableData } from '../api/client'
+import SpO2Chart from '../components/SpO2Chart'
+import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
 import EventTimeline from '../components/EventTimeline'
 import InfoPopover from '../components/InfoPopover'
@@ -37,6 +39,8 @@ export default function SessionDetail() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [prevNext, setPrevNext] = useState<{ prev: string | null; next: string | null }>({ prev: null, next: null })
+  const [spo2, setSpo2] = useState<SpO2Response | null>(null)
+  const [wearableData, setWearableData] = useState<WearableData | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -64,6 +68,20 @@ export default function SessionDetail() {
         next: idx < sorted.length - 1 ? sorted[idx + 1].id : null,
       })
     })
+  }, [session, sessionId])
+
+  useEffect(() => {
+    if (!session) return
+    if (!session.has_spo2) return
+    api.getSessionSpo2(sessionId).then(setSpo2).catch(() => {})
+  }, [session, sessionId])
+
+  useEffect(() => {
+    if (!session) return
+    api.getWearableData(session.folder_date).then((data) => {
+      if (!data.hr.length && !data.spo2.length && !data.stages.length) return
+      setWearableData(data)
+    }).catch(() => {})
   }, [session, sessionId])
 
   if (loading) return <div className="rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-10 text-center text-[var(--muted-foreground)]">Loading session...</div>
@@ -225,6 +243,14 @@ export default function SessionDetail() {
       </Card>
 
       <MetricsChart metrics={metrics} />
+
+        {spo2 && (
+          <SpO2Chart spo2={spo2} wearable={wearableData} />
+        )}
+
+        {wearableData && wearableData.stages.length > 0 && (
+          <WearableSleepStageChart stages={wearableData.stages} />
+        )}
     </div>
   )
 }
