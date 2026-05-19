@@ -17,6 +17,9 @@
 opencode.json
 opencode.jsonc
 
+# Superpowers plans (local implementation notes)
+docs/superpowers/plans/
+
 # Node / Nx
 node_modules/
 .nx/
