@@ -27,7 +27,7 @@ export default function WearableSleepStageChart({ stages }: Props) {
   const data = stages.map(({ timestamp, stage }) => ({
     ts: timestamp,
     stage: invertStage(stage),
-    originalStage: stage,
+    stageLabel: STAGE_LABELS[stage] ?? 'Unknown',
   }))
 
   return (
@@ -62,8 +62,7 @@ export default function WearableSleepStageChart({ stages }: Props) {
               }}
               labelFormatter={formatTick}
               formatter={(_, __, props) => [
-                STAGE_LABELS[(props as any).payload.originalStage] ?? 'Unknown',
-                'Stage',
+                props.payload.stageLabel, 'Stage',
               ]}
             />
             <Line

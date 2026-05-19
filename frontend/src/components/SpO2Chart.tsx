@@ -46,7 +46,7 @@ export default function SpO2Chart({ spo2, wearable }: Props) {
     })
   }
 
-  const data = Object.values(byTs).sort((a, b) => a.ts.localeCompare(b.ts))
+  const data = Object.values(byTs).sort((a, b) => (a.ts < b.ts ? -1 : 1))
 
   const tickInterval = Math.max(1, Math.floor(data.length / 8))
 
