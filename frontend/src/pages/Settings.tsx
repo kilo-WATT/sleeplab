@@ -255,7 +255,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-2xl">SleepHQ Integration</CardTitle>
           <CardDescription>
-            Connect your SleepHQ account to sync CPAP data automatically. You can find your OAuth credentials in your SleepHQ developer settings.
+            Import your CPAP history from SleepHQ. This is a one-time historical import — it pulls your existing records into SleepLab and does not stay connected or sync automatically. You can re-run it at any time to pull in newer sessions. OAuth credentials can be found in your SleepHQ developer settings.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -290,7 +290,7 @@ export default function SettingsPage() {
                 value={sleephqTeamId}
                 onChange={(event) => setSleephqTeamId(event.target.value)}
                 inputMode="numeric"
-                placeholder="Your SleepHQ team ID (optional — auto-resolved if blank)"
+                placeholder="Optional — auto-resolved if blank"
               />
             </div>
 
