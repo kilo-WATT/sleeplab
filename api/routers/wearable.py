@@ -123,10 +123,12 @@ def get_wearable_data(
     try:
         payload = adapter.fetch(current_user["id"], target)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Wearable API returned {exc.response.status_code}. Check your credentials in Settings.",
-        )
+        if exc.response.status_code in (401, 403):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Wearable API returned {exc.response.status_code}. Check your credentials in Settings.",
+            )
+        return WearableDataResponse(hr=[], spo2=[], stages=[])
 
     return _payload_to_response(payload)
 
@@ -154,10 +156,13 @@ def get_wearable_summary(
         try:
             payload = adapter.fetch(current_user["id"], current)
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Wearable API returned {exc.response.status_code}. Check your credentials in Settings.",
-            )
+            if exc.response.status_code in (401, 403):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Wearable API returned {exc.response.status_code}. Check your credentials in Settings.",
+                )
+            current += timedelta(days=1)
+            continue
 
         if not payload.is_empty():
             hr_vals = [s.value for s in payload.hr]

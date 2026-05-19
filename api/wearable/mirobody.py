@@ -64,7 +64,7 @@ class MirobodyAdapter(WearableAdapter):
                 hr_resp = client.get("/api/v1/biometrics/heart-rate", params=params)
                 spo2_resp = client.get("/api/v1/biometrics/spo2", params=params)
                 stages_resp = client.get("/api/v1/sleep/stages", params=params)
-            except httpx.ConnectError:
+            except (httpx.ConnectError, httpx.TimeoutException):
                 return WearablePayload()
 
             for resp in (hr_resp, spo2_resp, stages_resp):

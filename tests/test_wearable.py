@@ -212,6 +212,80 @@ def test_wearable_data_connect_error_returns_empty(client, auth_headers, db):
     assert resp.json()["hr"] == []
 
 
+def test_endpoint_timeout_returns_empty(client, auth_headers, db):
+    from sqlalchemy import text
+    me = client.get("/auth/me", headers=auth_headers).json()
+    uid = me["user_id"]
+    db.execute(
+        text("""
+            INSERT INTO user_import_settings
+                (user_id, wearable_provider, wearable_base_url, wearable_api_key)
+            VALUES (CAST(:uid AS uuid), 'open-wearables', 'http://no-such-host.test', 'key')
+            ON CONFLICT (user_id) DO UPDATE
+                SET wearable_provider  = EXCLUDED.wearable_provider,
+                    wearable_base_url  = EXCLUDED.wearable_base_url,
+                    wearable_api_key   = EXCLUDED.wearable_api_key
+        """),
+        {"uid": uid},
+    )
+    db.commit()
+
+    with _patch("api.wearable.open_wearables.httpx.Client") as mock_cls:
+        mock_c = MagicMock()
+        mock_c.__enter__ = MagicMock(return_value=mock_c)
+        mock_c.__exit__ = MagicMock(return_value=False)
+        mock_c.get.side_effect = httpx.TimeoutException("timed out")
+        mock_cls.return_value = mock_c
+
+        resp = client.get("/wearable/data", params={"date": "2025-01-15"}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["hr"] == []
+    assert resp.json()["spo2"] == []
+    assert resp.json()["stages"] == []
+
+
+def test_endpoint_5xx_returns_empty(client, auth_headers, db):
+    from sqlalchemy import text
+    me = client.get("/auth/me", headers=auth_headers).json()
+    uid = me["user_id"]
+    db.execute(
+        text("""
+            INSERT INTO user_import_settings
+                (user_id, wearable_provider, wearable_base_url, wearable_api_key)
+            VALUES (CAST(:uid AS uuid), 'open-wearables', 'http://host.test', 'key')
+            ON CONFLICT (user_id) DO UPDATE
+                SET wearable_provider  = EXCLUDED.wearable_provider,
+                    wearable_base_url  = EXCLUDED.wearable_base_url,
+                    wearable_api_key   = EXCLUDED.wearable_api_key
+        """),
+        {"uid": uid},
+    )
+    db.commit()
+
+    with _patch("api.wearable.open_wearables.httpx.Client") as mock_cls:
+        mock_c = MagicMock()
+        mock_c.__enter__ = MagicMock(return_value=mock_c)
+        mock_c.__exit__ = MagicMock(return_value=False)
+        server_err_resp = MagicMock()
+        server_err_resp.status_code = 500
+        server_err_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=MagicMock(), response=httpx.Response(500)
+        )
+        ok = MagicMock()
+        ok.status_code = 200
+        ok.json.return_value = {"samples": []}
+        mock_c.get.side_effect = [server_err_resp, ok, ok]
+        mock_cls.return_value = mock_c
+
+        resp = client.get("/wearable/data", params={"date": "2025-01-15"}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["hr"] == []
+    assert resp.json()["spo2"] == []
+    assert resp.json()["stages"] == []
+
+
 def test_wearable_data_401_from_api_returns_502(client, auth_headers, db):
     from sqlalchemy import text
     me = client.get("/auth/me", headers=auth_headers).json()
