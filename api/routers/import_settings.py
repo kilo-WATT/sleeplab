@@ -2,7 +2,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel
@@ -11,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
-from .upload import IMPORT_JOBS, _mark_import_running, _mark_import_finished
+from .upload import IMPORT_JOBS, _mark_import_finished, _mark_import_running
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -23,33 +22,33 @@ LOCAL_DATA_ROOT = Path("/data")
 
 
 class ImportSettingsResponse(BaseModel):
-    sleephq_client_id: Optional[str] = None
-    sleephq_client_secret: Optional[str] = None  # always None in responses
-    sleephq_team_id: Optional[int] = None
-    sleephq_machine_id: Optional[int] = None
+    sleephq_client_id: str | None = None
+    sleephq_client_secret: str | None = None  # always None in responses
+    sleephq_team_id: int | None = None
+    sleephq_machine_id: int | None = None
     auto_import_sleephq: bool = False
     lookback_days: int = 30
-    local_datalog_path: Optional[str] = None
+    local_datalog_path: str | None = None
     local_import_frequency: str = "daily"
-    last_local_import_at: Optional[str] = None
-    last_local_import_status: Optional[str] = None
-    wearable_provider: Optional[str] = None
-    wearable_base_url: Optional[str] = None
-    wearable_api_key: Optional[str] = None  # always None in responses
+    last_local_import_at: str | None = None
+    last_local_import_status: str | None = None
+    wearable_provider: str | None = None
+    wearable_base_url: str | None = None
+    wearable_api_key: str | None = None  # always None in responses
 
 
 class ImportSettingsUpdate(BaseModel):
-    sleephq_client_id: Optional[str] = None
-    sleephq_client_secret: Optional[str] = None
-    sleephq_team_id: Optional[int] = None
-    sleephq_machine_id: Optional[int] = None
-    auto_import_sleephq: Optional[bool] = None
-    lookback_days: Optional[int] = None
-    local_datalog_path: Optional[str] = None
-    local_import_frequency: Optional[str] = None
-    wearable_provider: Optional[str] = None
-    wearable_base_url: Optional[str] = None
-    wearable_api_key: Optional[str] = None
+    sleephq_client_id: str | None = None
+    sleephq_client_secret: str | None = None
+    sleephq_team_id: int | None = None
+    sleephq_machine_id: int | None = None
+    auto_import_sleephq: bool | None = None
+    lookback_days: int | None = None
+    local_datalog_path: str | None = None
+    local_import_frequency: str | None = None
+    wearable_provider: str | None = None
+    wearable_base_url: str | None = None
+    wearable_api_key: str | None = None
 
 
 def _validate_local_path(raw: str) -> Path:
@@ -207,8 +206,8 @@ def _run_sleephq_import_task(
     user_id: str,
     client_id: str,
     client_secret: str,
-    team_id: Optional[int],
-    machine_id: Optional[int],
+    team_id: int | None,
+    machine_id: int | None,
     lookback_days: int,
 ) -> None:
     try:
@@ -335,7 +334,7 @@ def trigger_local_import(
 def trigger_all_local_imports(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    x_import_secret: Optional[str] = Header(default=None),
+    x_import_secret: str | None = Header(default=None),
 ):
     secret = os.environ.get("IMPORT_WEBHOOK_SECRET", "")
     if not secret or x_import_secret != secret:
