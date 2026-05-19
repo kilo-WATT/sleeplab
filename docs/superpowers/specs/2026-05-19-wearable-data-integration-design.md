@@ -95,10 +95,20 @@ New **"Wearable Data"** card after the Local DATALOG Import card:
 - Saved via existing `PUT /import/settings` — no new API method, just three new fields added to `ImportSettings` in `client.ts`
 
 ### Session detail page
-Two new components rendered below the CPAP Oximetry section (PR #25), fetched non-blocking after the main session load via `GET /wearable/data?date=<session.folder_date>`. Both silently omitted when the response is empty.
+Wearable data is fetched non-blocking after the main session load via `GET /wearable/data?date=<session.folder_date>` and overlaid into the **existing** CPAP oximetry chart rather than shown in a separate chart.
 
-- **`WearableHRChart.tsx`** — HR + SpO₂ dual-axis line chart. Two stacked panels sharing a time axis, consistent styling with `SpO2Chart` (PR #25): dark tooltip, 30-min x-axis ticks, `#334155` grid.
-- **`WearableSleepStageChart.tsx`** — sleep stage hypnogram. Step chart, discrete Y-axis (Awake / Light / Deep / REM).
+**`SpO2Chart.tsx`** (from PR #25) is extended to accept optional wearable HR and SpO₂ series alongside the CPAP series. When wearable data is present, both sources are rendered on the same panels with distinct colors:
+
+| Series | Color |
+|--------|-------|
+| CPAP SpO₂ | existing accent (e.g. `#6366f1`) |
+| Wearable SpO₂ | `#f59e0b` (amber) |
+| CPAP pulse | existing secondary |
+| Wearable HR | `#10b981` (emerald) |
+
+A small legend is added to the chart header when wearable data is present (e.g. "CPAP · Wearable"). When no wearable data exists the chart renders exactly as it does today — no visual change.
+
+- **`WearableSleepStageChart.tsx`** — sleep stage hypnogram rendered below the oximetry card. Step chart, discrete Y-axis (Awake / Light / Deep / REM). No CPAP equivalent so this remains its own component. Silently omitted when stages array is empty.
 
 ### Dashboard/trend view
 Stacked bar chart added to the summary stats page alongside the AHI trend. Each bar = one night, segments = hours in Awake / Light / Deep / REM. Fetched via `GET /wearable/summary` with the same date range as the existing summary stats call. Silently omitted when empty.
