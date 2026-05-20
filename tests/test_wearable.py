@@ -306,8 +306,10 @@ def test_wearable_data_401_from_api_returns_502(client, auth_headers, db):
         mock_c.__exit__ = MagicMock(return_value=False)
         auth_err = MagicMock()
         auth_err.status_code = 401
+        err_response = MagicMock()
+        err_response.status_code = 401
         auth_err.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "401", request=MagicMock(), response=MagicMock()
+            "401", request=MagicMock(), response=err_response
         )
         ok = MagicMock()
         ok.status_code = 200

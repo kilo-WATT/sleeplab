@@ -16,8 +16,8 @@ interface Props {
   wearable?: WearableData | null
 }
 
-function formatTick(iso: string) {
-  const d = new Date(iso)
+function formatTick(iso: unknown): string {
+  const d = new Date(String(iso ?? ''))
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 

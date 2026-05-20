@@ -17,8 +17,8 @@ function invertStage(stage: number): number {
   return 5 - stage
 }
 
-function formatTick(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+function formatTick(iso: unknown): string {
+  return new Date(String(iso ?? '')).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 export default function WearableSleepStageChart({ stages }: Props) {
