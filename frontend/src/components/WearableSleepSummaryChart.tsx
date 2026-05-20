@@ -61,9 +61,9 @@ export default function WearableSleepSummaryChart({ data }: Props) {
                 borderRadius: 18,
                 color: '#3c2b22',
               }}
-              formatter={(val, name: string) => [
+              formatter={(val, name) => [
                 typeof val === 'number' ? `${val.toFixed(1)}h` : '',
-                STAGE_LABELS[name as keyof typeof STAGE_LABELS] ?? name,
+                typeof name === 'string' ? (STAGE_LABELS[name as keyof typeof STAGE_LABELS] ?? name) : '',
               ]}
             />
             <Legend
