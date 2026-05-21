@@ -53,9 +53,13 @@ export default function SettingsPage() {
   const [sleephqSecretSaved, setSleephqSecretSaved] = useState(false)
   const [sleephqSecretDirty, setSleephqSecretDirty] = useState(false)
   const [sleephqTeamId, setSleephqTeamId] = useState('')
+  const [sleephqMachineId, setSleephqMachineId] = useState('')
   const [sleephqMessage, setSleephqMessage] = useState<string | null>(null)
   const [sleephqError, setSleephqError] = useState<string | null>(null)
   const [isSleephqSubmitting, setIsSleephqSubmitting] = useState(false)
+  const [isImportRunning, setIsImportRunning] = useState(false)
+  const [importMessage, setImportMessage] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -71,6 +75,7 @@ export default function SettingsPage() {
       setSleephqClientId(settings.sleephq_client_id ?? '')
       setSleephqSecretSaved(settings.has_client_secret)
       setSleephqTeamId(settings.sleephq_team_id != null ? String(settings.sleephq_team_id) : '')
+      setSleephqMachineId(settings.sleephq_machine_id != null ? String(settings.sleephq_machine_id) : '')
     }).catch(() => {
       // No settings saved yet — leave fields empty
     })
@@ -128,6 +133,20 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleRunImport() {
+    setImportError(null)
+    setImportMessage(null)
+    setIsImportRunning(true)
+    try {
+      const result = await api.triggerSleepHQImport()
+      setImportMessage(result.message)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Could not start import')
+    } finally {
+      setIsImportRunning(false)
+    }
+  }
+
   async function handleSleephqSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSleephqError(null)
@@ -139,6 +158,7 @@ export default function SettingsPage() {
         sleephq_client_id: sleephqClientId || null,
         sleephq_client_secret: sleephqSecretDirty ? (sleephqClientSecret || null) : null,
         sleephq_team_id: sleephqTeamId ? Number(sleephqTeamId) : null,
+        sleephq_machine_id: sleephqMachineId ? Number(sleephqMachineId) : null,
       })
       setSleephqMessage('SleepHQ settings saved.')
       if (sleephqSecretDirty && sleephqClientSecret) {
@@ -301,15 +321,27 @@ export default function SettingsPage() {
               )}
             </div>
 
-            <div className="space-y-3">
-              <Label htmlFor="sleephqTeamId">Team ID</Label>
-              <Input
-                id="sleephqTeamId"
-                value={sleephqTeamId}
-                onChange={(event) => setSleephqTeamId(event.target.value)}
-                inputMode="numeric"
-                placeholder="Optional — auto-resolved if blank"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-3">
+                <Label htmlFor="sleephqTeamId">Team ID</Label>
+                <Input
+                  id="sleephqTeamId"
+                  value={sleephqTeamId}
+                  onChange={(event) => setSleephqTeamId(event.target.value)}
+                  inputMode="numeric"
+                  placeholder="Optional — auto-resolved if blank"
+                />
+              </div>
+              <div className="space-y-3">
+                <Label htmlFor="sleephqMachineId">Machine ID</Label>
+                <Input
+                  id="sleephqMachineId"
+                  value={sleephqMachineId}
+                  onChange={(event) => setSleephqMachineId(event.target.value)}
+                  inputMode="numeric"
+                  placeholder="Optional — auto-resolved if blank"
+                />
+              </div>
             </div>
 
             {sleephqMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{sleephqMessage}</p> : null}
@@ -319,6 +351,21 @@ export default function SettingsPage() {
               {isSleephqSubmitting ? 'Saving...' : 'Save SleepHQ settings'}
             </Button>
           </form>
+
+          <div className="mt-6 border-t border-[var(--border)] pt-5 space-y-3">
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Run a historical import from SleepHQ. Requires saved credentials above.
+            </p>
+            {importMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{importMessage}</p> : null}
+            {importError ? <p className="text-sm text-[var(--danger-text)]">{importError}</p> : null}
+            <Button
+              variant="outline"
+              onClick={handleRunImport}
+              disabled={isImportRunning || !sleephqSecretSaved}
+            >
+              {isImportRunning ? 'Starting import...' : 'Run SleepHQ import'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
       <Card className="border-[var(--danger-text)] bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
