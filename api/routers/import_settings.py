@@ -21,7 +21,8 @@ SLEEPHQ_IMPORTER = Path(__file__).resolve().parent.parent.parent / "importer" / 
 
 class ImportSettingsResponse(BaseModel):
     sleephq_client_id: Optional[str] = None
-    sleephq_client_secret: Optional[str] = None  # always None in responses
+    sleephq_client_secret: Optional[str] = None  # always None — use has_client_secret to check if one is saved
+    has_client_secret: bool = False
     sleephq_team_id: Optional[int] = None
     sleephq_machine_id: Optional[int] = None
     auto_import_sleephq: bool = False
@@ -56,6 +57,7 @@ def get_import_settings(
     return ImportSettingsResponse(
         sleephq_client_id=row["sleephq_client_id"],
         sleephq_client_secret=None,  # never expose
+        has_client_secret=bool(row["sleephq_client_secret"]),
         sleephq_team_id=row["sleephq_team_id"],
         sleephq_machine_id=row["sleephq_machine_id"],
         auto_import_sleephq=row["auto_import_sleephq"],
@@ -110,11 +112,11 @@ def save_import_settings(
             set_clauses.append("sleephq_client_secret = :client_secret")
             fields["client_secret"] = body.sleephq_client_secret
 
-        if body.sleephq_team_id is not None:
+        if "sleephq_team_id" in body.model_fields_set:
             set_clauses.append("sleephq_team_id = :team_id")
             fields["team_id"] = body.sleephq_team_id
 
-        if body.sleephq_machine_id is not None:
+        if "sleephq_machine_id" in body.model_fields_set:
             set_clauses.append("sleephq_machine_id = :machine_id")
             fields["machine_id"] = body.sleephq_machine_id
 
