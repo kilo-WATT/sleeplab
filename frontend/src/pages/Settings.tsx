@@ -161,8 +161,11 @@ export default function SettingsPage() {
         sleephq_machine_id: sleephqMachineId ? Number(sleephqMachineId) : null,
       })
       setSleephqMessage('SleepHQ settings saved.')
+      if (sleephqSecretDirty && sleephqClientSecret) {
+        setSleephqSecretSaved(true)
+        setSleephqClientSecret('')
+      }
       setSleephqSecretDirty(false)
-      if (sleephqSecretDirty && sleephqClientSecret) setSleephqSecretSaved(true)
     } catch (err) {
       setSleephqError(err instanceof Error ? err.message : 'Could not save settings')
     } finally {
