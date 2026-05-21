@@ -111,6 +111,53 @@ export interface SessionDetail extends SessionSummary {
   avg_flow_lim: number | null
   avg_spo2: number | null
   min_spo2: number | null
+  therapy_mode: string | null
+  mask_type: string | null
+  humidity_level: number | null
+  temperature_c: number | null
+}
+
+export type EquipmentType = 'cushion' | 'headgear' | 'tubing' | 'humidifier_chamber' | 'filter'
+
+export interface Equipment {
+  id: string
+  equipment_type: EquipmentType
+  start_date: string
+  replacement_days: number | null
+  mask_category: string | null
+  brand: string | null
+  model: string | null
+  notes: string | null
+  days_in_use: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EquipmentCreate {
+  equipment_type: EquipmentType
+  start_date: string
+  replacement_days?: number | null
+  mask_category?: string | null
+  brand?: string | null
+  model?: string | null
+  notes?: string | null
+}
+
+export interface EquipmentUpdate {
+  start_date?: string
+  replacement_days?: number | null
+  mask_category?: string | null
+  brand?: string | null
+  model?: string | null
+  notes?: string | null
+}
+
+export interface InferredEquipment {
+  cushion: Equipment | null
+  headgear: Equipment | null
+  tubing: Equipment | null
+  humidifier_chamber: Equipment | null
+  filter: Equipment | null
 }
 
 export interface EventRecord {
@@ -134,6 +181,12 @@ export interface MetricsResponse {
   flow_lim: (number | null)[]
 }
 
+export interface SpO2Response {
+  timestamps: string[]
+  spo2: (number | null)[]
+  pulse: (number | null)[]
+}
+
 export interface DailyStat {
   folder_date: string
   ahi: number | null
@@ -141,13 +194,20 @@ export interface DailyStat {
   session_id: string
 }
 
+export interface AppConfig {
+  display_tz: string
+  machine_tz: string
+}
+
 export interface ImportSettings {
   sleephq_client_id: string | null
   sleephq_client_secret: string | null
+  has_client_secret: boolean
   sleephq_team_id: number | null
   sleephq_machine_id: number | null
   auto_import_sleephq: boolean
   lookback_days: number
+  sleephq_enabled: boolean
   local_datalog_path: string | null
   local_import_frequency: string
   last_local_import_at: string | null
@@ -155,12 +215,6 @@ export interface ImportSettings {
   wearable_provider: string | null
   wearable_base_url: string | null
   wearable_api_key: string | null
-}
-
-export interface SpO2Response {
-  timestamps: string[]
-  spo2: (number | null)[]
-  pulse: (number | null)[]
 }
 
 export interface WearableData {
@@ -281,6 +335,12 @@ export const api = {
   getEvents: (id: string) => get<EventRecord[]>(`/sessions/${id}/events`),
   getMetrics: (id: string, downsample = 15) =>
     get<MetricsResponse>(`/sessions/${id}/metrics`, { downsample }),
+  getSessionSpo2: (id: string) => get<SpO2Response>(`/sessions/${id}/spo2`),
+  listEquipment: () => get<Equipment[]>('/equipment/'),
+  createEquipment: (payload: EquipmentCreate) => post<Equipment>('/equipment/', payload),
+  updateEquipment: (id: string, payload: EquipmentUpdate) => put<Equipment>(`/equipment/${id}`, payload),
+  deleteEquipment: (id: string) => request<void>(`/equipment/${id}`, { method: 'DELETE' }),
+  getInferredEquipment: (refDate: string) => get<InferredEquipment>('/equipment/inferred', { ref_date: refDate }),
   register: (payload: RegisterRequest) => post<AuthResponse>('/auth/register', payload),
   login: (payload: LoginRequest) => post<AuthResponse>('/auth/login', payload),
   logout: () => post<{ status: string }>('/auth/logout'),
@@ -309,10 +369,10 @@ export const api = {
   saveImportSettings: (payload: Partial<ImportSettings>) => put<ImportSettings>('/import/settings', payload),
   triggerSleepHQImport: () => post<{ status: string; message: string }>('/import/trigger'),
   triggerLocalImport: () => post<{ status: string; message: string }>('/import/trigger-local'),
-  getSessionSpo2: (id: string) => get<SpO2Response>(`/sessions/${id}/spo2`),
   getWearableData: (date: string) => get<WearableData>('/wearable/data', { date }),
   getWearableSummary: (dateFrom: string, dateTo: string) =>
     get<WearableDailySummary[]>('/wearable/summary', { date_from: dateFrom, date_to: dateTo }),
+  getAppConfig: () => get<AppConfig>('/config'),
 }
 
 export const authTokenStore = {

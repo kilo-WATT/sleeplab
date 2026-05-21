@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router-dom'
 
 import { api } from '../api/client'
+import EquipmentCatalog from '../components/EquipmentCatalog'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
@@ -50,10 +51,17 @@ export default function SettingsPage() {
   // SleepHQ import settings
   const [sleephqClientId, setSleephqClientId] = useState('')
   const [sleephqClientSecret, setSleephqClientSecret] = useState('')
+  const [sleephqSecretSaved, setSleephqSecretSaved] = useState(false)
+  const [sleephqSecretDirty, setSleephqSecretDirty] = useState(false)
   const [sleephqTeamId, setSleephqTeamId] = useState('')
+  const [sleephqMachineId, setSleephqMachineId] = useState('')
   const [sleephqMessage, setSleephqMessage] = useState<string | null>(null)
   const [sleephqError, setSleephqError] = useState<string | null>(null)
   const [isSleephqSubmitting, setIsSleephqSubmitting] = useState(false)
+  const [sleephqEnabled, setSleephqEnabled] = useState(false)
+  const [isImportRunning, setIsImportRunning] = useState(false)
+  const [importMessage, setImportMessage] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
   // Local DATALOG import settings
   const [localPath, setLocalPath] = useState('')
@@ -83,9 +91,11 @@ export default function SettingsPage() {
 
   useEffect(() => {
     api.getImportSettings().then((settings) => {
+      setSleephqEnabled(settings.sleephq_enabled ?? false)
       setSleephqClientId(settings.sleephq_client_id ?? '')
-      setSleephqClientSecret(settings.sleephq_client_secret ?? '')
+      setSleephqSecretSaved(settings.has_client_secret)
       setSleephqTeamId(settings.sleephq_team_id != null ? String(settings.sleephq_team_id) : '')
+      setSleephqMachineId(settings.sleephq_machine_id != null ? String(settings.sleephq_machine_id) : '')
       setLocalPath(settings.local_datalog_path ?? '')
       setLocalFrequency(settings.local_import_frequency ?? 'daily')
       setLastImportAt(settings.last_local_import_at)
@@ -150,6 +160,20 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleRunImport() {
+    setImportError(null)
+    setImportMessage(null)
+    setIsImportRunning(true)
+    try {
+      const result = await api.triggerSleepHQImport()
+      setImportMessage(result.message)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Could not start import')
+    } finally {
+      setIsImportRunning(false)
+    }
+  }
+
   async function handleLocalSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setLocalError(null)
@@ -197,10 +221,16 @@ export default function SettingsPage() {
     try {
       await api.saveImportSettings({
         sleephq_client_id: sleephqClientId || null,
-        sleephq_client_secret: sleephqClientSecret || null,
+        sleephq_client_secret: sleephqSecretDirty ? (sleephqClientSecret || null) : null,
         sleephq_team_id: sleephqTeamId ? Number(sleephqTeamId) : null,
+        sleephq_machine_id: sleephqMachineId ? Number(sleephqMachineId) : null,
       })
-      setSleephqMessage('Settings saved.')
+      setSleephqMessage('SleepHQ settings saved.')
+      if (sleephqSecretDirty && sleephqClientSecret) {
+        setSleephqSecretSaved(true)
+        setSleephqClientSecret('')
+      }
+      setSleephqSecretDirty(false)
     } catch (err) {
       setSleephqError(err instanceof Error ? err.message : 'Could not save settings')
     } finally {
@@ -313,9 +343,9 @@ export default function SettingsPage() {
           </form>
         </CardContent>
       </Card>
-      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+      {sleephqEnabled && <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
-          <CardTitle className="text-2xl">SleepHQ Integration</CardTitle>
+          <CardTitle className="text-2xl">SleepHQ API Import (Unofficial)</CardTitle>
           <CardDescription>
             Import your CPAP history from SleepHQ. This is a one-time historical import — it pulls your existing records into SleepLab and does not stay connected or sync automatically. You can re-run it at any time to pull in newer sessions. OAuth credentials can be found in your SleepHQ developer settings.
           </CardDescription>
@@ -334,26 +364,49 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-3">
-              <Label htmlFor="sleephqClientSecret">Client secret</Label>
+              <Label htmlFor="sleephqClientSecret">
+                Client secret
+                {sleephqSecretSaved && !sleephqSecretDirty && (
+                  <span className="ml-2 text-xs font-normal text-[var(--olive-deep)]">saved</span>
+                )}
+              </Label>
               <Input
                 id="sleephqClientSecret"
                 type="password"
                 value={sleephqClientSecret}
-                onChange={(event) => setSleephqClientSecret(event.target.value)}
+                onChange={(event) => {
+                  setSleephqClientSecret(event.target.value)
+                  setSleephqSecretDirty(true)
+                }}
                 autoComplete="new-password"
-                placeholder="OAuth client secret from SleepHQ"
+                placeholder={sleephqSecretSaved && !sleephqSecretDirty ? '••••••••••••••••' : 'OAuth client secret from SleepHQ'}
               />
+              {sleephqSecretSaved && !sleephqSecretDirty && (
+                <p className="text-xs text-[var(--muted-foreground)]">Leave blank to keep your existing secret.</p>
+              )}
             </div>
 
-            <div className="space-y-3">
-              <Label htmlFor="sleephqTeamId">Team ID</Label>
-              <Input
-                id="sleephqTeamId"
-                value={sleephqTeamId}
-                onChange={(event) => setSleephqTeamId(event.target.value)}
-                inputMode="numeric"
-                placeholder="Optional — auto-resolved if blank"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-3">
+                <Label htmlFor="sleephqTeamId">Team ID</Label>
+                <Input
+                  id="sleephqTeamId"
+                  value={sleephqTeamId}
+                  onChange={(event) => setSleephqTeamId(event.target.value)}
+                  inputMode="numeric"
+                  placeholder="Optional — auto-resolved if blank"
+                />
+              </div>
+              <div className="space-y-3">
+                <Label htmlFor="sleephqMachineId">Machine ID</Label>
+                <Input
+                  id="sleephqMachineId"
+                  value={sleephqMachineId}
+                  onChange={(event) => setSleephqMachineId(event.target.value)}
+                  inputMode="numeric"
+                  placeholder="Optional — auto-resolved if blank"
+                />
+              </div>
             </div>
 
             {sleephqMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{sleephqMessage}</p> : null}
@@ -363,8 +416,25 @@ export default function SettingsPage() {
               {isSleephqSubmitting ? 'Saving...' : 'Save SleepHQ settings'}
             </Button>
           </form>
+
+          <div className="mt-6 border-t border-[var(--border)] pt-5 space-y-3">
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Run a historical import from SleepHQ. Requires saved credentials above.
+            </p>
+            {importMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{importMessage}</p> : null}
+            {importError ? <p className="text-sm text-[var(--danger-text)]">{importError}</p> : null}
+            <Button
+              variant="outline"
+              onClick={handleRunImport}
+              disabled={isImportRunning || !sleephqSecretSaved}
+            >
+              {isImportRunning ? 'Starting import...' : 'Run SleepHQ import'}
+            </Button>
+          </div>
         </CardContent>
-      </Card>
+      </Card>}
+      <EquipmentCatalog />
+
       <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
           <CardTitle className="text-2xl">Local DATALOG Import</CardTitle>

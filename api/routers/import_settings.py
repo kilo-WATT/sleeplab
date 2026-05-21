@@ -25,11 +25,13 @@ LOCAL_DATA_ROOT = Path("/data")
 
 class ImportSettingsResponse(BaseModel):
     sleephq_client_id: str | None = None
-    sleephq_client_secret: str | None = None  # always None in responses
+    sleephq_client_secret: str | None = None  # always None — use has_client_secret to check if one is saved
+    has_client_secret: bool = False
     sleephq_team_id: int | None = None
     sleephq_machine_id: int | None = None
     auto_import_sleephq: bool = False
     lookback_days: int = 30
+    sleephq_enabled: bool = False
     local_datalog_path: str | None = None
     local_import_frequency: str = "daily"
     last_local_import_at: str | None = None
@@ -85,17 +87,21 @@ def get_import_settings(
         {"uid": current_user["id"]},
     ).mappings().first()
 
+    enabled = os.environ.get("SLEEPHQ_ENABLED", "false").lower() == "true"
+
     if row is None:
-        return ImportSettingsResponse()
+        return ImportSettingsResponse(sleephq_enabled=enabled)
 
     last_at = row["last_local_import_at"]
     return ImportSettingsResponse(
         sleephq_client_id=row["sleephq_client_id"],
         sleephq_client_secret=None,  # never expose
+        has_client_secret=bool(row["sleephq_client_secret"]),
         sleephq_team_id=row["sleephq_team_id"],
         sleephq_machine_id=row["sleephq_machine_id"],
         auto_import_sleephq=row["auto_import_sleephq"],
         lookback_days=row["lookback_days"],
+        sleephq_enabled=enabled,
         local_datalog_path=row["local_datalog_path"],
         local_import_frequency=row["local_import_frequency"] or "daily",
         last_local_import_at=last_at.isoformat() if last_at else None,
@@ -164,11 +170,11 @@ def save_import_settings(
             set_clauses.append("sleephq_client_secret = :client_secret")
             fields["client_secret"] = body.sleephq_client_secret
 
-        if body.sleephq_team_id is not None:
+        if "sleephq_team_id" in body.model_fields_set:
             set_clauses.append("sleephq_team_id = :team_id")
             fields["team_id"] = body.sleephq_team_id
 
-        if body.sleephq_machine_id is not None:
+        if "sleephq_machine_id" in body.model_fields_set:
             set_clauses.append("sleephq_machine_id = :machine_id")
             fields["machine_id"] = body.sleephq_machine_id
 
@@ -273,6 +279,12 @@ def trigger_sleephq_import(
         text("SELECT * FROM user_import_settings WHERE user_id = CAST(:uid AS uuid)"),
         {"uid": current_user["id"]},
     ).mappings().first()
+
+    if os.environ.get("SLEEPHQ_ENABLED", "false").lower() != "true":
+        raise HTTPException(
+            status_code=503,
+            detail="SleepHQ integration is not enabled on this server. Set SLEEPHQ_ENABLED=true to enable it.",
+        )
 
     if row is None or not row["sleephq_client_id"] or not row["sleephq_client_secret"]:
         raise HTTPException(

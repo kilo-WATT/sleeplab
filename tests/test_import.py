@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,8 +11,10 @@ class TestGetSettings:
         data = resp.json()
         assert data["sleephq_client_id"] is None
         assert data["sleephq_client_secret"] is None
+        assert data["has_client_secret"] is False
         assert data["auto_import_sleephq"] is False
         assert data["lookback_days"] == 30
+        assert data["sleephq_enabled"] is False
 
     def test_after_save(self, client: TestClient, auth_headers):
         client.put("/import/settings", headers=auth_headers, json={
@@ -22,6 +26,7 @@ class TestGetSettings:
         data = resp.json()
         assert data["sleephq_client_id"] == "test-client-id"
         assert data["sleephq_client_secret"] is None
+        assert data["has_client_secret"] is True
 
     def test_unauthenticated(self, client: TestClient):
         resp = client.get("/import/settings")
@@ -52,8 +57,11 @@ class TestPutSettings:
         client.put("/import/settings", headers=auth_headers, json={
             "sleephq_client_secret": "real-secret",
         })
-        saved = client.get("/import/settings", headers=auth_headers).json()
-        assert saved["sleephq_client_id"] is not None or True  # secret stayed
+        resp = client.put("/import/settings", headers=auth_headers, json={
+            "sleephq_client_secret": None,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["has_client_secret"] is True
 
     def test_unauthenticated(self, client: TestClient):
         resp = client.put("/import/settings", json={"lookback_days": 7})
@@ -61,8 +69,15 @@ class TestPutSettings:
 
 
 class TestTrigger:
-    def test_without_credentials(self, client: TestClient, auth_headers):
+    def test_disabled(self, client: TestClient, auth_headers):
+        # SLEEPHQ_ENABLED unset (default) → 503 before credential check
         resp = client.post("/import/trigger", headers=auth_headers)
+        assert resp.status_code == 503
+        assert "SLEEPHQ_ENABLED" in resp.json()["detail"]
+
+    def test_without_credentials(self, client: TestClient, auth_headers):
+        with patch.dict("os.environ", {"SLEEPHQ_ENABLED": "true"}):
+            resp = client.post("/import/trigger", headers=auth_headers)
         assert resp.status_code == 400
         assert "credentials" in resp.json()["detail"].lower()
 
@@ -72,7 +87,8 @@ class TestTrigger:
             "sleephq_client_id": "test-id",
             "sleephq_client_secret": "test-secret",
         })
-        resp = client.post("/import/trigger", headers=auth_headers)
+        with patch.dict("os.environ", {"SLEEPHQ_ENABLED": "true"}):
+            resp = client.post("/import/trigger", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "started"

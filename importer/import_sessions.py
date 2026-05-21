@@ -8,12 +8,14 @@ Run:
     python import_sessions.py --from 20250101     # from date onward
 """
 
+import os
 import sys
 import argparse
 import statistics
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from edf_parser import parse_pld, parse_eve, parse_sa2, read_header
 from db import (
@@ -27,6 +29,21 @@ from db import (
 
 
 AHI_EVENT_TYPES = {'Central Apnea', 'Obstructive Apnea', 'Hypopnea', 'Apnea'}
+
+
+def _machine_tz() -> ZoneInfo:
+    """Return the ZoneInfo for MACHINE_TZ, falling back to UTC on invalid input."""
+    name = os.environ.get("MACHINE_TZ", "UTC")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        print(f"  WARNING: unknown MACHINE_TZ={name!r}, falling back to UTC", flush=True)
+        return ZoneInfo("UTC")
+
+
+def _localize(naive_dt: datetime) -> datetime:
+    """Attach MACHINE_TZ to a naive datetime from an EDF header."""
+    return naive_dt.replace(tzinfo=_machine_tz())
 
 
 def discover_session_blocks(folder: Path) -> list:
@@ -152,13 +169,15 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
             if block['eve_path'] and block['eve_path'].exists():
                 _, events = parse_eve(block['eve_path'])
 
-            # Get CSL start datetime for event absolute timestamps
-            csl_start = pld_header.start_datetime  # fallback
+            # Get CSL start datetime for event absolute timestamps.
+            # EDF timestamps are naive local machine time; attach MACHINE_TZ so
+            # psycopg2 stores the correct UTC equivalent in TIMESTAMPTZ columns.
+            csl_start = _localize(pld_header.start_datetime)  # fallback
             if block['csl_path'] and block['csl_path'].exists():
                 csl_hdr = read_header(str(block['csl_path']))
-                csl_start = csl_hdr.start_datetime
+                csl_start = _localize(csl_hdr.start_datetime)
 
-            pld_start = pld_header.start_datetime
+            pld_start = _localize(pld_header.start_datetime)
             duration_s = int(pld_header.num_records * pld_header.duration_per_record)
 
             # Parse SA2 (optional)
@@ -177,6 +196,10 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
                 'duration_seconds':   duration_s,
                 'device_serial':      pld_header.device_serial or None,
                 'has_spo2':           spo2_data is not None,
+                'therapy_mode':       None,
+                'mask_type':          None,
+                'humidity_level':     None,
+                'temperature_c':      None,
                 'user_id':            user_id,
                 **summary,
             }
