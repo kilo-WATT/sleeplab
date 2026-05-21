@@ -1,6 +1,8 @@
 # SleepLab
 
 [![GNU GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
+[![Frontend](https://img.shields.io/github/package-json/v/joshuamyers-dev/sleeplab?label=frontend&color=informational)](frontend/package.json)
+[![Backend](https://img.shields.io/github/pyproject/v/joshuamyers-dev/sleeplab?label=backend&color=informational)](pyproject.toml)
 
 SleepLab is a local-first sleep therapy dashboard for importing and exploring ResMed CPAP data. It includes:
 
