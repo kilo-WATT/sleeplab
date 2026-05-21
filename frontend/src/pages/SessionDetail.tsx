@@ -42,6 +42,7 @@ export default function SessionDetail() {
 
   useEffect(() => {
     setLoading(true)
+    setSpo2(null)
     Promise.all([
       api.getSession(sessionId),
       api.getEvents(sessionId),
@@ -52,7 +53,7 @@ export default function SessionDetail() {
       setMetrics(m)
       setLoading(false)
       if (s.has_spo2) {
-        api.getSessionSpo2(sessionId).then(setSpo2).catch(() => {})
+        api.getSessionSpo2(sessionId).then(setSpo2).catch(() => setSpo2(null))
       }
     }).catch(() => navigate('/dashboard'))
   }, [navigate, sessionId])
