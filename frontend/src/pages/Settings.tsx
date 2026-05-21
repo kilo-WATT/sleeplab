@@ -63,6 +63,23 @@ export default function SettingsPage() {
   const [importMessage, setImportMessage] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
 
+  // Local DATALOG import settings
+  const [localPath, setLocalPath] = useState('')
+  const [localFrequency, setLocalFrequency] = useState('daily')
+  const [lastImportAt, setLastImportAt] = useState<string | null>(null)
+  const [lastImportStatus, setLastImportStatus] = useState<string | null>(null)
+  const [localMessage, setLocalMessage] = useState<string | null>(null)
+  const [localError, setLocalError] = useState<string | null>(null)
+  const [isLocalSubmitting, setIsLocalSubmitting] = useState(false)
+
+  // Wearable settings
+  const [wearableProvider, setWearableProvider] = useState('')
+  const [wearableBaseUrl, setWearableBaseUrl] = useState('')
+  const [wearableApiKey, setWearableApiKey] = useState('')
+  const [wearableMessage, setWearableMessage] = useState<string | null>(null)
+  const [wearableError, setWearableError] = useState<string | null>(null)
+  const [isWearableSubmitting, setIsWearableSubmitting] = useState(false)
+
   useEffect(() => {
     if (!user) {
       return
@@ -79,6 +96,13 @@ export default function SettingsPage() {
       setSleephqSecretSaved(settings.has_client_secret)
       setSleephqTeamId(settings.sleephq_team_id != null ? String(settings.sleephq_team_id) : '')
       setSleephqMachineId(settings.sleephq_machine_id != null ? String(settings.sleephq_machine_id) : '')
+      setLocalPath(settings.local_datalog_path ?? '')
+      setLocalFrequency(settings.local_import_frequency ?? 'daily')
+      setLastImportAt(settings.last_local_import_at)
+      setLastImportStatus(settings.last_local_import_status)
+      setWearableProvider(settings.wearable_provider ?? '')
+      setWearableBaseUrl(settings.wearable_base_url ?? '')
+      // wearable_api_key is always null from server — leave blank
     }).catch(() => {
       // No settings saved yet — leave fields empty
     })
@@ -147,6 +171,44 @@ export default function SettingsPage() {
       setImportError(err instanceof Error ? err.message : 'Could not start import')
     } finally {
       setIsImportRunning(false)
+    }
+  }
+
+  async function handleLocalSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLocalError(null)
+    setLocalMessage(null)
+    setIsLocalSubmitting(true)
+    try {
+      await api.saveImportSettings({
+        local_datalog_path: localPath || null,
+        local_import_frequency: localFrequency,
+      })
+      setLocalMessage('Settings saved.')
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : 'Could not save settings')
+    } finally {
+      setIsLocalSubmitting(false)
+    }
+  }
+
+  async function handleWearableSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setWearableError(null)
+    setWearableMessage(null)
+    setIsWearableSubmitting(true)
+    try {
+      await api.saveImportSettings({
+        wearable_provider: wearableProvider || null,
+        wearable_base_url: wearableBaseUrl || null,
+        wearable_api_key: wearableApiKey || null,
+      })
+      setWearableMessage('Settings saved.')
+      setWearableApiKey('')
+    } catch (err) {
+      setWearableError(err instanceof Error ? err.message : 'Could not save settings')
+    } finally {
+      setIsWearableSubmitting(false)
     }
   }
 
@@ -372,6 +434,120 @@ export default function SettingsPage() {
         </CardContent>
       </Card>}
       <EquipmentCatalog />
+
+      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+        <CardHeader>
+          <CardTitle className="text-2xl">Local DATALOG Import</CardTitle>
+          <CardDescription>
+            Import sessions automatically from a directory mounted into the container at <code>/data</code>. Set the path to your DATALOG folder, then trigger imports manually here or via the <code>POST /import/trigger/all</code> webhook from an external scheduler (cron, Home Assistant, n8n).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={handleLocalSubmit}>
+            <div className="space-y-3">
+              <Label htmlFor="localPath">Server path</Label>
+              <Input
+                id="localPath"
+                value={localPath}
+                onChange={(event) => setLocalPath(event.target.value)}
+                autoComplete="off"
+                placeholder="/data/DATALOG"
+              />
+              <p className="text-xs text-[var(--muted-foreground)]">Must be inside <code>/data</code> — the container mount point for your host directory.</p>
+            </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="localFrequency">Poll frequency</Label>
+              <select
+                id="localFrequency"
+                value={localFrequency}
+                onChange={(event) => setLocalFrequency(event.target.value)}
+                className="flex h-9 w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+              >
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+              <p className="text-xs text-[var(--muted-foreground)]">Used as a hint for external schedulers — SleepLab does not poll automatically.</p>
+            </div>
+
+            {lastImportAt && (
+              <div className="rounded-lg border border-[var(--border)] px-4 py-3 text-sm space-y-1">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Last import</p>
+                <p className="text-[var(--foreground)]">{new Date(lastImportAt).toLocaleString()}</p>
+                {lastImportStatus && (
+                  <p className={lastImportStatus.startsWith('ok') ? 'text-[var(--olive-deep)]' : 'text-[var(--danger-text)]'}>
+                    {lastImportStatus}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {localMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{localMessage}</p> : null}
+            {localError ? <p className="text-sm text-[var(--danger-text)]">{localError}</p> : null}
+
+            <Button type="submit" disabled={isLocalSubmitting}>
+              {isLocalSubmitting ? 'Saving...' : 'Save DATALOG settings'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+        <CardHeader>
+          <CardTitle className="text-2xl">Wearable Data</CardTitle>
+          <CardDescription>
+            Overlay heart rate, SpO₂, and sleep stages from a self-hosted wearable API onto your session charts. Supported providers: open-wearables, mirobody.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={handleWearableSubmit}>
+            <div className="space-y-3">
+              <Label htmlFor="wearableProvider">Provider</Label>
+              <select
+                id="wearableProvider"
+                value={wearableProvider}
+                onChange={(event) => setWearableProvider(event.target.value)}
+                className="flex h-9 w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+              >
+                <option value="">None</option>
+                <option value="open-wearables">open-wearables</option>
+                <option value="mirobody">mirobody</option>
+              </select>
+            </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="wearableBaseUrl">Base URL</Label>
+              <Input
+                id="wearableBaseUrl"
+                value={wearableBaseUrl}
+                onChange={(event) => setWearableBaseUrl(event.target.value)}
+                autoComplete="off"
+                placeholder="https://wearables.home.example.com"
+              />
+            </div>
+
+            <div className="space-y-3">
+              <Label htmlFor="wearableApiKey">API key</Label>
+              <Input
+                id="wearableApiKey"
+                type="password"
+                value={wearableApiKey}
+                onChange={(event) => setWearableApiKey(event.target.value)}
+                autoComplete="new-password"
+                placeholder="Leave blank to keep existing key"
+              />
+            </div>
+
+            {wearableMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{wearableMessage}</p> : null}
+            {wearableError ? <p className="text-sm text-[var(--danger-text)]">{wearableError}</p> : null}
+
+            <Button type="submit" disabled={isWearableSubmitting}>
+              {isWearableSubmitting ? 'Saving...' : 'Save wearable settings'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
       <Card className="border-[var(--danger-text)] bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>

@@ -35,7 +35,7 @@ uv run pytest -v --tb=short  # tests (DB tests skip without Postgres)
 **Frontend:**
 ```bash
 cd frontend
-npx tsc --noEmit     # type check
+npx tsc --noEmit -p tsconfig.app.json     # type check (root tsconfig has files:[] so --noEmit alone checks nothing)
 npx vitest run       # unit tests
 ```
 

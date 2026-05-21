@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData } from '../api/client'
+import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
 import EventTimeline from '../components/EventTimeline'
 import InfoPopover from '../components/InfoPopover'
@@ -41,11 +42,13 @@ export default function SessionDetail() {
   const [equipment, setEquipment] = useState<InferredEquipment | null>(null)
   const [loading, setLoading] = useState(true)
   const [prevNext, setPrevNext] = useState<{ prev: string | null; next: string | null }>({ prev: null, next: null })
+  const [wearableData, setWearableData] = useState<WearableData | null>(null)
 
   useEffect(() => {
     setLoading(true)
     setSpo2(null)
     setEquipment(null)
+    setWearableData(null)
     Promise.all([
       api.getSession(sessionId),
       api.getEvents(sessionId),
@@ -59,6 +62,13 @@ export default function SessionDetail() {
         api.getSessionSpo2(sessionId).then(setSpo2).catch(() => setSpo2(null))
       }
       api.getInferredEquipment(s.folder_date.toString()).then(setEquipment).catch(() => setEquipment(null))
+      api.getWearableData(s.folder_date).then((data) => {
+        if (!data.hr.length && !data.spo2.length && !data.stages.length) {
+          setWearableData(null)
+          return
+        }
+        setWearableData(data)
+      }).catch(() => setWearableData(null))
     }).catch(() => navigate('/dashboard'))
   }, [navigate, sessionId])
 
@@ -295,7 +305,14 @@ export default function SessionDetail() {
       </Card>
 
       <MetricsChart metrics={metrics} />
-      {spo2 && <SpO2Chart data={spo2} />}
+
+      {spo2 && (
+        <SpO2Chart spo2={spo2} wearable={wearableData} />
+      )}
+
+      {wearableData && wearableData.stages.length > 0 && (
+        <WearableSleepStageChart stages={wearableData.stages} />
+      )}
     </div>
   )
 }
