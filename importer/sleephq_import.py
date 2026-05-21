@@ -43,11 +43,15 @@ from typing import Optional
 
 import httpx
 
-from sleephq import AuthenticatedClient
-from sleephq.auth import create_client as _sleephq_create_client
-from sleephq.api.machine_dates import get_v1_machines_machine_id_machine_dates
-from sleephq.api.teams import get_v1_teams
-from sleephq.api.machines import get_v1_teams_team_id_machines
+try:
+    from sleephq import AuthenticatedClient
+    from sleephq.auth import create_client as _sleephq_create_client
+    from sleephq.api.machine_dates import get_v1_machines_machine_id_machine_dates
+    from sleephq.api.teams import get_v1_teams
+    from sleephq.api.machines import get_v1_teams_team_id_machines
+    _SLEEPHQ_AVAILABLE = True
+except ImportError:
+    _SLEEPHQ_AVAILABLE = False
 
 from db import get_conn, session_exists, upsert_session
 
@@ -124,6 +128,14 @@ def _api_call_with_retry(fn, *args, label: str = "API call", **kwargs):
 # Client / authentication
 # ---------------------------------------------------------------------------
 
+def _require_sleephq():
+    if not _SLEEPHQ_AVAILABLE:
+        raise RuntimeError(
+            "sleephq-client is not installed. "
+            "Set SLEEPHQ_ENABLED=true in your environment to enable SleepHQ support."
+        )
+
+
 def create_sleephq_client(
     client_id: Optional[str] = None,
     client_secret: Optional[str] = None,
@@ -134,6 +146,7 @@ def create_sleephq_client(
     Retries up to ``_MAX_ATTEMPTS`` times on HTTP 429 (rate limit) with
     exponential back-off, honouring the ``Retry-After`` header when present.
     """
+    _require_sleephq()
     cid = client_id or os.environ["SLEEPHQ_CLIENT_ID"]
     csecret = client_secret or os.environ["SLEEPHQ_CLIENT_SECRET"]
 
@@ -489,6 +502,24 @@ def map_machine_date_to_session(record, user_id: str) -> dict:
     # Not present on machine_dates; would need to join against the machine record
     device_serial = None
 
+    # ── Machine settings ─────────────────────────────────────────────────────
+    # Schema-less bag; keys confirmed from live API inspection.
+    ms = getattr(attrs, "machine_settings", None) if attrs else None
+    ms_props = getattr(ms, "additional_properties", {}) or {} if ms and not isinstance(ms, Unset) else {}
+
+    therapy_mode   = ms_props.get("mode") or None
+    mask_type      = ms_props.get("mask") or None
+    humidity_level = _int(ms_props.get("humidity_level"))
+
+    temperature_c = None
+    raw_temp = ms_props.get("temperature")
+    if raw_temp:
+        # Format is "27 ºC" — strip non-numeric suffix
+        try:
+            temperature_c = round(float(str(raw_temp).split()[0]), 1)
+        except (ValueError, IndexError):
+            pass
+
     return {
         "session_id":              session_id,
         "folder_date":             folder_date,
@@ -513,6 +544,10 @@ def map_machine_date_to_session(record, user_id: str) -> dict:
         "avg_snore":               avg_snore,
         "avg_flow_lim":            avg_flow_lim,
         "has_spo2":                has_spo2,
+        "therapy_mode":            therapy_mode,
+        "mask_type":               mask_type,
+        "humidity_level":          humidity_level,
+        "temperature_c":           temperature_c,
         "user_id":                 user_id,
     }
 
@@ -601,6 +636,7 @@ def run_sleephq_import(
     should inject them via client_id / client_secret rather than
     mutating os.environ directly.
     """
+    _require_sleephq()
     # Temporarily override env vars if explicit creds provided
     _orig = {}
     if client_id:
