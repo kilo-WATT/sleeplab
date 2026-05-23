@@ -206,10 +206,10 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
 
             session_db_id = upsert_session(conn, session_data)
             replace_session_events(conn, session_db_id, events, csl_start)
-            replace_session_metrics(conn, session_db_id, pld_header, pld_channels)
+            replace_session_metrics(conn, session_db_id, pld_header, pld_channels, pld_start)
 
             if spo2_data:
-                replace_session_spo2(conn, session_db_id, pld_header, spo2_data)
+                replace_session_spo2(conn, session_db_id, pld_header, spo2_data, pld_start)
 
             conn.commit()
             imported += 1
