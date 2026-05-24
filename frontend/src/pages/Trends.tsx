@@ -5,6 +5,7 @@ import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveConta
 import type { OverviewDailyStat, SummaryStats, TrendAISummaryResponse } from '../api/client'
 import { api } from '../api/client'
 import GlossaryText from '../components/GlossaryText'
+import InfoPopover from '../components/InfoPopover'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
@@ -65,6 +66,12 @@ interface TrendMetric {
   shortLabel: string
   unit: string
   chart: 'line' | 'bar'
+  guidance: {
+    range: string
+    detail: string
+    source: string
+    sourceUrl: string
+  }
   domain?: [number | 'auto', number | 'auto']
   referenceLines?: Array<{ value: number; label: string; color: string }>
   precision?: number
@@ -79,41 +86,292 @@ const TREND_METRICS: TrendMetric[] = [
     shortLabel: 'AHI',
     unit: 'events/hr',
     chart: 'line',
+    guidance: {
+      range: 'Under 5 events/hr is generally considered normal; 5-14 mild, 15-29 moderate, and 30+ severe.',
+      detail: 'AHI is the combined count of apneas and hypopneas per hour. On treatment, many people aim to keep residual AHI below 5 unless their clinician gives a different target.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
     referenceLines: [
       { value: 5, label: '5', color: '#6AA136' },
       { value: 15, label: '15', color: '#E9784B' },
     ],
     precision: 1,
   },
-  { key: 'central_apnea_index', label: 'Central apnea index', shortLabel: 'CAI', unit: 'events/hr', chart: 'bar', precision: 1 },
-  { key: 'obstructive_apnea_index', label: 'Obstructive apnea index', shortLabel: 'OAI', unit: 'events/hr', chart: 'bar', precision: 1 },
-  { key: 'hypopnea_index', label: 'Hypopnea index', shortLabel: 'HI', unit: 'events/hr', chart: 'bar', precision: 1 },
-  { key: 'apnea_index', label: 'Apnea index', shortLabel: 'AI', unit: 'events/hr', chart: 'bar', precision: 1 },
-  { key: 'arousal_index', label: 'Arousal index', shortLabel: 'Arousal', unit: 'events/hr', chart: 'bar', precision: 1 },
-  { key: 'usage_hours', label: 'Usage', shortLabel: 'Usage', unit: 'hours', chart: 'line', domain: [0, 'auto'], precision: 2 },
+  {
+    key: 'central_apnea_index',
+    label: 'Central apnea index',
+    shortLabel: 'CAI',
+    unit: 'events/hr',
+    chart: 'bar',
+    precision: 1,
+    guidance: {
+      range: 'A central apnea/hypopnea index around 5 or more per hour is commonly used as a clinical flag for central sleep apnea patterns.',
+      detail: 'Small numbers can occur on PAP. Persistent or rising central events are worth discussing with a sleep clinician, especially if they make up a large share of AHI.',
+      source: 'AASM / Cleveland Clinic',
+      sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/40820608/',
+    },
+  },
+  {
+    key: 'obstructive_apnea_index',
+    label: 'Obstructive apnea index',
+    shortLabel: 'OAI',
+    unit: 'events/hr',
+    chart: 'bar',
+    precision: 1,
+    guidance: {
+      range: 'Lower is better. AHI under 5 events/hr is the usual treated-breathing benchmark, and obstructive events are one component of that total.',
+      detail: 'If OAI is the main contributor to AHI, it can point toward residual airway obstruction, mask leak, position, or pressure settings to review.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
+  },
+  {
+    key: 'hypopnea_index',
+    label: 'Hypopnea index',
+    shortLabel: 'HI',
+    unit: 'events/hr',
+    chart: 'bar',
+    precision: 1,
+    guidance: {
+      range: 'Lower is better. Hypopneas count toward AHI, where under 5 events/hr is generally considered normal.',
+      detail: 'A higher hypopnea index means partial breathing reductions are driving more of the nightly AHI.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
+  },
+  {
+    key: 'apnea_index',
+    label: 'Apnea index',
+    shortLabel: 'AI',
+    unit: 'events/hr',
+    chart: 'bar',
+    precision: 1,
+    guidance: {
+      range: 'Lower is better. This is one component of AHI, and AHI under 5 events/hr is the usual normal benchmark.',
+      detail: 'Use this beside CAI/OAI to see whether full pauses are central, obstructive, or mixed in pattern.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
+  },
+  {
+    key: 'arousal_index',
+    label: 'Arousal index',
+    shortLabel: 'Arousal',
+    unit: 'events/hr',
+    chart: 'bar',
+    precision: 1,
+    guidance: {
+      range: 'There is not one universal home-CPAP cutoff for a good arousal index.',
+      detail: 'Watch the trend and context. Arousals can fragment sleep even when AHI looks controlled, but interpretation depends on how events were scored.',
+      source: 'AASM',
+      sourceUrl: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC5337595/',
+    },
+  },
+  {
+    key: 'usage_hours',
+    label: 'Usage',
+    shortLabel: 'Usage',
+    unit: 'hours',
+    chart: 'line',
+    domain: [0, 'auto'],
+    precision: 2,
+    guidance: {
+      range: 'A common adherence benchmark is at least 4 hours per night on at least 70% of nights.',
+      detail: 'More full-night use is usually more informative than meeting the minimum insurance-style threshold.',
+      source: 'AASM',
+      sourceUrl: 'https://aasm.org/resources/pdf/responsetocmsjan.pdf',
+    },
+  },
   {
     key: 'session_start_hour',
     label: 'Session times',
     shortLabel: 'Times',
     unit: 'clock',
     chart: 'line',
+    guidance: {
+      range: 'There is no universal good bedtime or wake time in CPAP data.',
+      detail: 'Look for consistency, short nights, or schedule changes that line up with AHI, leak, oxygen, or daytime symptoms.',
+      source: 'SleepLab trend context',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
     domain: [0, 24],
     precision: 2,
     secondaryKey: 'session_end_hour',
     secondaryLabel: 'End',
   },
-  { key: 'avg_pressure', label: 'Average pressure', shortLabel: 'Avg pressure', unit: 'cmH2O', chart: 'line', precision: 1 },
-  { key: 'p95_pressure', label: '95th pressure', shortLabel: 'P95 pressure', unit: 'cmH2O', chart: 'line', precision: 1 },
-  { key: 'avg_leak', label: 'Leak', shortLabel: 'Leak', unit: 'L/min', chart: 'line', precision: 1 },
-  { key: 'large_leak_minutes', label: 'Large leak time', shortLabel: 'Large leak', unit: 'min', chart: 'bar', domain: [0, 'auto'], precision: 1 },
-  { key: 'avg_flow_lim', label: 'Flow limitation', shortLabel: 'Flow lim', unit: '', chart: 'line', precision: 3 },
-  { key: 'avg_tidal_vol', label: 'Tidal volume', shortLabel: 'Tidal vol', unit: 'mL', chart: 'line', precision: 0 },
-  { key: 'avg_min_vent', label: 'Minute ventilation', shortLabel: 'Min vent', unit: 'L/min', chart: 'line', precision: 1 },
-  { key: 'avg_resp_rate', label: 'Respiratory rate', shortLabel: 'Resp rate', unit: 'breaths/min', chart: 'line', precision: 1 },
-  { key: 'min_spo2', label: 'SpO2 minimum', shortLabel: 'Min SpO2', unit: '%', chart: 'line', domain: [70, 100], precision: 0 },
-  { key: 'avg_spo2', label: 'SpO2 average', shortLabel: 'Avg SpO2', unit: '%', chart: 'line', domain: [70, 100], precision: 1 },
-  { key: 'avg_pulse', label: 'Pulse', shortLabel: 'Pulse', unit: 'bpm', chart: 'line', precision: 0 },
-  { key: 'equipment_age_days', label: 'Equipment age', shortLabel: 'Equipment', unit: 'days', chart: 'line', domain: [0, 'auto'], precision: 0 },
+  {
+    key: 'avg_pressure',
+    label: 'Average pressure',
+    shortLabel: 'Avg pressure',
+    unit: 'cmH2O',
+    chart: 'line',
+    precision: 1,
+    guidance: {
+      range: 'There is no single good pressure number; useful pressure depends on prescription, machine mode, and airway needs.',
+      detail: 'Watch for pressure changes that line up with residual events, leak, comfort problems, or awakenings.',
+      source: 'AASM PAP guidance',
+      sourceUrl: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC6374094/',
+    },
+  },
+  {
+    key: 'p95_pressure',
+    label: '95th pressure',
+    shortLabel: 'P95 pressure',
+    unit: 'cmH2O',
+    chart: 'line',
+    precision: 1,
+    guidance: {
+      range: 'There is no universal good 95th pressure; it is a context marker for where pressure spends the high end of the night.',
+      detail: 'A rising P95 can reflect more obstruction, position/REM effects, leak response, or pressure range behavior.',
+      source: 'AASM PAP guidance',
+      sourceUrl: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC6374094/',
+    },
+  },
+  {
+    key: 'avg_leak',
+    label: 'Leak',
+    shortLabel: 'Leak',
+    unit: 'L/min',
+    chart: 'line',
+    precision: 1,
+    guidance: {
+      range: 'For ResMed-style unintentional leak, staying below about 24 L/min is commonly treated as acceptable.',
+      detail: 'Short leak spikes matter less than sustained large leak, especially if events rise or therapy feels worse.',
+      source: 'ResMed',
+      sourceUrl: 'https://document.resmed.com/documents/us/10114280r1_ResMed_Therapy_Handbook_AMER_Eng_Digital_SinglePages.pdf',
+    },
+  },
+  {
+    key: 'large_leak_minutes',
+    label: 'Large leak time',
+    shortLabel: 'Large leak',
+    unit: 'min',
+    chart: 'bar',
+    domain: [0, 'auto'],
+    precision: 1,
+    guidance: {
+      range: 'Less is better. SleepLab currently counts minutes above 24 L/min as large leak time.',
+      detail: 'Sustained large leak can make event detection and delivered pressure less reliable.',
+      source: 'ResMed',
+      sourceUrl: 'https://document.resmed.com/documents/us/10114280r1_ResMed_Therapy_Handbook_AMER_Eng_Digital_SinglePages.pdf',
+    },
+  },
+  {
+    key: 'avg_flow_lim',
+    label: 'Flow limitation',
+    shortLabel: 'Flow lim',
+    unit: '',
+    chart: 'line',
+    precision: 3,
+    guidance: {
+      range: 'Lower is generally better, but device-reported flow limitation does not have a universal medical cutoff.',
+      detail: 'Use it as a trend: increases can suggest partial airway restriction even when AHI remains low.',
+      source: 'SleepLab trend context',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
+  },
+  {
+    key: 'avg_tidal_vol',
+    label: 'Tidal volume',
+    shortLabel: 'Tidal vol',
+    unit: 'mL',
+    chart: 'line',
+    precision: 0,
+    guidance: {
+      range: 'There is no single good tidal volume in CPAP trend data.',
+      detail: 'Interpret in context with minute ventilation, respiratory rate, leak, body size, and sleep stage.',
+      source: 'SleepLab trend context',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/10881-vital-signs',
+    },
+  },
+  {
+    key: 'avg_min_vent',
+    label: 'Minute ventilation',
+    shortLabel: 'Min vent',
+    unit: 'L/min',
+    chart: 'line',
+    precision: 1,
+    guidance: {
+      range: 'There is no universal good minute-ventilation target in home CPAP trend data.',
+      detail: 'Look for night-to-night shifts alongside respiratory rate, tidal volume, leak, and oxygen saturation.',
+      source: 'SleepLab trend context',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/10881-vital-signs',
+    },
+  },
+  {
+    key: 'avg_resp_rate',
+    label: 'Respiratory rate',
+    shortLabel: 'Resp rate',
+    unit: 'breaths/min',
+    chart: 'line',
+    precision: 1,
+    guidance: {
+      range: 'Cleveland Clinic lists a normal adult resting respiratory rate around 12-18 breaths per minute.',
+      detail: 'Sleeping values can vary. Watch persistent shifts or changes paired with oxygen drops, leaks, or symptoms.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/10881-vital-signs',
+    },
+  },
+  {
+    key: 'min_spo2',
+    label: 'SpO2 minimum',
+    shortLabel: 'Min SpO2',
+    unit: '%',
+    chart: 'line',
+    domain: [70, 100],
+    precision: 0,
+    guidance: {
+      range: 'Cleveland Clinic lists 95%-100% as normal for most pulse-oximeter readings.',
+      detail: 'A brief minimum can be artifact, but repeated or sustained drops below normal are worth reviewing with a clinician.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/diagnostics/22447-blood-oxygen-level',
+    },
+  },
+  {
+    key: 'avg_spo2',
+    label: 'SpO2 average',
+    shortLabel: 'Avg SpO2',
+    unit: '%',
+    chart: 'line',
+    domain: [70, 100],
+    precision: 1,
+    guidance: {
+      range: 'For most people, pulse-oximeter SpO2 of 95%-100% is considered normal.',
+      detail: 'Average SpO2 should be interpreted with minimum SpO2 and time spent low, not as a standalone diagnosis.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/diagnostics/22447-blood-oxygen-level',
+    },
+  },
+  {
+    key: 'avg_pulse',
+    label: 'Pulse',
+    shortLabel: 'Pulse',
+    unit: 'bpm',
+    chart: 'line',
+    precision: 0,
+    guidance: {
+      range: 'Cleveland Clinic lists normal adult resting pulse around 60-100 bpm.',
+      detail: 'Sleep pulse is often lower than daytime resting pulse. Trends are most useful beside SpO2, events, medications, and symptoms.',
+      source: 'Cleveland Clinic',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/10881-vital-signs',
+    },
+  },
+  {
+    key: 'equipment_age_days',
+    label: 'Equipment age',
+    shortLabel: 'Equipment',
+    unit: 'days',
+    chart: 'line',
+    domain: [0, 'auto'],
+    precision: 0,
+    guidance: {
+      range: 'Replacement timing depends on the part, wear, insurance schedule, and manufacturer guidance.',
+      detail: 'Use this to spot whether leak or comfort worsens as masks, cushions, tubing, filters, or chambers age.',
+      source: 'SleepLab equipment context',
+      sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
+    },
+  },
 ]
 
 const TREND_METRIC_GROUPS = [
@@ -364,7 +622,24 @@ function OverviewChart({
       <CardContent className="px-4 pb-5 pt-5 sm:px-6 sm:pt-6">
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-sm font-bold text-[var(--foreground)]">{metric.label}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-bold text-[var(--foreground)]">{metric.label}</p>
+              <InfoPopover title={`${metric.label} guidance`}>
+                <div className="space-y-2">
+                  <p>{metric.guidance.range}</p>
+                  <p>{metric.guidance.detail}</p>
+                  <a
+                    href={metric.guidance.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex font-bold text-[var(--accent)] hover:text-[var(--accent-hover)]"
+                  >
+                    Source: {metric.guidance.source}
+                  </a>
+                  <p className="text-xs leading-5">General education only. Use your clinician's target when it differs.</p>
+                </div>
+              </InfoPopover>
+            </div>
             <p className="text-sm text-[var(--muted-foreground)]">{nights.length} nights in the selected range</p>
           </div>
           <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">{metric.unit || 'Index'}</p>
