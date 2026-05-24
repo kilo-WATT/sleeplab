@@ -52,7 +52,8 @@ def upsert_session(conn, data: dict) -> int:
         duration_seconds, device_serial, ahi,
         central_apnea_count, obstructive_apnea_count, hypopnea_count,
         apnea_count, arousal_count, total_ahi_events,
-        avg_pressure, p95_pressure, avg_leak, avg_resp_rate, avg_tidal_vol,
+        avg_pressure, p95_pressure, pressure_min, pressure_max, epr_setting, ramp_setting,
+        avg_leak, avg_resp_rate, avg_tidal_vol,
         avg_min_vent, avg_snore, avg_flow_lim, has_spo2,
         therapy_mode, mask_type, humidity_level, temperature_c,
         user_id, updated_at
@@ -61,7 +62,8 @@ def upsert_session(conn, data: dict) -> int:
         %(duration_seconds)s, %(device_serial)s, %(ahi)s,
         %(central_apnea_count)s, %(obstructive_apnea_count)s, %(hypopnea_count)s,
         %(apnea_count)s, %(arousal_count)s, %(total_ahi_events)s,
-        %(avg_pressure)s, %(p95_pressure)s, %(avg_leak)s, %(avg_resp_rate)s, %(avg_tidal_vol)s,
+        %(avg_pressure)s, %(p95_pressure)s, %(pressure_min)s, %(pressure_max)s, %(epr_setting)s, %(ramp_setting)s,
+        %(avg_leak)s, %(avg_resp_rate)s, %(avg_tidal_vol)s,
         %(avg_min_vent)s, %(avg_snore)s, %(avg_flow_lim)s, %(has_spo2)s,
         %(therapy_mode)s, %(mask_type)s, %(humidity_level)s, %(temperature_c)s,
         %(user_id)s, NOW()
@@ -82,6 +84,10 @@ def upsert_session(conn, data: dict) -> int:
         total_ahi_events        = EXCLUDED.total_ahi_events,
         avg_pressure            = EXCLUDED.avg_pressure,
         p95_pressure            = EXCLUDED.p95_pressure,
+        pressure_min            = EXCLUDED.pressure_min,
+        pressure_max            = EXCLUDED.pressure_max,
+        epr_setting             = EXCLUDED.epr_setting,
+        ramp_setting            = EXCLUDED.ramp_setting,
         avg_leak                = EXCLUDED.avg_leak,
         avg_resp_rate           = EXCLUDED.avg_resp_rate,
         avg_tidal_vol           = EXCLUDED.avg_tidal_vol,
@@ -100,6 +106,32 @@ def upsert_session(conn, data: dict) -> int:
     with conn.cursor() as cur:
         cur.execute(sql, data)
         return cur.fetchone()[0]
+
+
+def update_session_machine_settings(conn, user_id: str, session_id: str, settings: dict) -> None:
+    """Update locally detected machine settings for an already-imported session."""
+    sql = """
+    UPDATE sessions
+    SET
+        therapy_mode = %(therapy_mode)s,
+        pressure_min = %(pressure_min)s,
+        pressure_max = %(pressure_max)s,
+        epr_setting = %(epr_setting)s,
+        ramp_setting = %(ramp_setting)s,
+        mask_type = %(mask_type)s,
+        humidity_level = %(humidity_level)s,
+        temperature_c = %(temperature_c)s,
+        updated_at = NOW()
+    WHERE user_id = %(user_id)s
+      AND session_id = %(session_id)s
+    """
+    payload = {
+        "user_id": user_id,
+        "session_id": session_id,
+        **settings,
+    }
+    with conn.cursor() as cur:
+        cur.execute(sql, payload)
 
 
 def replace_session_events(conn, session_db_id: int, events: list, csl_start: datetime):

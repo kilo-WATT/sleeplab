@@ -17,15 +17,28 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from edf_parser import parse_pld, parse_eve, parse_sa2, read_header
-from db import (
-    get_conn,
-    replace_session_events,
-    replace_session_metrics,
-    replace_session_spo2,
-    session_exists,
-    upsert_session,
-)
+try:
+    from .edf_parser import parse_pld, parse_eve, parse_sa2, read_header
+    from .db import (
+        get_conn,
+        replace_session_events,
+        replace_session_metrics,
+        replace_session_spo2,
+        session_exists,
+        update_session_machine_settings,
+        upsert_session,
+    )
+except ImportError:
+    from edf_parser import parse_pld, parse_eve, parse_sa2, read_header
+    from db import (
+        get_conn,
+        replace_session_events,
+        replace_session_metrics,
+        replace_session_spo2,
+        session_exists,
+        update_session_machine_settings,
+        upsert_session,
+    )
 
 
 AHI_EVENT_TYPES = {'Central Apnea', 'Obstructive Apnea', 'Hypopnea', 'Apnea'}
@@ -146,6 +159,51 @@ def derive_summary(pld_channels: dict, events: list, duration_seconds: int) -> d
     }
 
 
+def derive_machine_settings(pld_channels: dict) -> dict:
+    """Infer locally available machine settings from ResMed PLD channels."""
+    press = [v for v in pld_channels.get('Press.2s', []) if v > 0]
+    epr_press = [v for v in pld_channels.get('EprPress.2s', []) if v > 0]
+
+    pressure_min = None
+    pressure_max = None
+    therapy_mode = None
+    epr_setting = None
+
+    if press:
+        sorted_press = sorted(press)
+        observed_min = round(sorted_press[0], 2)
+        observed_max = round(sorted_press[-1], 2)
+        pressure_spread = observed_max - observed_min
+        therapy_mode = 'apap' if pressure_spread >= 0.5 else 'cpap'
+        if therapy_mode == 'cpap':
+            fixed_pressure = round(statistics.median(sorted_press), 2)
+            pressure_min = fixed_pressure
+            pressure_max = fixed_pressure
+
+    if press and epr_press:
+        relief_values = [
+            round(p - e, 1)
+            for p, e in zip(press, epr_press)
+            if p > 0 and e > 0 and p >= e
+        ]
+        relief_values = [v for v in relief_values if 0 <= v <= 4]
+        if relief_values:
+            epr_level = round(statistics.median(relief_values))
+            if epr_level > 0:
+                epr_setting = str(epr_level)
+
+    return {
+        'therapy_mode': therapy_mode,
+        'pressure_min': pressure_min,
+        'pressure_max': pressure_max,
+        'epr_setting': epr_setting,
+        'ramp_setting': None,
+        'mask_type': None,
+        'humidity_level': None,
+        'temperature_c': None,
+    }
+
+
 def import_folder(folder: Path, folder_date: date, conn, user_id: str):
     blocks = discover_session_blocks(folder)
     if not blocks:
@@ -157,12 +215,15 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
         session_id = f"{folder_date.strftime('%Y%m%d')}_{pld_ts[8:10]}{pld_ts[10:12]}{pld_ts[12:14]}"
 
         try:
-            if session_exists(conn, user_id, session_id):
-                print(f"    SKIP block {block_idx} ({session_id}): already imported")
-                continue
-
             # Parse PLD (required)
             pld_header, pld_channels = parse_pld(block['pld_path'])
+            machine_settings = derive_machine_settings(pld_channels)
+
+            if session_exists(conn, user_id, session_id):
+                update_session_machine_settings(conn, user_id, session_id, machine_settings)
+                conn.commit()
+                print(f"    UPDATE settings block {block_idx} ({session_id}): already imported")
+                continue
 
             # Parse EVE (optional — some blocks may lack it)
             events = []
@@ -196,12 +257,9 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
                 'duration_seconds':   duration_s,
                 'device_serial':      pld_header.device_serial or None,
                 'has_spo2':           spo2_data is not None,
-                'therapy_mode':       None,
-                'mask_type':          None,
-                'humidity_level':     None,
-                'temperature_c':      None,
                 'user_id':            user_id,
                 **summary,
+                **machine_settings,
             }
 
             session_db_id = upsert_session(conn, session_data)

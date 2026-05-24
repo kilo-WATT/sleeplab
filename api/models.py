@@ -41,9 +41,49 @@ class SessionDetail(SessionSummary):
     avg_spo2: Optional[float]
     min_spo2: Optional[float]
     therapy_mode: Optional[str]
+    pressure_min: Optional[float]
+    pressure_max: Optional[float]
+    epr_setting: Optional[str]
+    ramp_setting: Optional[str]
     mask_type: Optional[str]
     humidity_level: Optional[int]
     temperature_c: Optional[float]
+
+
+class MachineSettingsSnapshot(BaseModel):
+    folder_date: date
+    session_id: str
+    ahi: Optional[float]
+    avg_pressure: Optional[float]
+    p95_pressure: Optional[float]
+    therapy_mode: Optional[str]
+    pressure_min: Optional[float]
+    pressure_max: Optional[float]
+    epr_setting: Optional[str]
+    ramp_setting: Optional[str]
+    humidity_level: Optional[int]
+    mask_type: Optional[str]
+    temperature_c: Optional[float]
+
+
+class MachineSettingsChangedField(BaseModel):
+    field: str
+    label: str
+    before: Optional[str]
+    after: Optional[str]
+
+
+class MachineSettingsChange(BaseModel):
+    folder_date: date
+    session_id: str
+    changed_fields: List[MachineSettingsChangedField]
+    before: MachineSettingsSnapshot
+    after: MachineSettingsSnapshot
+
+
+class MachineSettingsHistoryResponse(BaseModel):
+    history: List[MachineSettingsSnapshot]
+    changes: List[MachineSettingsChange]
 
 
 class EventRecord(BaseModel):

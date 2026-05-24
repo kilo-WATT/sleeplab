@@ -229,13 +229,25 @@ export default function SessionDetail() {
       </div>
 
       {/* Machine settings — only if any field is present */}
-      {(session.therapy_mode || session.mask_type || session.humidity_level != null || session.temperature_c != null) && (
+      {(session.therapy_mode || session.pressure_min != null || session.pressure_max != null || session.epr_setting || session.ramp_setting || session.mask_type || session.humidity_level != null || session.temperature_c != null) && (
         <Card>
           <CardContent className="px-5 pb-5 pt-5">
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)] mb-3">Device settings</p>
             <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
               {session.therapy_mode && (
                 <span><span className="text-[var(--muted-foreground)]">Mode </span>{session.therapy_mode.toUpperCase()}</span>
+              )}
+              {(session.pressure_min != null || session.pressure_max != null) && (
+                <span>
+                  <span className="text-[var(--muted-foreground)]">Pressure </span>
+                  {session.pressure_min != null ? session.pressure_min.toFixed(1) : '-'}-{session.pressure_max != null ? session.pressure_max.toFixed(1) : '-'} cmH2O
+                </span>
+              )}
+              {session.epr_setting && (
+                <span><span className="text-[var(--muted-foreground)]">EPR </span>{session.epr_setting}</span>
+              )}
+              {session.ramp_setting && (
+                <span><span className="text-[var(--muted-foreground)]">Ramp </span>{session.ramp_setting}</span>
               )}
               {session.mask_type && (
                 <span><span className="text-[var(--muted-foreground)]">Mask </span>{session.mask_type}</span>

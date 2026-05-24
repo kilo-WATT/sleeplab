@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 
-import type { SummaryStats, TrendAISummaryResponse } from '../api/client'
+import type { MachineSettingsHistoryResponse, SummaryStats, TrendAISummaryResponse } from '../api/client'
 import { api } from '../api/client'
 import AHITrendChart from '../components/AHITrendChart'
 import GlossaryText from '../components/GlossaryText'
+import SettingsHistoryCard from '../components/SettingsHistoryCard'
 import { Card, CardContent } from '../components/ui/card'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
 
@@ -113,14 +114,19 @@ function humanizeEventType(eventType: string) {
 
 export default function TrendsPage() {
   const [summary, setSummary] = useState<SummaryStats | null>(null)
+  const [settingsHistory, setSettingsHistory] = useState<MachineSettingsHistoryResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadTrends() {
       try {
-        const data = await api.getSummary()
+        const [data, settings] = await Promise.all([
+          api.getSummary(),
+          api.getMachineSettingsHistory(),
+        ])
         setSummary(data)
+        setSettingsHistory(settings)
         setError(null)
       } catch (err) {
         setError(String(err))
@@ -180,8 +186,12 @@ export default function TrendsPage() {
       </div>
 
       <div id="ahi-trend">
-        <AHITrendChart trend={summary.ahi_trend} />
+        <AHITrendChart trend={summary.ahi_trend} settingChanges={settingsHistory?.changes ?? []} />
       </div>
+
+      {settingsHistory && (
+        <SettingsHistoryCard history={settingsHistory.history} changes={settingsHistory.changes} />
+      )}
 
       <Card id="event-breakdown">
         <CardContent className="px-6 pb-6 pt-7">

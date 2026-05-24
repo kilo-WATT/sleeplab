@@ -6,9 +6,32 @@ from datetime import date
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import SessionSummary, SessionDetail, EventRecord, MetricsResponse, SpO2Response, EquipmentResponse, InferredEquipment
+from ..models import (
+    EventRecord,
+    EquipmentResponse,
+    InferredEquipment,
+    MachineSettingsChange,
+    MachineSettingsChangedField,
+    MachineSettingsHistoryResponse,
+    MachineSettingsSnapshot,
+    MetricsResponse,
+    SessionDetail,
+    SessionSummary,
+    SpO2Response,
+)
 
 router = APIRouter()
+
+SETTING_FIELDS = (
+    ("pressure_min", "Minimum pressure"),
+    ("pressure_max", "Maximum pressure"),
+    ("epr_setting", "EPR"),
+    ("ramp_setting", "Ramp"),
+    ("humidity_level", "Humidity"),
+    ("mask_type", "Mask"),
+    ("therapy_mode", "Mode"),
+    ("temperature_c", "Temperature"),
+)
 
 
 @router.get("/", response_model=List[SessionSummary])
@@ -118,6 +141,10 @@ def get_session(
                 MIN(s.min_spo2) AS min_spo2,
                 (array_agg(s.device_serial   ORDER BY s.duration_seconds DESC))[1] AS device_serial,
                 (array_agg(s.therapy_mode    ORDER BY s.duration_seconds DESC))[1] AS therapy_mode,
+                (array_agg(s.pressure_min    ORDER BY s.duration_seconds DESC))[1] AS pressure_min,
+                (array_agg(s.pressure_max    ORDER BY s.duration_seconds DESC))[1] AS pressure_max,
+                (array_agg(s.epr_setting     ORDER BY s.duration_seconds DESC))[1] AS epr_setting,
+                (array_agg(s.ramp_setting    ORDER BY s.duration_seconds DESC))[1] AS ramp_setting,
                 (array_agg(s.mask_type       ORDER BY s.duration_seconds DESC))[1] AS mask_type,
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c
@@ -131,6 +158,64 @@ def get_session(
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     return SessionDetail.model_validate(dict(row))
+
+
+@router.get("/settings/history", response_model=MachineSettingsHistoryResponse)
+def get_machine_settings_history(
+    days: int = Query(365, ge=1, le=3650),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Nightly machine settings and setting-change points for trend annotations."""
+    rows = db.execute(
+        text("""
+            WITH night AS (
+                SELECT
+                    s.folder_date,
+                    (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS session_id,
+                    CASE WHEN SUM(s.duration_seconds) > 0
+                         THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
+                         ELSE 0 END AS ahi,
+                    AVG(s.avg_pressure) AS avg_pressure,
+                    MAX(s.p95_pressure) AS p95_pressure,
+                    (array_agg(s.therapy_mode   ORDER BY s.duration_seconds DESC))[1] AS therapy_mode,
+                    (array_agg(s.pressure_min   ORDER BY s.duration_seconds DESC))[1] AS pressure_min,
+                    (array_agg(s.pressure_max   ORDER BY s.duration_seconds DESC))[1] AS pressure_max,
+                    (array_agg(s.epr_setting    ORDER BY s.duration_seconds DESC))[1] AS epr_setting,
+                    (array_agg(s.ramp_setting   ORDER BY s.duration_seconds DESC))[1] AS ramp_setting,
+                    (array_agg(s.humidity_level ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
+                    (array_agg(s.mask_type      ORDER BY s.duration_seconds DESC))[1] AS mask_type,
+                    (array_agg(s.temperature_c  ORDER BY s.duration_seconds DESC))[1] AS temperature_c
+                FROM sessions s
+                WHERE s.user_id = CAST(:uid AS uuid)
+                  AND s.duration_seconds >= 600
+                  AND s.folder_date >= CURRENT_DATE - (:days * INTERVAL '1 day')
+                GROUP BY s.folder_date
+            )
+            SELECT *
+            FROM night
+            ORDER BY folder_date ASC
+        """),
+        {"uid": current_user["id"], "days": days},
+    ).mappings().all()
+
+    history = [MachineSettingsSnapshot.model_validate(dict(row)) for row in rows]
+    changes: List[MachineSettingsChange] = []
+
+    for previous, current in zip(history, history[1:]):
+        changed_fields = _settings_changed_fields(previous, current)
+        if changed_fields:
+            changes.append(
+                MachineSettingsChange(
+                    folder_date=current.folder_date,
+                    session_id=current.session_id,
+                    changed_fields=changed_fields,
+                    before=previous,
+                    after=current,
+                )
+            )
+
+    return MachineSettingsHistoryResponse(history=history, changes=changes)
 
 
 @router.get("/{session_id}/events", response_model=List[EventRecord])
@@ -306,6 +391,43 @@ def _require_session(session_id: str, user_id: str, db: Session) -> str:
 def _f(val) -> Optional[float]:
     """Convert Decimal to float for JSON serialization."""
     return float(val) if val is not None else None
+
+
+def _display_setting(field: str, val) -> Optional[str]:
+    if val is None:
+        return None
+    if field in {"pressure_min", "pressure_max"}:
+        return f"{float(val):g} cmH2O"
+    if field == "temperature_c":
+        return f"{float(val):g} C"
+    if field == "humidity_level":
+        return str(int(val))
+    if field == "therapy_mode":
+        return str(val).upper()
+    return str(val)
+
+
+def _settings_changed_fields(
+    previous: MachineSettingsSnapshot,
+    current: MachineSettingsSnapshot,
+) -> List[MachineSettingsChangedField]:
+    changed: List[MachineSettingsChangedField] = []
+    for field, label in SETTING_FIELDS:
+        before = getattr(previous, field)
+        after = getattr(current, field)
+        if before == after:
+            continue
+        if before is None and after is None:
+            continue
+        changed.append(
+            MachineSettingsChangedField(
+                field=field,
+                label=label,
+                before=_display_setting(field, before),
+                after=_display_setting(field, after),
+            )
+        )
+    return changed
 
 
 @router.delete("/all", status_code=204)

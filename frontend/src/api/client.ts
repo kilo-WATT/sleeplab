@@ -112,9 +112,49 @@ export interface SessionDetail extends SessionSummary {
   avg_spo2: number | null
   min_spo2: number | null
   therapy_mode: string | null
+  pressure_min: number | null
+  pressure_max: number | null
+  epr_setting: string | null
+  ramp_setting: string | null
   mask_type: string | null
   humidity_level: number | null
   temperature_c: number | null
+}
+
+export interface MachineSettingsSnapshot {
+  folder_date: string
+  session_id: string
+  ahi: number | null
+  avg_pressure: number | null
+  p95_pressure: number | null
+  therapy_mode: string | null
+  pressure_min: number | null
+  pressure_max: number | null
+  epr_setting: string | null
+  ramp_setting: string | null
+  humidity_level: number | null
+  mask_type: string | null
+  temperature_c: number | null
+}
+
+export interface MachineSettingsChangedField {
+  field: string
+  label: string
+  before: string | null
+  after: string | null
+}
+
+export interface MachineSettingsChange {
+  folder_date: string
+  session_id: string
+  changed_fields: MachineSettingsChangedField[]
+  before: MachineSettingsSnapshot
+  after: MachineSettingsSnapshot
+}
+
+export interface MachineSettingsHistoryResponse {
+  history: MachineSettingsSnapshot[]
+  changes: MachineSettingsChange[]
 }
 
 export type EquipmentType = 'cushion' | 'headgear' | 'tubing' | 'humidifier_chamber' | 'filter'
@@ -332,6 +372,8 @@ export const api = {
   getSessions: (params?: { per_page?: number; date_from?: string; date_to?: string }) =>
     get<SessionSummary[]>('/sessions/', params as Record<string, string | number> | undefined),
   getSession: (id: string) => get<SessionDetail>(`/sessions/${id}`),
+  getMachineSettingsHistory: (days = 365) =>
+    get<MachineSettingsHistoryResponse>('/sessions/settings/history', { days }),
   getEvents: (id: string) => get<EventRecord[]>(`/sessions/${id}/events`),
   getMetrics: (id: string, downsample = 15) =>
     get<MetricsResponse>(`/sessions/${id}/metrics`, { downsample }),

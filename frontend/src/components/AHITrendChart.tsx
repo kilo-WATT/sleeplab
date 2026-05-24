@@ -2,12 +2,14 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, R
 import type { DailyStat } from '../api/client'
 import { useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
+import type { MachineSettingsChange } from '../api/client'
 
 interface Props {
   trend: DailyStat[]
+  settingChanges?: MachineSettingsChange[]
 }
 
-export default function AHITrendChart({ trend }: Props) {
+export default function AHITrendChart({ trend, settingChanges = [] }: Props) {
   const navigate = useNavigate()
 
   const data = trend.map(d => ({
@@ -48,6 +50,15 @@ export default function AHITrendChart({ trend }: Props) {
               labelStyle={{ color: '#3c2b22' }}
               formatter={(val) => [((val as number) ?? 0).toFixed(1), 'AHI']}
             />
+            {settingChanges.map((change) => (
+              <ReferenceLine
+                key={`${change.folder_date}-${change.changed_fields.map((field) => field.field).join('-')}`}
+                x={change.folder_date}
+                stroke="#c55d37"
+                strokeDasharray="3 3"
+                label={{ value: 'Setting change', fill: '#c55d37', fontSize: 10, position: 'top' }}
+              />
+            ))}
             <ReferenceLine y={5} stroke="#6AA136" strokeDasharray="4 4" label={{ value: 'Normal', fill: '#6AA136', fontSize: 10 }} />
             <ReferenceLine y={15} stroke="#E9784B" strokeDasharray="4 4" label={{ value: 'Moderate', fill: '#E9784B', fontSize: 10 }} />
             <Line

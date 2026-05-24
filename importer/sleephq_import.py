@@ -374,6 +374,14 @@ def _sub(summary_obj, *keys, default=None):
     return default
 
 
+def _first_prop(props: dict, *keys):
+    for key in keys:
+        val = props.get(key)
+        if val is not None:
+            return val
+    return None
+
+
 def map_machine_date_to_session(record, user_id: str) -> dict:
     """
     Map a SleepHQ machine_date record (JSON:API format) to the dict
@@ -468,6 +476,8 @@ def map_machine_date_to_session(record, user_id: str) -> dict:
     pres_s = getattr(attrs, "pressure_summary", None) if attrs else None
     avg_pressure = _float(_sub(pres_s, "av"))
     p95_pressure = _float(_sub(pres_s, "upper"))
+    pressure_min = None
+    pressure_max = None
 
     # ── Leak rate summary ────────────────────────────────────────────────────
     # Confirmed keys: av, med, upper, max, min, score
@@ -510,6 +520,13 @@ def map_machine_date_to_session(record, user_id: str) -> dict:
     therapy_mode   = ms_props.get("mode") or None
     mask_type      = ms_props.get("mask") or None
     humidity_level = _int(ms_props.get("humidity_level"))
+    pressure_min   = _float(_first_prop(ms_props, "pressure_min", "pressure_minimum", "minimum_pressure", "min_pressure", "min_epap"))
+    pressure_max   = _float(_first_prop(ms_props, "pressure_max", "pressure_maximum", "maximum_pressure", "max_pressure", "max_ipap"))
+    epr_setting    = _first_prop(ms_props, "epr", "epr_level", "epr_setting", "epr_type", "expiratory_pressure_relief")
+    ramp_setting   = _first_prop(ms_props, "ramp", "ramp_time", "ramp_setting", "ramp_time_min", "ramp_enable")
+
+    epr_setting = str(epr_setting).strip() if epr_setting is not None else None
+    ramp_setting = str(ramp_setting).strip() if ramp_setting is not None else None
 
     temperature_c = None
     raw_temp = ms_props.get("temperature")
@@ -537,6 +554,10 @@ def map_machine_date_to_session(record, user_id: str) -> dict:
         "total_ahi_events":        total_ahi_events,
         "avg_pressure":            avg_pressure,
         "p95_pressure":            p95_pressure,
+        "pressure_min":            pressure_min,
+        "pressure_max":            pressure_max,
+        "epr_setting":             epr_setting,
+        "ramp_setting":            ramp_setting,
         "avg_leak":                avg_leak,
         "avg_resp_rate":           avg_resp_rate,
         "avg_tidal_vol":           avg_tidal_vol,
