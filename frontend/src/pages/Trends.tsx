@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 import type { OverviewDailyStat, SummaryStats, TrendAISummaryResponse } from '../api/client'
 import { api } from '../api/client'
@@ -64,6 +64,7 @@ interface TrendMetric {
   label: string
   shortLabel: string
   unit: string
+  chart: 'line' | 'bar'
   domain?: [number | 'auto', number | 'auto']
   referenceLines?: Array<{ value: number; label: string; color: string }>
   precision?: number
@@ -77,41 +78,66 @@ const TREND_METRICS: TrendMetric[] = [
     label: 'AHI',
     shortLabel: 'AHI',
     unit: 'events/hr',
+    chart: 'line',
     referenceLines: [
       { value: 5, label: '5', color: '#6AA136' },
       { value: 15, label: '15', color: '#E9784B' },
     ],
     precision: 1,
   },
-  { key: 'central_apnea_index', label: 'Central apnea index', shortLabel: 'CAI', unit: 'events/hr', precision: 1 },
-  { key: 'obstructive_apnea_index', label: 'Obstructive apnea index', shortLabel: 'OAI', unit: 'events/hr', precision: 1 },
-  { key: 'hypopnea_index', label: 'Hypopnea index', shortLabel: 'HI', unit: 'events/hr', precision: 1 },
-  { key: 'apnea_index', label: 'Apnea index', shortLabel: 'AI', unit: 'events/hr', precision: 1 },
-  { key: 'arousal_index', label: 'Arousal index', shortLabel: 'Arousal', unit: 'events/hr', precision: 1 },
-  { key: 'usage_hours', label: 'Usage', shortLabel: 'Usage', unit: 'hours', domain: [0, 'auto'], precision: 2 },
+  { key: 'central_apnea_index', label: 'Central apnea index', shortLabel: 'CAI', unit: 'events/hr', chart: 'bar', precision: 1 },
+  { key: 'obstructive_apnea_index', label: 'Obstructive apnea index', shortLabel: 'OAI', unit: 'events/hr', chart: 'bar', precision: 1 },
+  { key: 'hypopnea_index', label: 'Hypopnea index', shortLabel: 'HI', unit: 'events/hr', chart: 'bar', precision: 1 },
+  { key: 'apnea_index', label: 'Apnea index', shortLabel: 'AI', unit: 'events/hr', chart: 'bar', precision: 1 },
+  { key: 'arousal_index', label: 'Arousal index', shortLabel: 'Arousal', unit: 'events/hr', chart: 'bar', precision: 1 },
+  { key: 'usage_hours', label: 'Usage', shortLabel: 'Usage', unit: 'hours', chart: 'line', domain: [0, 'auto'], precision: 2 },
   {
     key: 'session_start_hour',
     label: 'Session times',
     shortLabel: 'Times',
     unit: 'clock',
+    chart: 'line',
     domain: [0, 24],
     precision: 2,
     secondaryKey: 'session_end_hour',
     secondaryLabel: 'End',
   },
-  { key: 'avg_pressure', label: 'Average pressure', shortLabel: 'Avg pressure', unit: 'cmH2O', precision: 1 },
-  { key: 'p95_pressure', label: '95th pressure', shortLabel: 'P95 pressure', unit: 'cmH2O', precision: 1 },
-  { key: 'avg_leak', label: 'Leak', shortLabel: 'Leak', unit: 'L/min', precision: 1 },
-  { key: 'large_leak_minutes', label: 'Large leak time', shortLabel: 'Large leak', unit: 'min', domain: [0, 'auto'], precision: 1 },
-  { key: 'avg_flow_lim', label: 'Flow limitation', shortLabel: 'Flow lim', unit: '', precision: 3 },
-  { key: 'avg_tidal_vol', label: 'Tidal volume', shortLabel: 'Tidal vol', unit: 'mL', precision: 0 },
-  { key: 'avg_min_vent', label: 'Minute ventilation', shortLabel: 'Min vent', unit: 'L/min', precision: 1 },
-  { key: 'avg_resp_rate', label: 'Respiratory rate', shortLabel: 'Resp rate', unit: 'breaths/min', precision: 1 },
-  { key: 'min_spo2', label: 'SpO2 minimum', shortLabel: 'Min SpO2', unit: '%', domain: [70, 100], precision: 0 },
-  { key: 'avg_spo2', label: 'SpO2 average', shortLabel: 'Avg SpO2', unit: '%', domain: [70, 100], precision: 1 },
-  { key: 'avg_pulse', label: 'Pulse', shortLabel: 'Pulse', unit: 'bpm', precision: 0 },
-  { key: 'equipment_age_days', label: 'Equipment age', shortLabel: 'Equipment', unit: 'days', domain: [0, 'auto'], precision: 0 },
+  { key: 'avg_pressure', label: 'Average pressure', shortLabel: 'Avg pressure', unit: 'cmH2O', chart: 'line', precision: 1 },
+  { key: 'p95_pressure', label: '95th pressure', shortLabel: 'P95 pressure', unit: 'cmH2O', chart: 'line', precision: 1 },
+  { key: 'avg_leak', label: 'Leak', shortLabel: 'Leak', unit: 'L/min', chart: 'line', precision: 1 },
+  { key: 'large_leak_minutes', label: 'Large leak time', shortLabel: 'Large leak', unit: 'min', chart: 'bar', domain: [0, 'auto'], precision: 1 },
+  { key: 'avg_flow_lim', label: 'Flow limitation', shortLabel: 'Flow lim', unit: '', chart: 'line', precision: 3 },
+  { key: 'avg_tidal_vol', label: 'Tidal volume', shortLabel: 'Tidal vol', unit: 'mL', chart: 'line', precision: 0 },
+  { key: 'avg_min_vent', label: 'Minute ventilation', shortLabel: 'Min vent', unit: 'L/min', chart: 'line', precision: 1 },
+  { key: 'avg_resp_rate', label: 'Respiratory rate', shortLabel: 'Resp rate', unit: 'breaths/min', chart: 'line', precision: 1 },
+  { key: 'min_spo2', label: 'SpO2 minimum', shortLabel: 'Min SpO2', unit: '%', chart: 'line', domain: [70, 100], precision: 0 },
+  { key: 'avg_spo2', label: 'SpO2 average', shortLabel: 'Avg SpO2', unit: '%', chart: 'line', domain: [70, 100], precision: 1 },
+  { key: 'avg_pulse', label: 'Pulse', shortLabel: 'Pulse', unit: 'bpm', chart: 'line', precision: 0 },
+  { key: 'equipment_age_days', label: 'Equipment age', shortLabel: 'Equipment', unit: 'days', chart: 'line', domain: [0, 'auto'], precision: 0 },
 ]
+
+const TREND_METRIC_GROUPS = [
+  {
+    label: 'Events',
+    keys: ['ahi', 'central_apnea_index', 'obstructive_apnea_index', 'hypopnea_index', 'apnea_index', 'arousal_index'],
+  },
+  {
+    label: 'Therapy',
+    keys: ['usage_hours', 'session_start_hour', 'avg_pressure', 'p95_pressure', 'avg_leak', 'large_leak_minutes'],
+  },
+  {
+    label: 'Breathing',
+    keys: ['avg_flow_lim', 'avg_tidal_vol', 'avg_min_vent', 'avg_resp_rate'],
+  },
+  {
+    label: 'Oximetry',
+    keys: ['min_spo2', 'avg_spo2', 'avg_pulse'],
+  },
+  {
+    label: 'Equipment',
+    keys: ['equipment_age_days'],
+  },
+] satisfies Array<{ label: string; keys: MetricKey[] }>
 
 const RANGE_OPTIONS = [
   { label: '90D', days: 90 },
@@ -211,6 +237,13 @@ function formatMetricValue(value: number | null | undefined, metric: TrendMetric
   return metric.unit ? `${formatted} ${metric.unit}` : formatted
 }
 
+function formatMetricDelta(value: number | null | undefined, metric: TrendMetric) {
+  if (value == null) return '-'
+  const sign = value >= 0 ? '+' : ''
+  if (metric.unit === 'clock') return `${sign}${value.toFixed(2)} hr`
+  return `${sign}${formatMetricValue(value, metric)}`
+}
+
 function formatClockHour(hour: number) {
   const normalized = ((hour % 24) + 24) % 24
   const wholeHours = Math.floor(normalized)
@@ -229,6 +262,79 @@ function getActiveSessionId(payload: unknown) {
   const activePayload = (payload as { activePayload?: Array<{ payload?: { sessionId?: unknown } }> }).activePayload
   const sessionId = activePayload?.[0]?.payload?.sessionId
   return typeof sessionId === 'string' ? sessionId : null
+}
+
+function metricNumber(value: OverviewDailyStat[MetricKey]) {
+  return typeof value === 'number' ? value : null
+}
+
+function calculateMetricSummary(nights: OverviewDailyStat[], metric: TrendMetric) {
+  const points = nights
+    .map((night) => ({ night, value: metricNumber(night[metric.key]) }))
+    .filter((point): point is { night: OverviewDailyStat; value: number } => point.value != null)
+
+  if (points.length === 0) {
+    return null
+  }
+
+  const average = points.reduce((sum, point) => sum + point.value, 0) / points.length
+  const latest = points[points.length - 1]
+  const lowest = points.reduce((best, point) => point.value < best.value ? point : best, points[0])
+  const highest = points.reduce((best, point) => point.value > best.value ? point : best, points[0])
+  const recent = points.slice(-7)
+  const previous = points.slice(Math.max(0, points.length - 14), Math.max(0, points.length - 7))
+  const recentAverage = recent.reduce((sum, point) => sum + point.value, 0) / recent.length
+  const previousAverage = previous.length > 0
+    ? previous.reduce((sum, point) => sum + point.value, 0) / previous.length
+    : null
+  const change = previousAverage == null ? null : recentAverage - previousAverage
+
+  return { average, latest, lowest, highest, change }
+}
+
+function MetricSummaryCards({ nights, metric }: { nights: OverviewDailyStat[]; metric: TrendMetric }) {
+  const summary = calculateMetricSummary(nights, metric)
+
+  if (!summary) {
+    return (
+      <div className="mb-5 rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-4 text-sm text-[var(--muted-foreground)]">
+        No values are available for this metric in the selected range.
+      </div>
+    )
+  }
+
+  const changeLabel = summary.change == null
+    ? 'Not enough history'
+    : `${formatMetricDelta(summary.change, metric)} vs prior 7 nights`
+
+  return (
+    <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-4">
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Latest</p>
+        <p className="mt-2 text-lg font-extrabold text-[var(--foreground)]">{formatMetricValue(summary.latest.value, metric)}</p>
+        <p className="mt-1 text-xs text-[var(--muted-foreground)]">{summary.latest.night.folder_date}</p>
+      </div>
+      <div className="rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-4">
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Average</p>
+        <p className="mt-2 text-lg font-extrabold text-[var(--foreground)]">{formatMetricValue(summary.average, metric)}</p>
+        <p className="mt-1 text-xs text-[var(--muted-foreground)]">{nights.length} nights selected</p>
+      </div>
+      <div className="rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-4">
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Low / High</p>
+        <p className="mt-2 text-lg font-extrabold text-[var(--foreground)]">
+          {formatMetricValue(summary.lowest.value, metric)} / {formatMetricValue(summary.highest.value, metric)}
+        </p>
+        <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+          {summary.lowest.night.folder_date} / {summary.highest.night.folder_date}
+        </p>
+      </div>
+      <div className="rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-4">
+        <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Recent shift</p>
+        <p className="mt-2 text-lg font-extrabold text-[var(--foreground)]">{changeLabel}</p>
+        <p className="mt-1 text-xs text-[var(--muted-foreground)]">7-night average comparison</p>
+      </div>
+    </div>
+  )
 }
 
 function OverviewChart({
@@ -256,8 +362,9 @@ function OverviewChart({
           </div>
           <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">{metric.unit || 'Index'}</p>
         </div>
+        <MetricSummaryCards nights={nights} metric={metric} />
         <ResponsiveContainer width="100%" height={320}>
-          <LineChart
+          <ComposedChart
             data={data}
             margin={{ top: 12, right: 16, bottom: 0, left: 0 }}
             onClick={(payload) => {
@@ -302,15 +409,19 @@ function OverviewChart({
                 label={{ value: line.label, fill: line.color, fontSize: 10 }}
               />
             ))}
-            <Line
-              type="monotone"
-              dataKey="primary"
-              name={metric.shortLabel}
-              stroke="#5251A7"
-              dot={false}
-              strokeWidth={2}
-              connectNulls
-            />
+            {metric.chart === 'bar' ? (
+              <Bar dataKey="primary" name={metric.shortLabel} fill="#5251A7" radius={[6, 6, 0, 0]} maxBarSize={28} />
+            ) : (
+              <Line
+                type="monotone"
+                dataKey="primary"
+                name={metric.shortLabel}
+                stroke="#5251A7"
+                dot={false}
+                strokeWidth={2}
+                connectNulls
+              />
+            )}
             {metric.secondaryKey ? (
               <Line
                 type="monotone"
@@ -322,7 +433,7 @@ function OverviewChart({
                 connectNulls
               />
             ) : null}
-          </LineChart>
+          </ComposedChart>
         </ResponsiveContainer>
       </CardContent>
     </Card>
@@ -491,16 +602,27 @@ export default function TrendsPage() {
               </select>
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {TREND_METRICS.slice(0, 12).map((option) => (
-              <Button
-                key={option.key}
-                variant={metricKey === option.key ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setMetricKey(option.key)}
-              >
-                {option.shortLabel}
-              </Button>
+          <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_1fr] xl:grid-cols-[1.1fr_1fr_0.75fr]">
+            {TREND_METRIC_GROUPS.map((group) => (
+              <div key={group.label} className="min-w-0">
+                <p className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{group.label}</p>
+                <div className="flex flex-wrap gap-2">
+                  {group.keys.map((key) => {
+                    const option = getMetric(key)
+                    return (
+                      <Button
+                        key={option.key}
+                        variant={metricKey === option.key ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-8 px-3 text-xs sm:h-9 sm:text-sm"
+                        onClick={() => setMetricKey(option.key)}
+                      >
+                        {option.shortLabel}
+                      </Button>
+                    )
+                  })}
+                </div>
+              </div>
             ))}
           </div>
         </CardContent>
