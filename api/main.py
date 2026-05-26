@@ -1,10 +1,11 @@
 import json
 import os
+import re
 import time
 from pathlib import Path
+from typing import List
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from typing import List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,14 +95,20 @@ def get_latest_release() -> dict[str, str | None]:
     return payload
 
 
-
 def get_app_version() -> str:
     configured = os.environ.get("SLEEPLAB_VERSION", "").strip()
     if configured:
         return configured
 
     try:
-        return VERSION_FILE.read_text(encoding="utf-8").strip() or DEFAULT_VERSION
+        content = VERSION_FILE.read_text(encoding="utf-8").strip()
+        if not content:
+            return DEFAULT_VERSION
+        # VERSION format: "calver [semver]" - extract semver from brackets.
+        match = re.search(r"\[([^\]]+)\]", content)
+        if match:
+            return match.group(1)
+        return content
     except FileNotFoundError:
         return DEFAULT_VERSION
 
