@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install semantic-release & plugins
+        run: npm install -D semantic-release @semantic-release/changelog @semantic-release/exec @semantic-release/git @semantic-release/github
+
+      - name: Run semantic-release
+        id: semantic
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
+  build-and-push:
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate version tags
+        id: version-tags
+        run: |
+          VERSION="${{ needs.release.outputs.new_release_version }}"
+          CALVER=$(date +%Y.%-m.%-d)
+          echo "semver=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "calver=$CALVER" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v6
+        continue-on-error: true
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/joshuamyers-dev/sleeplab:latest
+            ghcr.io/joshuamyers-dev/sleeplab:${{ steps.version-tags.outputs.semver }}
+            ghcr.io/joshuamyers-dev/sleeplab:${{ steps.version-tags.outputs.calver }}
+            ghcr.io/joshuamyers-dev/sleeplab:${{ github.sha }}
+
+      - name: Build and push to Docker Hub
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            joshuaaaronmyers/sleeplab:latest
+            joshuaaaronmyers/sleeplab:${{ steps.version-tags.outputs.semver }}
+            joshuaaaronmyers/sleeplab:${{ steps.version-tags.outputs.calver }}
+            joshuaaaronmyers/sleeplab:${{ github.sha }}
+
+  generate-docs:
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate documentation
+        run: |
+          echo "TODO: Add documentation generation step"

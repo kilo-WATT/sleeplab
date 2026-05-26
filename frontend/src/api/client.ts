@@ -10,6 +10,13 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export interface VersionResponse {
+  version: string
+  latest_version: string | null
+  update_available: boolean
+  release_url: string | null
+}
+
 export interface AuthUser {
   user_id: string
   email: string
@@ -187,6 +194,19 @@ export interface SpO2Response {
   pulse: (number | null)[]
 }
 
+export interface WaveformResponse {
+  timestamps: string[]
+  flow: (number | null)[]
+  pressure: (number | null)[]
+}
+
+export interface EventWindowResponse {
+  event: EventRecord
+  neighboring_events: EventRecord[]
+  metrics: MetricsResponse
+  waveform: WaveformResponse
+}
+
 export interface DailyStat {
   folder_date: string
   ahi: number | null
@@ -325,6 +345,7 @@ function postForm<T>(path: string, formData: FormData) {
 }
 
 export const api = {
+  getVersion: () => get<VersionResponse>('/version'),
   getSummary: () => get<SummaryStats>('/stats/summary'),
   getAISummary: (days = 30) => get<AISummaryResponse>('/stats/ai-summary', { days }),
   getSessionAISummary: (sessionId: string) => get<SessionAISummaryResponse>(`/stats/sessions/${sessionId}/ai-summary`),
@@ -332,7 +353,10 @@ export const api = {
   getSessions: (params?: { per_page?: number; date_from?: string; date_to?: string }) =>
     get<SessionSummary[]>('/sessions/', params as Record<string, string | number> | undefined),
   getSession: (id: string) => get<SessionDetail>(`/sessions/${id}`),
+  getSessionByDate: (date: string) => get<SessionDetail>(`/sessions/by-date/${date}`),
   getEvents: (id: string) => get<EventRecord[]>(`/sessions/${id}/events`),
+  getEventWindow: (id: string, eventId: number, params?: { before_seconds?: number; after_seconds?: number; waveform_downsample?: number }) =>
+    get<EventWindowResponse>(`/sessions/${id}/events/${eventId}/window`, params as Record<string, string | number> | undefined),
   getMetrics: (id: string, downsample = 15) =>
     get<MetricsResponse>(`/sessions/${id}/metrics`, { downsample }),
   getSessionSpo2: (id: string) => get<SpO2Response>(`/sessions/${id}/spo2`),
