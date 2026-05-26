@@ -8,6 +8,7 @@ import {
   ActivityIcon,
   CalendarIcon,
   ChevronRightIcon,
+  EquipmentIcon,
   HomeIcon,
   MoonIcon,
   SunIcon,
@@ -15,6 +16,7 @@ import {
 import logo from './assets/logo.webp'
 import Dashboard from './pages/Dashboard'
 import CalendarPage from './pages/Calendar'
+import EquipmentPage from './pages/Equipment'
 import ImportPage from './pages/Import'
 import InsightsPage from './pages/Insights'
 import Login from './pages/Login'
@@ -77,6 +79,9 @@ function AppLayout() {
   const location = useLocation()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeMode>('light')
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  const [latestVersion, setLatestVersion] = useState<string | null>(null)
+  const [releaseUrl, setReleaseUrl] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const userMenuRef = useRef<HTMLDivElement | null>(null)
   const wasSyncingRef = useRef(false)
@@ -84,6 +89,31 @@ function AppLayout() {
   // Fetch display timezone from server config once on mount.
   useEffect(() => {
     api.getAppConfig().then((cfg) => setDisplayTz(cfg.display_tz)).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadAppVersion() {
+      try {
+        const versionInfo = await api.getVersion()
+        if (!cancelled) {
+          setAppVersion(versionInfo.version)
+          setLatestVersion(versionInfo.update_available ? versionInfo.latest_version : null)
+          setReleaseUrl(versionInfo.release_url)
+        }
+      } catch {
+        if (!cancelled) {
+          setAppVersion(null)
+        }
+      }
+    }
+
+    void loadAppVersion()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -173,6 +203,7 @@ function AppLayout() {
   const onOverview = location.pathname === '/dashboard'
   const onCalendar = location.pathname === '/calendar'
   const onTrends = location.pathname === '/trends'
+  const onEquipment = location.pathname === '/equipment'
 
   const routes = (
     <Routes>
@@ -182,8 +213,9 @@ function AppLayout() {
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
       <Route path="/calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
       <Route path="/trends" element={<ProtectedRoute><TrendsPage /></ProtectedRoute>} />
+      <Route path="/equipment" element={<ProtectedRoute><EquipmentPage /></ProtectedRoute>} />
       <Route path="/insights" element={<ProtectedRoute><InsightsPage /></ProtectedRoute>} />
-      <Route path="/sessions/:id" element={<ProtectedRoute><SessionDetail /></ProtectedRoute>} />
+      <Route path="/sessions/:date" element={<ProtectedRoute><SessionDetail /></ProtectedRoute>} />
       <Route path="/import" element={<ProtectedRoute><ImportPage /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
     </Routes>
@@ -294,6 +326,17 @@ function AppLayout() {
                   <ActivityIcon className="h-4 w-4" />
                   <span>Trends</span>
                 </Link>
+                <Link
+                  to="/equipment"
+                  className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-bold transition ${
+                    onEquipment
+                      ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                      : 'text-[var(--muted-foreground)] hover:bg-[var(--surface-soft)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  <EquipmentIcon className="h-4 w-4" />
+                  <span>Equipment</span>
+                </Link>
                 <div className="ml-auto inline-flex rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1">
                   <button
                     type="button"
@@ -342,6 +385,22 @@ function AppLayout() {
         <main>
           {routes}
         </main>
+
+        <footer className="mt-8 pb-4 text-center text-xs font-medium text-[var(--muted-foreground)]">
+          SleepLab v{appVersion ?? 'development'}
+          {latestVersion ? (
+            <>
+              {' -> '}
+              {releaseUrl ? (
+                <a className="font-bold text-[var(--accent)] hover:text-[var(--accent-hover)]" href={releaseUrl} target="_blank" rel="noreferrer">
+                  v{latestVersion} available
+                </a>
+              ) : (
+                <span className="font-bold text-[var(--accent)]">v{latestVersion} available</span>
+              )}
+            </>
+          ) : null}
+        </footer>
       </div>
     </div>
   )

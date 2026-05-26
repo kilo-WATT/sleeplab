@@ -182,7 +182,7 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
             # Get CSL start datetime for event absolute timestamps.
             # EDF timestamps are naive local machine time; attach MACHINE_TZ so
             # psycopg2 stores the correct UTC equivalent in TIMESTAMPTZ columns.
-            csl_start = pld_header.start_datetime  # fallback
+            csl_start = _localize(pld_header.start_datetime)  # fallback
             if block['csl_path'] and block['csl_path'].exists():
                 csl_hdr = read_header(str(block['csl_path']))
                 csl_start = _localize(csl_hdr.start_datetime)

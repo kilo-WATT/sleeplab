@@ -1,0 +1,25 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/changelog",
+    ["@semantic-release/exec", {
+      "prepareCmd": "CALVER=$(date +%Y.%-m.%-d) && echo \"$CALVER [${nextRelease.version}]\" > VERSION && sed -i 's/^version = \".*\"/version = \"'${nextRelease.version}'\"/' pyproject.toml && npm version ${nextRelease.version} --no-git-tag-version --allow-same-version && cd frontend && npm version ${nextRelease.version} --no-git-tag-version --allow-same-version && cd .. && sed -i 's/^\\(\\*\\*Version:\\*\\* \\).*/\\1'${nextRelease.version}'/' NOTICE.md"
+    }],
+    ["@semantic-release/git", {
+      "assets": [
+        "VERSION",
+        "pyproject.toml",
+        "package.json",
+        "package-lock.json",
+        "frontend/package.json",
+        "frontend/package-lock.json",
+        "CHANGELOG.md",
+        "NOTICE.md"
+      ],
+      "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+    }],
+    "@semantic-release/github"
+  ]
+}
