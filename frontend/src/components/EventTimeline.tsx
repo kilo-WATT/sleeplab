@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import type { EventRecord } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
+import { DEFAULT_EVENT_COLOR, EVENT_COLORS } from '../lib/eventMeta'
 
 interface Props {
   events: EventRecord[]
@@ -9,14 +10,6 @@ interface Props {
   startDatetime: string
   selectedEventId?: number | null
   onSelectEvent?: (event: EventRecord) => void
-}
-
-const EVENT_COLORS: Record<string, string> = {
-  'Central Apnea':     '#5251A7',
-  'Obstructive Apnea': '#8E3D40',
-  'Hypopnea':          '#E9784B',
-  'Apnea':             '#C9B715',
-  'Arousal':           '#6AA136',
 }
 
 function fmtTime(startIso: string, offsetSeconds: number): string {
@@ -46,7 +39,7 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
       <div className="flex flex-wrap gap-3 text-xs text-[var(--muted-foreground)]">
         {eventTypes.map(t => (
           <span key={t} className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1">
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: EVENT_COLORS[t] ?? '#888' }} />
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: EVENT_COLORS[t] ?? DEFAULT_EVENT_COLOR }} />
             {t}
           </span>
         ))}
@@ -83,7 +76,7 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
             const widthPct = evt.duration_seconds
               ? Math.max((evt.duration_seconds / durationSeconds) * 100, isSelected ? 0.8 : 0.3)
               : 0.3
-            const color = EVENT_COLORS[evt.event_type] ?? '#888'
+            const color = EVENT_COLORS[evt.event_type] ?? DEFAULT_EVENT_COLOR
             const timeLabel = fmtTime(startDatetime, evt.onset_seconds)
             const durationLabel = evt.duration_seconds ? `${evt.duration_seconds}s` : 'Duration not available'
             return (

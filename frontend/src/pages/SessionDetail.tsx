@@ -11,6 +11,7 @@ import InfoPopover from '../components/InfoPopover'
 import MetricsChart from '../components/MetricsChartSplit'
 import SpO2Chart from '../components/SpO2Chart'
 import SessionAICard from '../components/SessionAICard'
+import { DEFAULT_EVENT_COLOR, EVENT_CODES, EVENT_COLORS } from '../lib/eventMeta'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
@@ -43,22 +44,6 @@ const EVENT_WINDOW_DOWNSAMPLE: Record<number, number> = {
   1: 1,
   3: 2,
   5: 3,
-}
-
-const EVENT_CODES: Record<string, string> = {
-  'Central Apnea': 'CA',
-  'Obstructive Apnea': 'OA',
-  'Hypopnea': 'H',
-  'Apnea': 'A',
-  'Arousal': 'RE',
-}
-
-const EVENT_COLORS: Record<string, string> = {
-  'Central Apnea': '#5251A7',
-  'Obstructive Apnea': '#8E3D40',
-  'Hypopnea': '#E9784B',
-  'Apnea': '#C9B715',
-  'Arousal': '#6AA136',
 }
 
 export default function SessionDetail() {
@@ -558,7 +543,7 @@ function EventTable({
           <tbody>
             {events.map((event) => {
               const selected = event.id === selectedEventId
-              const color = EVENT_COLORS[event.event_type] ?? '#8E3D40'
+              const color = EVENT_COLORS[event.event_type] ?? DEFAULT_EVENT_COLOR
               return (
                 <tr
                   key={event.id}

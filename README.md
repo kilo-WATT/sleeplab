@@ -42,10 +42,11 @@ SleepLab can run as a self-hosted Docker stack with:
 
 Key files:
 
-- [`docker-compose.yml`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker-compose.yml)
-- [`docker/entrypoint.sh`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker/entrypoint.sh)
-- [`docker/nginx.conf`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker/nginx.conf)
-- [`.env.selfhost.example`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/.env.selfhost.example)
+- [`compose.yaml`](compose.yaml)
+- [`compose.advanced.yaml`](compose.advanced.yaml)
+- [`docker/entrypoint.sh`](docker/entrypoint.sh)
+- [`docker/nginx.conf`](docker/nginx.conf)
+- [`.env.example`](.env.example)
 
 The default self-hosted image is:
 
@@ -55,7 +56,7 @@ joshuaaaronmyers/sleeplab:latest
 
 ### Required Configuration
 
-Create an env file for deployment by copying [`.env.selfhost.example`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/.env.selfhost.example).
+Create an env file for deployment by copying [`.env.example`](.env.example).
 
 Set at minimum:
 
@@ -63,7 +64,6 @@ Set at minimum:
 
 Optional but commonly needed:
 
-- `OPENAI_API_KEY`
 - `CORS_ALLOWED_ORIGINS`
 - `API_URL`
 
@@ -71,7 +71,6 @@ Recommended values for a local/self-hosted machine:
 
 ```env
 SECRET_KEY=replace-me-with-a-long-random-secret
-OPENAI_API_KEY=
 CORS_ALLOWED_ORIGINS=*
 API_URL=http://localhost:8000
 ```
@@ -109,9 +108,9 @@ docker compose logs -f
 docker compose down
 ```
 
-### Copy-Paste `docker-compose.yml`
+### Copy-Paste Compose File
 
-If you want to self-host quickly on a server, you can use this `docker-compose.yml` directly:
+If you want to self-host quickly on a server, you can use this Compose file directly:
 
 ```yaml
 services:
@@ -139,7 +138,6 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://cpap:cpap@postgres:5432/cpap
       SECRET_KEY: replace-me-with-a-long-random-secret
-      OPENAI_API_KEY: ""
       CORS_ALLOWED_ORIGINS: "*"
       API_URL: http://localhost:8000
       API_HOST: 0.0.0.0
@@ -170,7 +168,6 @@ docker run -d \
   -p 8000:8000 \
   -e DATABASE_URL="postgresql+psycopg2://USER:PASSWORD@HOST:5432/cpap" \
   -e SECRET_KEY="replace-me-with-a-long-random-secret" \
-  -e OPENAI_API_KEY="" \
   -e CORS_ALLOWED_ORIGINS="*" \
   -e API_URL="http://localhost:8000" \
   joshuaaaronmyers/sleeplab:latest
@@ -210,14 +207,14 @@ docker compose pull
 docker compose up -d
 ```
 
-Migrations run automatically through [`server.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/server.py) when the API starts.
+Migrations run automatically through [`server.py`](server.py) when the API starts.
 
 ### Troubleshooting
 
 - If Docker Compose says the image is missing, run `docker login` and `docker compose pull`.
 - If the frontend loads but API requests fail, verify `API_URL` and `CORS_ALLOWED_ORIGINS`.
 - If the API container exits early, inspect `docker compose logs app` for DB or migration errors.
-- If AI summaries are unavailable, check `GET /llm/health` for provider status and confirm the relevant env vars are set (see **AI Summaries** below).
+- If AI summaries are unavailable, check `GET /llm/health` for provider status and confirm the AI backend is configured in **Settings**.
 - If you are deploying to a Linux server, use the published multi-arch image tag rather than an old locally built arm-only image.
 
 ## Quick Start
@@ -237,20 +234,20 @@ The repo includes a local Postgres service inside Docker Compose:
 docker compose up -d postgres
 ```
 
-Default database settings from [`docker-compose.yml`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker-compose.yml):
+Default database settings from [`compose.yaml`](compose.yaml):
 
 - Database: `cpap`
 - Username: `cpap`
 - Password: `cpap`
 - Port: `5432`
 
-The API currently connects to:
+The API connects to `DATABASE_URL` when it is set, and otherwise falls back to:
 
 ```python
 postgresql+psycopg2://localhost/cpap
 ```
 
-That is defined in [`api/database.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/database.py). If your local database setup differs, update that file or add your own configuration layer.
+That fallback is defined in [`api/database.py`](api/database.py). If your local database setup differs, set `DATABASE_URL`.
 
 ### 3. Apply schema migrations
 
@@ -286,16 +283,16 @@ Default local URLs:
 
 ## Timezones
 
-Two IANA timezone settings control how session data is interpreted and displayed.
+Two IANA timezone settings control how session data is interpreted and displayed. Configure these in **Settings -> Timezones** after creating your account.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `MACHINE_TZ` | `UTC` | The timezone your CPAP machine is set to. The importer uses this to correctly interpret the naive local timestamps embedded in EDF files before storing them as UTC in the database. |
-| `DISPLAY_TZ` | `UTC` | The timezone used to format all time labels in the UI — plot axes, event timeline, session start time. Set this to your local timezone for accurate display. |
+| Setting | Purpose |
+|---|---|
+| Machine timezone | The timezone your CPAP machine is set to. The importer uses this to correctly interpret the naive local timestamps embedded in EDF files before storing them as UTC in the database. |
+| Display timezone | The timezone used to format UI time labels, including plot axes, event timelines, and session start times. |
 
 Both values must be valid [IANA timezone names](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/New_York`, `Europe/London`, `Australia/Sydney`).
 
-Set them in your `.env` file or `docker-compose.yml`:
+Environment variables are still supported as server defaults and fallbacks for new users:
 
 ```env
 MACHINE_TZ=America/New_York
@@ -304,7 +301,7 @@ DISPLAY_TZ=America/New_York
 
 If your machine is set to the same timezone as your display, both values will be identical. If you travel with your CPAP and don't update the machine clock, set `MACHINE_TZ` to the machine's home timezone and `DISPLAY_TZ` to wherever you want times displayed.
 
-> **Re-importing after changing `MACHINE_TZ`:** The importer attaches the timezone at import time. If you change `MACHINE_TZ` after sessions are already in the database, re-run the importer with `--from` to update affected sessions.
+Session detail pages also include a per-night timezone correction tool. Use that when already-imported sessions need their timestamps reinterpreted without a full re-import.
 
 ## Auth
 
@@ -316,10 +313,10 @@ SleepLab uses bearer-token auth.
 
 Relevant files:
 
-- [`api/auth.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/auth.py)
-- [`api/routers/auth.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/routers/auth.py)
-- [`frontend/src/api/client.ts`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/frontend/src/api/client.ts)
-- [`frontend/src/context/AuthContext.tsx`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/frontend/src/context/AuthContext.tsx)
+- [`api/auth.py`](api/auth.py)
+- [`api/routers/auth.py`](api/routers/auth.py)
+- [`frontend/src/api/client.ts`](frontend/src/api/client.ts)
+- [`frontend/src/context/AuthContext.tsx`](frontend/src/context/AuthContext.tsx)
 
 ## Importing Data
 
@@ -333,7 +330,7 @@ In the UI:
 4. The frontend uploads the files in batches to the API.
 5. The API runs the importer in the background and writes parsed sessions into Postgres.
 
-The upload/import endpoints are implemented in [`api/routers/upload.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/routers/upload.py), and the importer lives in [`importer/import_sessions.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/importer/import_sessions.py).
+The upload/import endpoints are implemented in [`api/routers/upload.py`](api/routers/upload.py), and the importer lives in [`importer/import_sessions.py`](importer/import_sessions.py).
 
 You can also run the importer manually:
 
@@ -355,7 +352,7 @@ Sessions can be pulled directly from [SleepHQ](https://sleephq.com) without an S
 
 ### Setup
 
-Add your SleepHQ OAuth credentials and team ID in **Settings → SleepHQ Integration**, or set them in `.env`:
+Add your SleepHQ OAuth credentials and team ID in **Settings -> SleepHQ Integration**, or set them in `.env`:
 
 ```env
 SLEEPHQ_CLIENT_ID=your-client-id
@@ -386,16 +383,18 @@ The importer retries automatically on rate-limit (HTTP 429) responses and pauses
 
 ## AI Summaries
 
-AI-generated session and trend summaries are powered by any OpenAI-compatible LLM backend. The provider is selected automatically based on environment variables — existing deployments with `OPENAI_API_KEY` continue to work with no changes.
+AI-generated session and trend summaries are powered by any OpenAI-compatible LLM backend. Configure the provider, base URL, model, and API key in **Settings -> AI Backend**.
 
-### Provider detection
+Environment variables are still supported as server defaults and for unattended deployments. Existing deployments with `OPENAI_API_KEY` continue to work until per-user settings are saved.
 
-| `LLM_PROVIDER` | Backend | Required env vars |
+### Providers
+
+| Provider | Backend | Settings / env vars |
 |---|---|---|
-| `openai` / auto-detected | OpenAI cloud | `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o`) |
-| `ollama` / default when no key | Local Ollama | `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`), `OLLAMA_MODEL` (default `llama3.1:8b`) |
-| `litellm` | LiteLLM proxy | `LITELLM_BASE_URL` (default `http://localhost:4000/v1`), `LITELLM_MODEL` (default `gpt-4o-mini`) |
-| `custom` | Any OpenAI-compatible endpoint | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` |
+| OpenAI | OpenAI cloud | API key and model, or `OPENAI_API_KEY` / `OPENAI_MODEL` |
+| Ollama | Local Ollama | Base URL and model, or `OLLAMA_BASE_URL` / `OLLAMA_MODEL` |
+| LiteLLM | LiteLLM proxy | Base URL, model, and optional API key, or `LITELLM_BASE_URL` / `LITELLM_MODEL` / `LITELLM_API_KEY` |
+| Custom | Any OpenAI-compatible endpoint | Base URL, API key, and model, or `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` |
 
 ### Health check
 
@@ -408,7 +407,7 @@ Returns the active provider, base URL, model, and whether the backend is reachab
 ### Self-hosted with Ollama
 
 ```yaml
-# docker-compose.yml
+# compose.yaml
 services:
   app:
     environment:
@@ -470,7 +469,7 @@ Before opening a PR, make sure:
 - the frontend builds successfully
 - lint passes for the frontend
 - any README or env changes are documented
-- self-hosting changes are reflected in [`docker-compose.yml`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker-compose.yml) and [`.env.selfhost.example`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/.env.selfhost.example) where relevant
+- self-hosting changes are reflected in [`compose.yaml`](compose.yaml), [`compose.advanced.yaml`](compose.advanced.yaml), and [`.env.example`](.env.example) where relevant
 
 ## Useful Commands
 
@@ -484,7 +483,7 @@ cd frontend && npm run lint
 
 ## Notes
 
-- The backend reads `DATABASE_URL` from environment and falls back to a local development default in [`api/database.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/database.py).
+- The backend reads `DATABASE_URL` from environment and falls back to a local development default in [`api/database.py`](api/database.py).
 - The backend uses a fallback development JWT secret if `SECRET_KEY` is not set. Set a real `SECRET_KEY` outside local development.
 
 ## Acknowledgements

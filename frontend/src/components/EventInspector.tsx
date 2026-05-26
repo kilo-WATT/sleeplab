@@ -12,6 +12,7 @@ import {
 
 import type { EventRecord, EventWindowResponse } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
+import { DEFAULT_EVENT_COLOR, EVENT_CODES, EVENT_COLORS } from '../lib/eventMeta'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons/ChevronIcons'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
 import { Button } from './ui/button'
@@ -64,22 +65,6 @@ function flowDomain(values: (number | null)[]): [number, number] {
   return [-bound, bound]
 }
 
-const EVENT_CODES: Record<string, string> = {
-  'Central Apnea': 'CA',
-  'Obstructive Apnea': 'OA',
-  'Hypopnea': 'H',
-  'Apnea': 'A',
-  'Arousal': 'RE',
-}
-
-const EVENT_COLORS: Record<string, string> = {
-  'Central Apnea': '#5251A7',
-  'Obstructive Apnea': '#8E3D40',
-  'Hypopnea': '#E9784B',
-  'Apnea': '#C9B715',
-  'Arousal': '#6AA136',
-}
-
 function eventBounds(event: EventRecord): { startTs: number; endTs: number } {
   const endTs = new Date(event.event_datetime).getTime()
   const durationMs = Math.max((event.duration_seconds ?? 2) * 1000, 2000)
@@ -99,7 +84,7 @@ function EventBand({
 }) {
   const midTs = startTs + (endTs - startTs) / 2
   const label = EVENT_CODES[eventType] ?? eventType
-  const color = EVENT_COLORS[eventType] ?? '#8E3D40'
+  const color = EVENT_COLORS[eventType] ?? DEFAULT_EVENT_COLOR
   return (
     <>
       <ReferenceArea

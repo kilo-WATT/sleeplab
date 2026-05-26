@@ -1,15 +1,23 @@
 from datetime import date
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from typing import Dict, List, Optional
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import SessionSummary, SessionDetail, EventRecord, MetricsResponse, SpO2Response, EquipmentResponse, InferredEquipment, WaveformResponse, EventWindowResponse
+from ..models import (
+    EventRecord,
+    EventWindowResponse,
+    MetricsResponse,
+    SessionDetail,
+    SessionSummary,
+    SpO2Response,
+    WaveformResponse,
+)
 
 router = APIRouter()
 
@@ -18,18 +26,18 @@ class SessionTimezoneUpdate(BaseModel):
     machine_tz: str
 
 
-@router.get("/", response_model=List[SessionSummary])
+@router.get("/", response_model=list[SessionSummary])
 def list_sessions(
     page: int = Query(1, ge=1),
     per_page: int = Query(30, ge=1, le=600),
-    date_from: Optional[date] = None,
-    date_to: Optional[date] = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """List sessions with summary stats, sorted by folder_date DESC."""
     conditions = ["user_id = :uid"]
-    params: Dict = {"limit": per_page, "offset": (page - 1) * per_page, "uid": current_user["id"]}
+    params: dict[str, Any] = {"limit": per_page, "offset": (page - 1) * per_page, "uid": current_user["id"]}
 
     if date_from:
         conditions.append("folder_date >= :date_from")
@@ -142,7 +150,7 @@ def get_session(
     return SessionDetail.model_validate(dict(row))
 
 
-@router.get("/{session_id}/events", response_model=List[EventRecord])
+@router.get("/{session_id}/events", response_model=list[EventRecord])
 def get_session_events(
     session_id: str,
     current_user: dict = Depends(get_current_user),
@@ -494,7 +502,7 @@ def _require_session(session_id: str, user_id: str, db: Session) -> str:
     return row["id"]
 
 
-def _f(val) -> Optional[float]:
+def _f(val) -> float | None:
     """Convert Decimal to float for JSON serialization."""
     return float(val) if val is not None else None
 

@@ -7,11 +7,10 @@ Key ResMed deviation from EDF+ spec:
   - ResMed:   +onset\x15duration\x14annotation\x14
 """
 
-import struct
 import re
+import struct
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime
 
 
 @dataclass

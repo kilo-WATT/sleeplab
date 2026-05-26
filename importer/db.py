@@ -3,11 +3,11 @@ PostgreSQL connection and upsert helpers for the CPAP importer.
 """
 
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, timedelta
 
 
 def _load_dotenv() -> None:
@@ -139,7 +139,7 @@ def replace_session_metrics(conn, session_db_id: int, header, channels: dict, st
     with conn.cursor() as cur:
         cur.execute("DELETE FROM session_metrics WHERE session_id = %s", (session_db_id,))
 
-    LABELS = ['MaskPress.2s', 'Press.2s', 'EprPress.2s', 'Leak.2s', 'RespRate.2s',
+    labels = ['MaskPress.2s', 'Press.2s', 'EprPress.2s', 'Leak.2s', 'RespRate.2s',
               'TidVol.2s', 'MinVent.2s', 'Snore.2s', 'FlowLim.2s']
 
     # Determine samples per record from first non-Crc16 signal
@@ -150,13 +150,12 @@ def replace_session_metrics(conn, session_db_id: int, header, channels: dict, st
     pld_start = start_datetime or header.start_datetime
 
     rows = []
-    total_samples = spr * header.num_records
     for rec in range(header.num_records):
         for si in range(spr):
             abs_idx = rec * spr + si
             ts = pld_start + timedelta(seconds=rec * dur + si * epoch)
             row = [session_db_id, ts]
-            for label in LABELS:
+            for label in labels:
                 vals = channels.get(label)
                 row.append(round(vals[abs_idx], 4) if vals and abs_idx < len(vals) else None)
             rows.append(tuple(row))
