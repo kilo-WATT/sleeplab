@@ -1,17 +1,16 @@
 """
-CPAP Dashboard MCP Server — HTTP/SSE transport
+SleepLab MCP Server — HTTP/SSE transport
 
 For use with Claude.ai (web UI) and other remote MCP clients.
-The stdio version (mcp_server.py) is still used for Claude Code locally.
 
 Usage:
     python3.13 api/mcp_server_http.py
 
 Environment variables:
-    CPAP_API_URL      Base URL of the CPAP API (default: http://localhost:8000)
-    CPAP_API_TOKEN    Pre-obtained JWT (preferred; tokens last 30 days)
-    CPAP_EMAIL        Login email (used if no token)
-    CPAP_PASSWORD     Login password (used if no token)
+    SLEEP LAB_API_URL      Base URL of the SleepLab API (default: http://localhost:8000)
+    SLEEP LAB_API_TOKEN    Pre-obtained JWT (preferred; tokens last 30 days)
+    SLEEP LAB_EMAIL        Login email (used if no token)
+    SLEEP LAB_PASSWORD     Login password (used if no token)
     MCP_PORT          Port to listen on (default: 8001)
     MCP_HOST          Host to bind to (default: 0.0.0.0)
 """
@@ -33,10 +32,10 @@ from starlette.routing import Mount, Route
 # Configuration
 # ---------------------------------------------------------------------------
 
-API_URL = os.environ.get("CPAP_API_URL", "http://localhost:8000").rstrip("/")
-API_TOKEN = os.environ.get("CPAP_API_TOKEN", "")
-CPAP_EMAIL = os.environ.get("CPAP_EMAIL", "")
-CPAP_PASSWORD = os.environ.get("CPAP_PASSWORD", "")
+API_URL = os.environ.get("SLEEP_LAB_API_URL", "http://localhost:8000").rstrip("/")
+API_TOKEN = os.environ.get("SLEEP_LAB_API_TOKEN", "")
+SLEEP_LAB_EMAIL = os.environ.get("SLEEP_LAB_EMAIL", "")
+SLEEP_LAB_PASSWORD = os.environ.get("SLEEP_LAB_PASSWORD", "")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8001"))
 MCP_HOST = os.environ.get("MCP_HOST", "0.0.0.0")
 
@@ -51,11 +50,11 @@ def _resolve_token() -> str:
     global _cached_token
     if _cached_token:
         return _cached_token
-    if not CPAP_EMAIL or not CPAP_PASSWORD:
+    if not SLEEP_LAB_EMAIL or not SLEEP_LAB_PASSWORD:
         return ""
     resp = httpx.post(
         f"{API_URL}/auth/login",
-        json={"email": CPAP_EMAIL, "password": CPAP_PASSWORD},
+        json={"email": SLEEP_LAB_EMAIL, "password": SLEEP_LAB_PASSWORD},
         timeout=15,
     )
     if resp.status_code == 200:
@@ -68,7 +67,7 @@ def _get(path: str, params: dict | None = None) -> str:
     if not token:
         return (
             "Error: no authentication configured. "
-            "Set CPAP_API_TOKEN or CPAP_EMAIL + CPAP_PASSWORD."
+            "Set SLEEP_LAB_API_TOKEN or SLEEP_LAB_EMAIL + SLEEP_LAB_PASSWORD."
         )
     try:
         resp = httpx.get(
@@ -78,11 +77,11 @@ def _get(path: str, params: dict | None = None) -> str:
             timeout=30,
         )
     except httpx.ConnectError:
-        return f"Error: cannot reach CPAP API at {API_URL}. Is the server running?"
+        return f"Error: cannot reach SleepLab API at {API_URL}. Is the server running?"
     if resp.status_code == 404:
         return f"Not found: {path}"
     if resp.status_code == 401:
-        return "Error: authentication failed. Check your CPAP_API_TOKEN or credentials."
+        return "Error: authentication failed. Check your SLEEP_LAB_API_TOKEN or credentials."
     if not resp.is_success:
         return f"Error {resp.status_code}: {resp.text}"
     return json.dumps(resp.json(), indent=2)
@@ -96,7 +95,7 @@ def _text(content: str) -> list[TextContent]:
 # MCP server (identical tool definitions to stdio version)
 # ---------------------------------------------------------------------------
 
-server = Server("cpap-dashboard")
+server = Server("sleep-lab")
 
 
 @server.list_tools()
@@ -105,7 +104,7 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_dashboard_summary",
             description=(
-                "Get overall CPAP therapy stats: total nights, compliance percentage, "
+                "Get overall SleepLab therapy stats: total nights, compliance percentage, "
                 "average AHI, average pressure, event type breakdown (central apnea, "
                 "obstructive apnea, hypopnea), and the last 90 nights of AHI trend data. "
                 "Use this first to understand the big picture."
@@ -359,5 +358,5 @@ app = Starlette(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"CPAP MCP server running at http://{MCP_HOST}:{MCP_PORT}/sse")
+    print(f"SleepLab MCP server running at http://{MCP_HOST}:{MCP_PORT}/sse")
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)

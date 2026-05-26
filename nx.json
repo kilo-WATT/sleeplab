@@ -7,15 +7,20 @@
     },
     "build": {
       "cache": true,
-      "outputs": ["{projectRoot}/dist"]
+      "outputs": [
+        "{projectRoot}/dist"
+      ]
     }
   },
   "tasksRunnerOptions": {
     "default": {
       "runner": "nx/tasks-runners/default",
       "options": {
-        "cacheableOperations": ["build"]
+        "cacheableOperations": [
+          "build"
+        ]
       }
     }
-  }
+  },
+  "analytics": false
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 
 import { api } from '../api/client'
+import type { OximeterImportResponse, OximeterImportResult } from '../api/client'
 import { CheckCircleIcon } from '../components/icons/ChevronIcons'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
@@ -17,6 +18,7 @@ type UploadPhase = 'idle' | 'uploading' | 'complete'
 
 export default function Import() {
   const directoryInputRef = useRef<HTMLInputElement | null>(null)
+  const oximeterInputRef = useRef<HTMLInputElement | null>(null)
   const [rootName, setRootName] = useState<string | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<SelectedImportFile[]>([])
   const [folderLabel, setFolderLabel] = useState('No folder selected')
@@ -38,6 +40,14 @@ export default function Import() {
   const [isLocalImporting, setIsLocalImporting] = useState(false)
   const [localMessage, setLocalMessage] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
+
+  // Oximeter import state
+  const [oximeterFiles, setOximeterFiles] = useState<File[]>([])
+  const [oximeterLabel, setOximeterLabel] = useState('No O2 files selected')
+  const [isOximeterImporting, setIsOximeterImporting] = useState(false)
+  const [oximeterOverwrite, setOximeterOverwrite] = useState(false)
+  const [oximeterResult, setOximeterResult] = useState<OximeterImportResponse | null>(null)
+  const [oximeterError, setOximeterError] = useState<string | null>(null)
 
   useEffect(() => {
     api.getImportSettings().then((s) => {
@@ -167,6 +177,38 @@ export default function Import() {
     }
   }
 
+  function handleOximeterInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = collectOximeterFilesFromInput(Array.from(event.target.files ?? []))
+    setOximeterFiles(files)
+    setOximeterResult(null)
+    setOximeterError(null)
+    setOximeterLabel(files.length > 0 ? `${files.length} O2 file${files.length === 1 ? '' : 's'} selected` : 'No compatible O2 files selected')
+    event.target.value = ''
+  }
+
+  async function handleOximeterImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!oximeterFiles.length) {
+      setOximeterError('Select one or more Wellue/Viatom binary files first')
+      return
+    }
+
+    setIsOximeterImporting(true)
+    setOximeterError(null)
+    setOximeterResult(null)
+    try {
+      const result = await api.uploadOximeterFiles(oximeterFiles, { overwrite: oximeterOverwrite })
+      setOximeterResult(result)
+      if (result.imported > 0) {
+        window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
+      }
+    } catch (err) {
+      setOximeterError(err instanceof Error ? err.message : 'O2 import failed')
+    } finally {
+      setIsOximeterImporting(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.6),_transparent_38%),var(--surface-strong)]">
@@ -243,6 +285,57 @@ export default function Import() {
       </Card>
       <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
+          <CardTitle className="text-2xl">Import O2 Ring Data</CardTitle>
+          <CardDescription>
+            Upload ViHealth or O2 Insight Pro binary files from Wellue/Viatom oximeters. SleepLab will match each recording to an existing CPAP session by time.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-5" onSubmit={handleOximeterImport}>
+            <input
+              ref={oximeterInputRef}
+              hidden
+              multiple
+              type="file"
+              onChange={handleOximeterInputChange}
+            />
+            <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+              <p className="text-sm text-[var(--foreground)]">{oximeterLabel}</p>
+              {oximeterFiles.length > 0 ? (
+                <div className="mt-3 max-h-24 overflow-auto rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
+                  {oximeterFiles.map((file) => (
+                    <p key={`${file.name}-${file.size}`} className="truncate text-xs font-medium text-[var(--muted-foreground)]">
+                      {file.name}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              <Button className="mt-4" type="button" variant="outline" onClick={() => oximeterInputRef.current?.click()} disabled={isOximeterImporting}>
+                Select O2 files
+              </Button>
+            </div>
+            <label className="flex items-start gap-3 rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-sm">
+              <input
+                className="mt-1 h-4 w-4"
+                type="checkbox"
+                checked={oximeterOverwrite}
+                onChange={(event) => setOximeterOverwrite(event.target.checked)}
+              />
+              <span>
+                <span className="block font-bold text-[var(--foreground)]">Replace existing SpO2 data</span>
+                <span className="text-[var(--muted-foreground)]">Leave this off to skip sessions that already have oximeter data.</span>
+              </span>
+            </label>
+            {oximeterResult ? <OximeterImportSummary result={oximeterResult} /> : null}
+            {oximeterError ? <p className="text-sm text-[var(--danger-text)]">{oximeterError}</p> : null}
+            <Button type="submit" disabled={isOximeterImporting}>
+              {isOximeterImporting ? 'Importing...' : 'Import O2 data'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+        <CardHeader>
           <CardTitle className="text-2xl">Import from SleepHQ</CardTitle>
           <CardDescription>
             Run a one-time import of recent CPAP sessions from your SleepHQ account. Configure your credentials in{' '}
@@ -310,6 +403,54 @@ export default function Import() {
   )
 }
 
+export function OximeterImportSummary({ result }: { result: OximeterImportResponse }) {
+  const groups: Array<{ status: OximeterImportResult['status']; label: string; className: string }> = [
+    { status: 'imported', label: 'Imported', className: 'text-[var(--olive-deep)]' },
+    { status: 'skipped', label: 'Skipped', className: 'text-[var(--muted-foreground)]' },
+    { status: 'unmatched', label: 'Unmatched', className: 'text-[var(--orange-700)]' },
+    { status: 'failed', label: 'Failed', className: 'text-[var(--danger-text)]' },
+  ]
+
+  return (
+    <div className="space-y-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+      <div className="grid grid-cols-4 gap-2 text-center text-xs">
+        <ResultCount label="Imported" value={result.imported} />
+        <ResultCount label="Skipped" value={result.skipped} />
+        <ResultCount label="Unmatched" value={result.unmatched} />
+        <ResultCount label="Failed" value={result.failed} />
+      </div>
+      {groups.map(({ status, label, className }) => {
+        const rows = result.results.filter((row) => row.status === status)
+        if (!rows.length) return null
+        return (
+          <div key={status} className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
+            <p className={`text-xs font-bold uppercase tracking-[0.14em] ${className}`}>{label}</p>
+            <div className="mt-2 space-y-1">
+              {rows.map((row) => (
+                <p key={`${row.filename}-${row.status}`} className="text-xs text-[var(--muted-foreground)]">
+                  <span className="font-bold text-[var(--foreground)]">{row.filename}</span>
+                  {' · '}
+                  {row.message}
+                  {row.sample_count != null ? ` · ${row.sample_count} samples` : ''}
+                </p>
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ResultCount({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-[12px] bg-[var(--surface-strong)] px-2 py-2">
+      <p className="text-lg font-bold text-[var(--foreground)]">{value}</p>
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
+    </div>
+  )
+}
+
 async function collectEdfFiles(
   directoryHandle: FileSystemDirectoryHandle,
   prefix = '',
@@ -346,6 +487,20 @@ function collectEdfFilesFromInput(files: File[], rootName: string): SelectedImpo
       relativePath: getRelativePathFromInput(file, rootName),
     }))
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+}
+
+export function collectOximeterFilesFromInput(files: File[]): File[] {
+  return files
+    .filter((file) => {
+      const lowerName = file.name.toLowerCase()
+      const lastSegment = lowerName.split(/[\\/]/).pop() ?? lowerName
+      if (!lastSegment || lastSegment.startsWith('.')) {
+        return false
+      }
+      const hasExtension = lastSegment.includes('.') && !lastSegment.startsWith('.')
+      return !hasExtension || lowerName.endsWith('.bin') || lowerName.endsWith('.dat')
+    })
+    .sort((left, right) => left.name.localeCompare(right.name))
 }
 
 function getInputRootName(files: File[]) {

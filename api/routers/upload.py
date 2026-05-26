@@ -4,14 +4,19 @@ import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
+from ..database import get_db
+from ..oximeter import OximeterParseError, OximeterRecording, parse_viatom_binary
+from ..settings_store import get_timezone_settings, normalize_timezone
 
 router = APIRouter()
 
@@ -23,31 +28,48 @@ class UploadSession:
     user_id: str
     temp_root: Path
     datalog_path: Path
-    from_date: Optional[str]
+    from_date: str | None
     file_count: int = 0
 
 
-UPLOAD_SESSIONS: Dict[str, UploadSession] = {}
+UPLOAD_SESSIONS: dict[str, UploadSession] = {}
 
 
 class StartUploadRequest(BaseModel):
     root_name: str
-    from_date: Optional[str] = None
+    from_date: str | None = None
+
+
+class OximeterImportResult(BaseModel):
+    filename: str
+    status: Literal["imported", "skipped", "unmatched", "failed"]
+    message: str
+    session_id: str | None = None
+    folder_date: str | None = None
+    sample_count: int | None = None
+
+
+class OximeterImportResponse(BaseModel):
+    imported: int
+    skipped: int
+    unmatched: int
+    failed: int
+    results: list[OximeterImportResult]
 
 
 @dataclass
 class ImportJobStatus:
     running: bool
-    started_at: Optional[str] = None
+    started_at: str | None = None
 
 
-IMPORT_JOBS: Dict[str, ImportJobStatus] = {}
+IMPORT_JOBS: dict[str, ImportJobStatus] = {}
 
 
 def _mark_import_running(user_id: str) -> None:
     IMPORT_JOBS[user_id] = ImportJobStatus(
         running=True,
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -55,7 +77,7 @@ def _mark_import_finished(user_id: str) -> None:
     IMPORT_JOBS[user_id] = ImportJobStatus(running=False, started_at=None)
 
 
-def _run_import(datalog_path: str, user_id: str, from_date: Optional[str], cleanup_dir: Optional[str] = None) -> None:
+def _run_import(datalog_path: str, user_id: str, from_date: str | None, cleanup_dir: str | None = None) -> None:
     cmd = [
         sys.executable,
         str(IMPORTER_SCRIPT),
@@ -115,7 +137,7 @@ def start_datalog_upload(
 @router.post("/datalog/{upload_id}/batch")
 def upload_datalog_batch(
     upload_id: str,
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     current_user: dict = Depends(get_current_user),
 ):
     session = _require_session(upload_id, current_user["id"])
@@ -192,3 +214,151 @@ def get_upload_status(current_user: dict = Depends(get_current_user)):
         "running": job.running,
         "started_at": job.started_at,
     }
+
+
+@router.post("/oximeter", response_model=OximeterImportResponse)
+async def upload_oximeter_files(
+    files: list[UploadFile] = File(...),
+    machine_tz: str | None = Form(default=None),
+    overwrite: bool = Form(default=False),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Import Viatom/Wellue binary oximeter files into existing CPAP sessions."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No oximeter files were uploaded")
+
+    if machine_tz is not None:
+        try:
+            timezone_name = normalize_timezone(machine_tz) or get_timezone_settings(db, current_user["id"])["machine_tz"]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        timezone_name = get_timezone_settings(db, current_user["id"])["machine_tz"]
+
+    results: list[OximeterImportResult] = []
+    for upload in files:
+        filename = upload.filename or "oximeter-file"
+        try:
+            payload = await upload.read()
+            recording = parse_viatom_binary(payload, filename, timezone_name)
+            results.append(_import_oximeter_recording(db, current_user["id"], filename, recording, overwrite))
+        except OximeterParseError as exc:
+            results.append(OximeterImportResult(filename=filename, status="failed", message=str(exc)))
+        finally:
+            await upload.close()
+
+    db.commit()
+    return OximeterImportResponse(
+        imported=sum(1 for result in results if result.status == "imported"),
+        skipped=sum(1 for result in results if result.status == "skipped"),
+        unmatched=sum(1 for result in results if result.status == "unmatched"),
+        failed=sum(1 for result in results if result.status == "failed"),
+        results=results,
+    )
+
+
+def _import_oximeter_recording(
+    db: Session,
+    user_id: str,
+    filename: str,
+    recording: OximeterRecording,
+    overwrite: bool,
+) -> OximeterImportResult:
+    session = db.execute(
+        text("""
+            WITH candidates AS (
+                SELECT
+                    id::text AS id,
+                    folder_date::text AS folder_date,
+                    start_datetime,
+                    start_datetime + (duration_seconds * INTERVAL '1 second') AS end_datetime,
+                    GREATEST(
+                        0,
+                        EXTRACT(EPOCH FROM (
+                            LEAST(start_datetime + (duration_seconds * INTERVAL '1 second'), :record_end)
+                            - GREATEST(start_datetime, :record_start)
+                        ))
+                    ) AS overlap_seconds
+                FROM sessions
+                WHERE user_id = CAST(:uid AS uuid)
+                  AND duration_seconds >= 600
+                  AND start_datetime < :record_end
+                  AND start_datetime + (duration_seconds * INTERVAL '1 second') > :record_start
+            )
+            SELECT id, folder_date, overlap_seconds
+            FROM candidates
+            ORDER BY overlap_seconds DESC, ABS(EXTRACT(EPOCH FROM (start_datetime - :record_start))) ASC
+            LIMIT 1
+        """),
+        {"uid": user_id, "record_start": recording.started_at, "record_end": recording.ended_at},
+    ).mappings().first()
+
+    if session is None:
+        return OximeterImportResult(
+            filename=filename,
+            status="unmatched",
+            message="No existing CPAP session overlaps this oximeter recording",
+            sample_count=len(recording.samples),
+        )
+
+    session_id = str(session["id"])
+    existing_count = db.execute(
+        text("SELECT COUNT(*) FROM session_spo2 WHERE session_id = CAST(:sid AS uuid)"),
+        {"sid": session_id},
+    ).scalar_one()
+    if existing_count and not overwrite:
+        return OximeterImportResult(
+            filename=filename,
+            status="skipped",
+            message="Session already has SpO2 data",
+            session_id=session_id,
+            folder_date=str(session["folder_date"]),
+            sample_count=len(recording.samples),
+        )
+
+    if existing_count:
+        db.execute(text("DELETE FROM session_spo2 WHERE session_id = CAST(:sid AS uuid)"), {"sid": session_id})
+
+    rows = [
+        {"sid": session_id, "ts": sample.timestamp, "spo2": sample.spo2, "pulse": sample.pulse}
+        for sample in recording.samples
+    ]
+    if rows:
+        db.execute(
+            text("""
+                INSERT INTO session_spo2 (session_id, ts, spo2, pulse)
+                VALUES (CAST(:sid AS uuid), :ts, :spo2, :pulse)
+            """),
+            rows,
+        )
+
+    db.execute(
+        text("""
+            UPDATE sessions
+            SET
+                has_spo2 = EXISTS (
+                    SELECT 1 FROM session_spo2 WHERE session_id = CAST(:sid AS uuid) AND spo2 IS NOT NULL
+                ),
+                avg_spo2 = (
+                    SELECT ROUND(AVG(spo2)::numeric, 1)
+                    FROM session_spo2 WHERE session_id = CAST(:sid AS uuid) AND spo2 IS NOT NULL
+                ),
+                min_spo2 = (
+                    SELECT MIN(spo2)
+                    FROM session_spo2 WHERE session_id = CAST(:sid AS uuid) AND spo2 IS NOT NULL
+                ),
+                updated_at = NOW()
+            WHERE id = CAST(:sid AS uuid)
+        """),
+        {"sid": session_id},
+    )
+
+    return OximeterImportResult(
+        filename=filename,
+        status="imported",
+        message="Imported oximeter data",
+        session_id=session_id,
+        folder_date=str(session["folder_date"]),
+        sample_count=len(recording.samples),
+    )
