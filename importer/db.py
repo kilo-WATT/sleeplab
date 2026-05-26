@@ -123,7 +123,7 @@ def replace_session_events(conn, session_db_id: int, events: list, csl_start: da
         psycopg2.extras.execute_values(cur, sql, rows)
 
 
-def replace_session_metrics(conn, session_db_id: int, header, channels: dict):
+def replace_session_metrics(conn, session_db_id: int, header, channels: dict, start_datetime=None):
     """Delete existing metrics for this session and bulk-insert all PLD time-series rows."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM session_metrics WHERE session_id = %s", (session_db_id,))
@@ -136,7 +136,7 @@ def replace_session_metrics(conn, session_db_id: int, header, channels: dict):
     spr = data_signals[0].num_samples_per_record  # 30 samples per 60s record = 2s epochs
     dur = header.duration_per_record               # 60.0 seconds
     epoch = dur / spr                              # 2.0 seconds
-    pld_start = header.start_datetime
+    pld_start = start_datetime or header.start_datetime
 
     rows = []
     total_samples = spr * header.num_records
@@ -160,7 +160,7 @@ def replace_session_metrics(conn, session_db_id: int, header, channels: dict):
         psycopg2.extras.execute_values(cur, sql, rows, page_size=5000)
 
 
-def replace_session_spo2(conn, session_db_id: int, header, spo2_data: tuple):
+def replace_session_spo2(conn, session_db_id: int, header, spo2_data: tuple, start_datetime=None):
     """Delete existing SpO2 rows and insert new ones."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM session_spo2 WHERE session_id = %s", (session_db_id,))
@@ -169,7 +169,7 @@ def replace_session_spo2(conn, session_db_id: int, header, spo2_data: tuple):
     spo2_sig = header.signals[1]   # SpO2.1s at 1 Hz
     spr = spo2_sig.num_samples_per_record  # 1 sample/second per record
     dur = header.duration_per_record
-    pld_start = header.start_datetime
+    pld_start = start_datetime or header.start_datetime
 
     rows = []
     for rec in range(header.num_records):
