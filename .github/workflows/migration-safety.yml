@@ -1,0 +1,20 @@
+name: Migration Safety
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check migration numbering and PR changes
+        run: python3 scripts/check_migrations.py origin/${{ github.base_ref }}

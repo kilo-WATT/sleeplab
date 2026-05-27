@@ -18,6 +18,13 @@
       },
       "outputs": ["{projectRoot}/dist"]
     },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npm run test",
+        "cwd": "frontend"
+      }
+    },
     "preview": {
       "executor": "nx:run-commands",
       "options": {
