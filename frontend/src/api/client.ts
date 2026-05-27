@@ -62,6 +62,23 @@ export interface ImportStatusResponse {
   started_at: string | null
 }
 
+export interface OximeterImportResult {
+  filename: string
+  status: 'imported' | 'skipped' | 'unmatched' | 'failed'
+  message: string
+  session_id?: string | null
+  folder_date?: string | null
+  sample_count?: number | null
+}
+
+export interface OximeterImportResponse {
+  imported: number
+  skipped: number
+  unmatched: number
+  failed: number
+  results: OximeterImportResult[]
+}
+
 export interface AISummaryResponse {
   insights?: string | null
   going_well?: string[] | null
@@ -433,6 +450,19 @@ export const api = {
   },
   finishImportUpload: (uploadId: string) => post<ImportResponse>(`/upload/datalog/${uploadId}/finish`),
   getImportStatus: () => get<ImportStatusResponse>('/upload/status'),
+  uploadOximeterFiles: (files: File[], options?: { machine_tz?: string; overwrite?: boolean }) => {
+    const formData = new FormData()
+    for (const file of files) {
+      formData.append('files', file, file.name)
+    }
+    if (options?.machine_tz) {
+      formData.append('machine_tz', options.machine_tz)
+    }
+    if (options?.overwrite != null) {
+      formData.append('overwrite', String(options.overwrite))
+    }
+    return postForm<OximeterImportResponse>('/upload/oximeter', formData)
+  },
   getImportSettings: () => get<ImportSettings>('/import/settings'),
   saveImportSettings: (payload: Partial<ImportSettings>) => put<ImportSettings>('/import/settings', payload),
   triggerSleepHQImport: () => post<{ status: string; message: string }>('/import/trigger'),
