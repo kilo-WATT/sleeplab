@@ -39,22 +39,20 @@ import random
 import sys
 import time
 from datetime import date, datetime, timedelta
-from typing import Optional
 
 import httpx
 
 try:
     from sleephq import AuthenticatedClient
-    from sleephq.auth import create_client as _sleephq_create_client
     from sleephq.api.machine_dates import get_v1_machines_machine_id_machine_dates
-    from sleephq.api.teams import get_v1_teams
     from sleephq.api.machines import get_v1_teams_team_id_machines
+    from sleephq.api.teams import get_v1_teams
+    from sleephq.auth import create_client as _sleephq_create_client
     _SLEEPHQ_AVAILABLE = True
 except ImportError:
     _SLEEPHQ_AVAILABLE = False
 
 from db import get_conn, session_exists, upsert_session
-
 
 # ---------------------------------------------------------------------------
 # Rate-limit / retry helpers
@@ -76,7 +74,7 @@ _MAX_DELAY = 300.0  # 5 minutes
 _PAGE_DELAY = 1.5  # seconds
 
 
-def _backoff_delay(attempt: int, retry_after_header: Optional[str] = None) -> float:
+def _backoff_delay(attempt: int, retry_after_header: str | None = None) -> float:
     """
     Return how many seconds to wait before the next attempt.
 
@@ -137,8 +135,8 @@ def _require_sleephq():
 
 
 def create_sleephq_client(
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
 ) -> AuthenticatedClient:
     """
     Authenticate with SleepHQ via OAuth2 and return an authenticated client.
@@ -150,10 +148,10 @@ def create_sleephq_client(
     cid = client_id or os.environ["SLEEPHQ_CLIENT_ID"]
     csecret = client_secret or os.environ["SLEEPHQ_CLIENT_SECRET"]
 
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            return _sleephq_create_client(client_id=cid, client_secret=csecret)
+            return _sleephq_create_client(client_id=cid, client_secret=csecret, scope="read")
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in _RETRY_STATUSES:
                 raise
@@ -224,8 +222,8 @@ def resolve_machine_id(client: AuthenticatedClient, team_id: int) -> int:
 def fetch_machine_dates(
     client: AuthenticatedClient,
     machine_id: int,
-    from_date: Optional[date] = None,
-    to_date: Optional[date] = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
     days: int = 30,
 ) -> list:
     """
@@ -618,14 +616,14 @@ def persist_sessions(
 def run_sleephq_import(
     user_id: str,
     days: int = 30,
-    from_date: Optional[date] = None,
-    to_date: Optional[date] = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
     skip_existing: bool = True,
     dry_run: bool = False,
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    team_id: Optional[int] = None,
-    machine_id: Optional[int] = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    team_id: int | None = None,
+    machine_id: int | None = None,
 ) -> dict:
     """
     Full SleepHQ → Postgres pipeline.
