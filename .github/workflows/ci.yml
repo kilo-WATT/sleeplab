@@ -9,6 +9,44 @@ on:
       - "v*"
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: filter
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+
+          echo "$changed_files"
+
+          backend=false
+          frontend=false
+
+          if echo "$changed_files" | grep -Eq '^(api/|importer/|tests/|migrations/|pyproject\.toml|uv\.lock|requirements\.txt|api/requirements\.txt|nx\.json|\.github/workflows/ci\.yml)'; then
+            backend=true
+          fi
+
+          if echo "$changed_files" | grep -Eq '^(frontend/|package\.json|package-lock\.json|nx\.json|\.github/workflows/ci\.yml)'; then
+            frontend=true
+          fi
+
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+
   version-check:
     runs-on: ubuntu-latest
     steps:
@@ -55,6 +93,8 @@ jobs:
           echo "All versions aligned!"
 
   backend:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     services:
@@ -100,6 +140,8 @@ jobs:
           OPENAI_API_KEY: ""
 
   frontend:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:
