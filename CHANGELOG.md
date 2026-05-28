@@ -1,3 +1,16 @@
+# [1.2.0](https://github.com/joshuamyers-dev/sleeplab/compare/v1.1.0...v1.2.0) (2026-05-28)
+
+
+### Bug Fixes
+
+* **compose:** pass registration flag to app ([54638c9](https://github.com/joshuamyers-dev/sleeplab/commit/54638c96f5eec3f5cea9249afc379e99880cad36))
+* **docs:** correct sleephq env examples ([226133e](https://github.com/joshuamyers-dev/sleeplab/commit/226133e5875e387c3e8c4254cc2d6af97ad5091a))
+
+
+### Features
+
+* **auth:** allow disabling user registration ([f9ed426](https://github.com/joshuamyers-dev/sleeplab/commit/f9ed42600019c35e9d9039b58fc96acd5f282206))
+
 # [1.1.0](https://github.com/joshuamyers-dev/sleeplab/compare/v1.0.1...v1.1.0) (2026-05-27)
 
 
