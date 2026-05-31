@@ -36,6 +36,26 @@ def test_resmed_large_leak_reduces_leak_component():
     assert "Large leak" in score.callout
 
 
+def test_unknown_manufacturer_scores_available_non_leak_components():
+    score = compute_therapy_score(_session(manufacturer="Unknown", avg_leak=0.8))
+
+    assert score.total > 0
+    assert score.components.ahi is not None
+    assert score.components.duration is not None
+    assert score.components.spo2 is not None
+    assert score.components.leak is None
+    assert "Large leak" not in score.callout
+
+
+def test_missing_manufacturer_does_not_assume_resmed_leak_units():
+    score = compute_therapy_score(_session(manufacturer=None, avg_leak=0.8))
+
+    assert score.components.leak is None
+    assert score.components.ahi is not None
+    assert score.components.duration is not None
+    assert score.components.spo2 is not None
+
+
 def test_unvalidated_parser_sets_low_confidence_but_still_scores():
     score = compute_therapy_score(_session(parser_validated=False))
 
@@ -58,6 +78,16 @@ def test_without_spo2_redistributes_spo2_weight():
 
 def test_unavailable_leak_redistributes_leak_weight():
     score = compute_therapy_score(_session(avg_leak=None))
+
+    assert score.components.leak is None
+    assert score.components.ahi is not None
+    assert score.components.duration is not None
+    assert score.components.spo2 is not None
+    assert score.components.ahi.max_score + score.components.duration.max_score + score.components.spo2.max_score == 100
+
+
+def test_unconfirmed_manufacturer_redistributes_leak_weight():
+    score = compute_therapy_score(_session(manufacturer="Fisher & Paykel", avg_leak=0.8))
 
     assert score.components.leak is None
     assert score.components.ahi is not None

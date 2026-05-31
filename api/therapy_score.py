@@ -171,7 +171,7 @@ def _score_spo2(avg_spo2: float | None, min_spo2: float | None) -> float:
 
 
 def _large_leak_threshold_lps(session: Mapping[str, object]) -> float | None:
-    manufacturer = str(session.get("manufacturer") or "ResMed").strip().lower()
+    manufacturer = str(session.get("manufacturer") or "").strip().lower()
     if manufacturer == "resmed":
         return RESMED_LARGE_LEAK_LPM / 60
     return None

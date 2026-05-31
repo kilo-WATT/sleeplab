@@ -131,7 +131,7 @@ def get_session(
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
                 (array_agg(s.machine_tz      ORDER BY s.duration_seconds DESC))[1] AS machine_tz,
-                'ResMed' AS manufacturer,
+                NULL AS manufacturer,
                 TRUE AS parser_validated
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
@@ -536,7 +536,7 @@ def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: S
                      ELSE NULL END AS ahi,
                 AVG(avg_spo2) AS avg_spo2,
                 MIN(min_spo2) AS min_spo2,
-                'ResMed' AS manufacturer,
+                NULL AS manufacturer,
                 TRUE AS parser_validated
             FROM sessions
             WHERE user_id = CAST(:uid AS uuid)
@@ -619,7 +619,7 @@ def get_session_by_date(
                 (array_agg(s.mask_type       ORDER BY s.duration_seconds DESC))[1] AS mask_type,
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
-                'ResMed' AS manufacturer,
+                NULL AS manufacturer,
                 TRUE AS parser_validated
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
