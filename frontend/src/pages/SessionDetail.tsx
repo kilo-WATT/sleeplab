@@ -86,6 +86,8 @@ export default function SessionDetail() {
   const eventWindowCacheRef = useRef<Map<string, EventWindowResponse>>(new Map())
 
   useEffect(() => {
+    // These resets intentionally clear the previous session while the new route loads.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setSpo2(null)
     setEquipment(null)
