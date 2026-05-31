@@ -266,12 +266,11 @@ export default function Import() {
               </div>
             ) : null}
             {uploadPhase === 'complete' ? (
-              <div className="flex items-start gap-3 rounded-[20px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] p-4 text-[var(--olive-deep)]">
-                <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0" />
+              <div className="flex items-start gap-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 text-[var(--accent)]">
                 <div className="space-y-1">
-                  <p className="text-sm font-bold">Upload complete</p>
+                  <p className="text-sm font-bold">Upload received</p>
                   <p className="text-sm font-medium text-[var(--muted-foreground)]">
-                    Your files have been uploaded successfully. Synchronization is continuing in the background.
+                    Your files were uploaded. Synchronization is continuing in the background.
                   </p>
                 </div>
               </div>
@@ -404,6 +403,7 @@ export default function Import() {
 }
 
 export function OximeterImportSummary({ result }: { result: OximeterImportResponse }) {
+  const hasFailures = result.status === 'failed' || result.status === 'partial'
   const groups: Array<{ status: OximeterImportResult['status']; label: string; className: string }> = [
     { status: 'imported', label: 'Imported', className: 'text-[var(--olive-deep)]' },
     { status: 'skipped', label: 'Skipped', className: 'text-[var(--muted-foreground)]' },
@@ -413,6 +413,16 @@ export function OximeterImportSummary({ result }: { result: OximeterImportRespon
 
   return (
     <div className="space-y-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+      {hasFailures ? (
+        <div className={`rounded-[14px] border px-3 py-2 text-sm font-bold ${
+          result.status === 'failed'
+            ? 'border-[rgba(176,58,46,0.28)] bg-[rgba(176,58,46,0.08)] text-[var(--danger-text)]'
+            : 'border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] text-[var(--orange-700)]'
+        }`}
+        >
+          {result.message}
+        </div>
+      ) : null}
       <div className="grid grid-cols-4 gap-2 text-center text-xs">
         <ResultCount label="Imported" value={result.imported} />
         <ResultCount label="Skipped" value={result.skipped} />

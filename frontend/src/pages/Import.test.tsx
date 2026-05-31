@@ -34,6 +34,8 @@ describe('OximeterImportSummary', () => {
     render(
       <OximeterImportSummary
         result={{
+          status: 'partial',
+          message: 'Some oximeter files could not be imported.',
           imported: 1,
           skipped: 1,
           unmatched: 1,
@@ -49,6 +51,7 @@ describe('OximeterImportSummary', () => {
     )
 
     expect(screen.getByText('imported.bin')).toBeInTheDocument()
+    expect(screen.getByText('Some oximeter files could not be imported.')).toBeInTheDocument()
     expect(screen.getByText('skipped.bin')).toBeInTheDocument()
     expect(screen.getByText('unmatched.bin')).toBeInTheDocument()
     expect(screen.getByText('failed.bin')).toBeInTheDocument()
