@@ -1,35 +1,320 @@
-from datetime import date
+import re
+from collections import defaultdict
+from datetime import date, datetime
+from io import BytesIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import matplotlib
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from typing import Dict, List, Optional
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import SessionSummary, SessionDetail, EventRecord, MetricsResponse, SpO2Response, EquipmentResponse, InferredEquipment, WaveformResponse, EventWindowResponse
+from ..models import (
+    EventRecord,
+    EventWindowResponse,
+    MetricsResponse,
+    SessionDetail,
+    SessionSummary,
+    SpO2Response,
+    WaveformResponse,
+)
+
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt  # noqa: E402
+from reportlab.lib import colors  # noqa: E402
+from reportlab.lib.enums import TA_CENTER  # noqa: E402
+from reportlab.lib.pagesizes import letter  # noqa: E402
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # noqa: E402
+from reportlab.lib.units import inch  # noqa: E402
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table  # noqa: E402
 
 router = APIRouter()
+
+DATE_PARAM_RE = re.compile(r"^\d{8}$")
 
 
 class SessionTimezoneUpdate(BaseModel):
     machine_tz: str
 
 
-@router.get("/", response_model=List[SessionSummary])
+def _parse_yyyymmdd(value: str, name: str) -> date:
+    if not DATE_PARAM_RE.match(value):
+        raise HTTPException(status_code=400, detail=f"{name} must use YYYYMMDD format")
+    try:
+        return datetime.strptime(value, "%Y%m%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{name} must be a valid calendar date in YYYYMMDD format") from exc
+
+
+def _session_column_exists(db: Session, column_name: str) -> bool:
+    return bool(db.execute(
+        text("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'sessions'
+                  AND column_name = :column_name
+            )
+        """),
+        {"column_name": column_name},
+    ).scalar())
+
+
+def _format_date_range(start: date, end: date) -> str:
+    return f"{start.strftime('%b')} {start.day}, {start.year} to {end.strftime('%b')} {end.day}, {end.year}"
+
+
+def _format_metric(value, suffix: str = "") -> str:
+    if value is None:
+        return "Unavailable"
+    return f"{float(value):.1f}{suffix}"
+
+
+def _group_contiguous_dates(dates: list[date]) -> str:
+    if not dates:
+        return "Unavailable"
+    ranges: list[str] = []
+    start = previous = dates[0]
+    for current in dates[1:]:
+        if (current - previous).days == 1:
+            previous = current
+            continue
+        ranges.append(_format_night_range(start, previous))
+        start = previous = current
+    ranges.append(_format_night_range(start, previous))
+    return ", ".join(ranges)
+
+
+def _format_night_range(start: date, end: date) -> str:
+    if start == end:
+        return start.isoformat()
+    return f"{start.isoformat()} to {end.isoformat()}"
+
+
+def _build_ahi_chart(nights: list[dict]) -> BytesIO:
+    chart_buffer = BytesIO()
+    chart_nights = nights[-30:]
+    labels = [night["folder_date"].strftime("%m/%d") for night in chart_nights]
+    values = [float(night["ahi"]) if night["ahi"] is not None else None for night in chart_nights]
+
+    fig, ax = plt.subplots(figsize=(6.9, 2.0), dpi=160)
+    ax.plot(labels, values, color="#2f5d7c", linewidth=2, marker="o", markersize=3.5)
+    ax.set_title("30-Day AHI Trend", fontsize=10, pad=8)
+    ax.set_ylabel("AHI", fontsize=8)
+    ax.grid(True, axis="y", color="#d9e2e8", linewidth=0.6)
+    ax.tick_params(axis="both", labelsize=7)
+    if len(labels) > 12:
+        for index, label in enumerate(ax.get_xticklabels()):
+            label.set_visible(index % max(1, len(labels) // 10) == 0 or index == len(labels) - 1)
+    fig.tight_layout()
+    fig.savefig(chart_buffer, format="png", bbox_inches="tight")
+    plt.close(fig)
+    chart_buffer.seek(0)
+    return chart_buffer
+
+
+def _build_pdf_report(start_raw: str, end_raw: str, start: date, end: date, nights: list[dict]) -> BytesIO:
+    buffer = BytesIO()
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("ReportTitle", parent=styles["Title"], alignment=TA_CENTER, fontSize=18, leading=22)
+    subtitle_style = ParagraphStyle("ReportSubtitle", parent=styles["Normal"], alignment=TA_CENTER, fontSize=10, leading=13)
+    body_style = ParagraphStyle("ReportBody", parent=styles["BodyText"], fontSize=8.5, leading=11)
+    section_style = ParagraphStyle("Section", parent=styles["Heading2"], fontSize=10, leading=12, spaceBefore=6, spaceAfter=4)
+    warning_style = ParagraphStyle("Warning", parent=body_style, textColor=colors.HexColor("#8a4b00"))
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        leftMargin=0.45 * inch,
+        rightMargin=0.45 * inch,
+        topMargin=0.35 * inch,
+        bottomMargin=0.35 * inch,
+        pageCompression=0,
+    )
+
+    total_nights = (end - start).days + 1
+    nights_used = len(nights)
+    compliance_pct = round((nights_used / total_nights) * 100, 1) if total_nights > 0 else 0.0
+
+    avg_pressures = [float(night["avg_pressure"]) for night in nights if night["avg_pressure"] is not None]
+    p95_pressures = [float(night["p95_pressure"]) for night in nights if night["p95_pressure"] is not None]
+    leaks = [float(night["avg_leak"]) for night in nights if night["avg_leak"] is not None]
+    avg_pressure = sum(avg_pressures) / len(avg_pressures) if avg_pressures else None
+    p95_pressure = sum(p95_pressures) / len(p95_pressures) if p95_pressures else None
+    avg_leak = sum(leaks) / len(leaks) if leaks else None
+
+    manufacturers: dict[str, list[date]] = defaultdict(list)
+    device_serials = set()
+    therapy_modes = set()
+    mask_types = set()
+    for night in nights:
+        manufacturers[night["manufacturer"] or "Unknown"].append(night["folder_date"])
+        if night["device_serial"]:
+            device_serials.add(night["device_serial"])
+        if night["therapy_mode"]:
+            therapy_modes.add(night["therapy_mode"])
+        if night["mask_type"]:
+            mask_types.add(night["mask_type"])
+
+    if not manufacturers:
+        manufacturer_summary = "Manufacturers: Unknown"
+    elif len(manufacturers) == 1:
+        manufacturer_summary = f"Manufacturers: {next(iter(manufacturers))}"
+    else:
+        manufacturer_summary = "Manufacturers: " + "; ".join(
+            f"{manufacturer} - {_group_contiguous_dates(sorted(dates))}"
+            for manufacturer, dates in sorted(manufacturers.items())
+        )
+
+    equipment_rows = [
+        ["Manufacturer", manufacturer_summary.replace("Manufacturers: ", "")],
+        ["Machine model/type", "Unavailable"],
+        ["Device serial / identifier", ", ".join(sorted(device_serials)) or "Unavailable"],
+        ["Therapy mode", ", ".join(sorted(therapy_modes)) or "Unavailable"],
+        ["Mask", ", ".join(sorted(mask_types)) or "Unavailable"],
+    ]
+
+    summary_rows = [
+        ["Compliance", f"{compliance_pct:.1f}% ({nights_used}/{total_nights} nights)"],
+        ["Total nights recorded", str(nights_used)],
+        ["Average pressure", _format_metric(avg_pressure, " cmH2O")],
+        ["P95 pressure", _format_metric(p95_pressure, " cmH2O")],
+        ["Average leak", _format_metric(avg_leak * 1000 if avg_leak is not None else None, " mL/s")],
+    ]
+
+    story = [
+        Paragraph("SleepLab Therapy Report", title_style),
+        Paragraph(f"{_format_date_range(start, end)} ({start_raw}-{end_raw})", subtitle_style),
+        Spacer(1, 0.08 * inch),
+        Image(_build_ahi_chart(nights), width=7.0 * inch, height=2.05 * inch),
+        Paragraph("Summary", section_style),
+        Table(summary_rows, colWidths=[2.05 * inch, 4.95 * inch], style=[
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("LEADING", (0, 0), (-1, -1), 10),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d9e2e8")),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef4f7")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]),
+        Paragraph("Equipment", section_style),
+        Table(equipment_rows, colWidths=[2.05 * inch, 4.95 * inch], style=[
+            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.0),
+            ("LEADING", (0, 0), (-1, -1), 9.5),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#d9e2e8")),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef4f7")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]),
+        Spacer(1, 0.08 * inch),
+        Paragraph(
+            "AHI is calculated from recorded apnea and hypopnea events over recorded therapy hours. "
+            "Leak values follow SleepLab's existing session display convention.",
+            body_style,
+        ),
+    ]
+
+    if nights_used < 7:
+        story.append(Spacer(1, 0.05 * inch))
+        story.append(Paragraph("This report includes fewer than 7 nights of data and may not be representative.", warning_style))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+@router.get("/export/pdf")
+def export_sessions_pdf(
+    from_: str = Query(..., alias="from"),
+    to: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    start = _parse_yyyymmdd(from_, "from")
+    end = _parse_yyyymmdd(to, "to")
+    if end < start:
+        raise HTTPException(status_code=400, detail="to must be on or after from")
+
+    manufacturer_expr = (
+        "COALESCE(NULLIF(TRIM(s.manufacturer), ''), 'Unknown')"
+        if _session_column_exists(db, "manufacturer")
+        else "'Unknown'"
+    )
+
+    rows = db.execute(
+        text(f"""
+            WITH night AS (
+                SELECT
+                    s.folder_date,
+                    SUM(s.duration_seconds) AS duration_seconds,
+                    SUM(s.total_ahi_events) AS total_ahi_events,
+                    AVG(s.avg_pressure) AS avg_pressure,
+                    MAX(s.p95_pressure) AS p95_pressure,
+                    AVG(s.avg_leak) AS avg_leak,
+                    (array_agg(s.device_serial ORDER BY s.duration_seconds DESC) FILTER (WHERE s.device_serial IS NOT NULL))[1] AS device_serial,
+                    (array_agg(s.therapy_mode ORDER BY s.duration_seconds DESC) FILTER (WHERE s.therapy_mode IS NOT NULL))[1] AS therapy_mode,
+                    (array_agg(s.mask_type ORDER BY s.duration_seconds DESC) FILTER (WHERE s.mask_type IS NOT NULL))[1] AS mask_type,
+                    (array_agg({manufacturer_expr} ORDER BY s.duration_seconds DESC))[1] AS manufacturer
+                FROM sessions s
+                WHERE s.user_id = CAST(:uid AS uuid)
+                  AND s.folder_date >= :start
+                  AND s.folder_date <= :end
+                  AND s.duration_seconds >= 600
+                GROUP BY s.folder_date
+            )
+            SELECT
+                folder_date,
+                duration_seconds,
+                CASE
+                    WHEN duration_seconds > 0
+                    THEN ROUND((total_ahi_events / (duration_seconds / 3600.0))::numeric, 2)
+                    ELSE NULL
+                END AS ahi,
+                ROUND(avg_pressure::numeric, 2) AS avg_pressure,
+                ROUND(p95_pressure::numeric, 2) AS p95_pressure,
+                ROUND(avg_leak::numeric, 4) AS avg_leak,
+                device_serial,
+                therapy_mode,
+                mask_type,
+                manufacturer
+            FROM night
+            ORDER BY folder_date
+        """),
+        {"uid": current_user["id"], "start": start, "end": end},
+    ).mappings().all()
+
+    pdf = _build_pdf_report(from_, to, start, end, [dict(row) for row in rows])
+    filename = f"sleeplab-report-{from_}-{to}.pdf"
+    return StreamingResponse(
+        pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/", response_model=list[SessionSummary])
 def list_sessions(
     page: int = Query(1, ge=1),
     per_page: int = Query(30, ge=1, le=600),
-    date_from: Optional[date] = None,
-    date_to: Optional[date] = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """List sessions with summary stats, sorted by folder_date DESC."""
     conditions = ["user_id = :uid"]
-    params: Dict = {"limit": per_page, "offset": (page - 1) * per_page, "uid": current_user["id"]}
+    params: dict = {"limit": per_page, "offset": (page - 1) * per_page, "uid": current_user["id"]}
 
     if date_from:
         conditions.append("folder_date >= :date_from")
@@ -142,7 +427,7 @@ def get_session(
     return SessionDetail.model_validate(dict(row))
 
 
-@router.get("/{session_id}/events", response_model=List[EventRecord])
+@router.get("/{session_id}/events", response_model=list[EventRecord])
 def get_session_events(
     session_id: str,
     current_user: dict = Depends(get_current_user),
@@ -494,7 +779,7 @@ def _require_session(session_id: str, user_id: str, db: Session) -> str:
     return row["id"]
 
 
-def _f(val) -> Optional[float]:
+def _f(val) -> float | None:
     """Convert Decimal to float for JSON serialization."""
     return float(val) if val is not None else None
 
