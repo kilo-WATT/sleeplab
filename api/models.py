@@ -49,6 +49,14 @@ class SessionDetail(SessionSummary):
     temperature_c: Optional[float]
 
 
+class TagInsight(BaseModel):
+    tag: str
+    night_count: int
+    avg_ahi: Optional[float]
+    baseline_avg_ahi: Optional[float]
+    delta_ahi: Optional[float]
+
+
 class EventRecord(BaseModel):
     id: int
     event_type: str

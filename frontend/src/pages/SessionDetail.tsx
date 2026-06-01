@@ -15,6 +15,7 @@ import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
+import { SESSION_TAGS } from '../lib/constants'
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: getDisplayTz() })
@@ -60,17 +61,6 @@ const EVENT_COLORS: Record<string, string> = {
   'Apnea': '#C9B715',
   'Arousal': '#6AA136',
 }
-
-const SESSION_TAGS = [
-  'Travel',
-  'Alcohol',
-  'Sick',
-  'New mask',
-  'Mouth tape',
-  'Bad sleep',
-  'Good sleep',
-  'Camping',
-]
 
 export default function SessionDetail() {
   const { date } = useParams<{ date: string }>()

@@ -164,6 +164,14 @@ export interface SessionDetail extends SessionSummary {
   temperature_c: number | null
 }
 
+export interface TagInsight {
+  tag: string
+  night_count: number
+  avg_ahi: number | null
+  baseline_avg_ahi: number | null
+  delta_ahi: number | null
+}
+
 export type EquipmentType = 'cushion' | 'headgear' | 'tubing' | 'humidifier_chamber' | 'filter'
 
 export interface Equipment {
@@ -436,6 +444,7 @@ export const api = {
     get<SessionSummary[]>('/sessions/', params as Record<string, string | number> | undefined),
   getSession: (id: string) => get<SessionDetail>(`/sessions/${id}`),
   getSessionByDate: (date: string) => get<SessionDetail>(`/sessions/by-date/${date}`),
+  getTagInsights: () => get<TagInsight[]>('/sessions/tag-insights'),
   updateSessionNote: (id: string, note: string) =>
     put<SessionDetail>(`/sessions/${id}/note`, { note }),
   updateSessionTags: (id: string, tags: string[]) =>

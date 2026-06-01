@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import SessionSummary, SessionDetail, EventRecord, MetricsResponse, SpO2Response, EquipmentResponse, InferredEquipment, WaveformResponse, EventWindowResponse
+from ..models import SessionSummary, SessionDetail, TagInsight, EventRecord, MetricsResponse, SpO2Response, EquipmentResponse, InferredEquipment, WaveformResponse, EventWindowResponse
 
 router = APIRouter()
 
@@ -100,6 +100,77 @@ def list_sessions(
     """)
     rows = db.execute(sql, params).mappings().all()
     return [SessionSummary.model_validate(dict(r)) for r in rows]
+
+
+@router.get("/tag-insights", response_model=List[TagInsight])
+def get_tag_insights(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        text("""
+            WITH night_metric AS (
+                SELECT
+                    user_id,
+                    folder_date,
+                    CASE
+                        WHEN SUM(duration_seconds) > 0
+                        THEN ROUND((SUM(total_ahi_events) / (SUM(duration_seconds) / 3600.0))::numeric, 2)
+                        ELSE NULL
+                    END AS ahi
+                FROM sessions
+                WHERE user_id = CAST(:uid AS uuid)
+                  AND folder_date >= CURRENT_DATE - INTERVAL '90 days'
+                  AND duration_seconds >= 600
+                GROUP BY user_id, folder_date
+            ),
+            night AS (
+                SELECT
+                    night_metric.user_id,
+                    night_metric.folder_date,
+                    night_metric.ahi,
+                    COALESCE((
+                        SELECT s2.tags
+                        FROM sessions s2
+                        WHERE s2.user_id = night_metric.user_id
+                          AND s2.folder_date = night_metric.folder_date
+                          AND s2.duration_seconds >= 600
+                          AND s2.tags IS NOT NULL
+                        ORDER BY s2.duration_seconds DESC
+                        LIMIT 1
+                    ), ARRAY[]::text[]) AS tags
+                FROM night_metric
+            ),
+            baseline AS (
+                SELECT ROUND(AVG(ahi)::numeric, 2) AS baseline_avg_ahi
+                FROM night
+            ),
+            tagged AS (
+                SELECT
+                    tag,
+                    COUNT(*) AS night_count,
+                    ROUND(AVG(ahi)::numeric, 2) AS avg_ahi
+                FROM night
+                CROSS JOIN LATERAL unnest(tags) AS tag
+                GROUP BY tag
+                HAVING COUNT(*) >= 2
+            )
+            SELECT
+                tagged.tag,
+                tagged.night_count,
+                tagged.avg_ahi,
+                baseline.baseline_avg_ahi,
+                CASE
+                    WHEN tagged.avg_ahi IS NULL OR baseline.baseline_avg_ahi IS NULL THEN NULL
+                    ELSE ROUND((tagged.avg_ahi - baseline.baseline_avg_ahi)::numeric, 2)
+                END AS delta_ahi
+            FROM tagged
+            CROSS JOIN baseline
+            ORDER BY tagged.tag
+        """),
+        {"uid": current_user["id"]},
+    ).mappings().all()
+    return [TagInsight.model_validate(dict(r)) for r in rows]
 
 
 @router.get("/{session_id}", response_model=SessionDetail)
