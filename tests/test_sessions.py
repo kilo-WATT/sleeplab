@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from api.routers.sessions import _build_pdf_report, _manufacturer_select_expression
+from api.routers.sessions import _build_pdf_report, _manufacturer_select_expression, _mask_device_serial
 
 
 class _ScalarResult:
@@ -110,6 +110,10 @@ class TestGetSession:
 
 
 class TestExportSessionPdf:
+    def test_mask_device_serial(self):
+        assert _mask_device_serial("SN1234505581") == "...05581"
+        assert _mask_device_serial("1234") == "...1234"
+
     def test_manufacturer_fallback_sql_uses_typed_constant(self):
         expression = _manufacturer_select_expression(_ColumnExistsDb(False))
 
@@ -137,7 +141,7 @@ class TestExportSessionPdf:
                     "p95_pressure": 7.2,
                     "avg_leak": 0.0349,
                     "manufacturer": "Unknown",
-                    "device_serial": "SN123",
+                    "device_serial": "SN1234505581",
                     "therapy_mode": None,
                     "mask_type": None,
                 }
@@ -145,7 +149,8 @@ class TestExportSessionPdf:
         ).getvalue()
 
         assert b"Device serial / identifier" in pdf
-        assert b"SN123" in pdf
+        assert b"...05581" in pdf
+        assert b"SN1234505581" not in pdf
         assert b"Machine model/type" not in pdf
         assert b"Manufacturer" not in pdf
         assert b"Unavailable" not in pdf

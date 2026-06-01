@@ -115,6 +115,13 @@ def _format_night_range(start: date, end: date) -> str:
     return f"{start.isoformat()} to {end.isoformat()}"
 
 
+def _mask_device_serial(serial: str) -> str:
+    value = serial.strip()
+    if len(value) <= 5:
+        return f"...{value}"
+    return f"...{value[-5:]}"
+
+
 def _build_ahi_chart(nights: list[dict]) -> BytesIO:
     chart_buffer = BytesIO()
     chart_nights = nights[-30:]
@@ -122,7 +129,8 @@ def _build_ahi_chart(nights: list[dict]) -> BytesIO:
     values = [float(night["ahi"]) if night["ahi"] is not None else None for night in chart_nights]
 
     fig, ax = plt.subplots(figsize=(6.9, 2.0), dpi=160)
-    ax.plot(labels, values, color="#4f46a5", linewidth=1.4, marker="o", markersize=3)
+    x_values = list(range(len(labels)))
+    ax.plot(x_values, values, color="#4f46a5", linewidth=1.4, marker="o", markersize=3)
     ax.axhline(5, color="#9ca3af", linewidth=0.8, linestyle="--")
     ax.text(0.99, 5.15, "Controlled threshold", color="#6b7280", fontsize=7, ha="right", va="bottom", transform=ax.get_yaxis_transform())
     ax.set_ylim(bottom=0)
@@ -139,9 +147,13 @@ def _build_ahi_chart(nights: list[dict]) -> BytesIO:
         ax.spines[spine].set_visible(False)
     ax.spines["left"].set_color("#d1d5db")
     ax.spines["bottom"].set_color("#d1d5db")
-    if len(labels) > 12:
-        for index, label in enumerate(ax.get_xticklabels()):
-            label.set_visible(index % max(1, len(labels) // 10) == 0 or index == len(labels) - 1)
+    if labels:
+        tick_step = 1 if len(labels) <= 10 else 3 if len(labels) <= 21 else 5
+        tick_indexes = list(range(0, len(labels), tick_step))
+        if tick_indexes[-1] != len(labels) - 1:
+            tick_indexes.append(len(labels) - 1)
+        ax.set_xticks(tick_indexes)
+        ax.set_xticklabels([labels[index] for index in tick_indexes], rotation=20, ha="right")
     fig.tight_layout()
     fig.savefig(chart_buffer, format="png", bbox_inches="tight")
     plt.close(fig)
@@ -256,7 +268,7 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
 
     equipment_candidates = [
         ("Manufacturer", manufacturer_summary),
-        ("Device serial / identifier", ", ".join(sorted(device_serials)) or None),
+        ("Device serial / identifier", ", ".join(_mask_device_serial(serial) for serial in sorted(device_serials)) or None),
         ("Therapy mode", ", ".join(sorted(therapy_modes)) or None),
         ("Mask", ", ".join(sorted(mask_types)) or None),
     ]
