@@ -73,8 +73,13 @@ export default function Dashboard() {
   const [wearableSummary, setWearableSummary] = useState<WearableDailySummary[]>([])
   const [reportFrom, setReportFrom] = useState(initialReportRange.from)
   const [reportTo, setReportTo] = useState(initialReportRange.to)
+  const [reportIncludeCompliance, setReportIncludeCompliance] = useState(false)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  const [complianceReportFrom, setComplianceReportFrom] = useState(initialReportRange.from)
+  const [complianceReportTo, setComplianceReportTo] = useState(initialReportRange.to)
+  const [complianceReportLoading, setComplianceReportLoading] = useState(false)
+  const [complianceReportError, setComplianceReportError] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadDashboard() {
@@ -177,7 +182,7 @@ export default function Dashboard() {
     const toCompact = compactDate(reportTo)
     setReportLoading(true)
     try {
-      const blob = await api.downloadSessionReportPdf(fromCompact, toCompact)
+      const blob = await api.downloadSessionReportPdf(fromCompact, toCompact, reportIncludeCompliance)
       const url = window.URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
@@ -190,6 +195,37 @@ export default function Dashboard() {
       setReportError(err instanceof Error ? err.message : 'Could not download report.')
     } finally {
       setReportLoading(false)
+    }
+  }
+
+  async function handleDownloadComplianceReport() {
+    setComplianceReportError(null)
+    if (!complianceReportFrom || !complianceReportTo) {
+      setComplianceReportError('Choose a start and end date.')
+      return
+    }
+    if (complianceReportTo < complianceReportFrom) {
+      setComplianceReportError('End date must be on or after start date.')
+      return
+    }
+
+    const fromCompact = compactDate(complianceReportFrom)
+    const toCompact = compactDate(complianceReportTo)
+    setComplianceReportLoading(true)
+    try {
+      const blob = await api.downloadComplianceReportPdf(fromCompact, toCompact)
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `sleeplab-compliance-${fromCompact}-${toCompact}.pdf`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      setComplianceReportError(err instanceof Error ? err.message : 'Could not download report.')
+    } finally {
+      setComplianceReportLoading(false)
     }
   }
 
@@ -299,8 +335,52 @@ export default function Dashboard() {
               {reportLoading ? 'Downloading...' : 'Download Report'}
             </Button>
           </div>
+          <label className="mt-3 flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
+            <input
+              type="checkbox"
+              checked={reportIncludeCompliance}
+              onChange={(event) => setReportIncludeCompliance(event.target.checked)}
+              className="h-4 w-4 rounded border-[var(--border)]"
+            />
+            Include minimum usage compliance
+          </label>
           {reportError && (
             <p className="mt-3 text-sm font-semibold text-[var(--danger-text)]">{reportError}</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Compliance Report</CardTitle>
+          <CardDescription>Export a PDF compliance summary showing daily usage, streaks, and adherence to the 4-hour threshold.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="compliance-from">From</Label>
+              <Input
+                id="compliance-from"
+                type="date"
+                value={complianceReportFrom}
+                onChange={(event) => setComplianceReportFrom(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="compliance-to">To</Label>
+              <Input
+                id="compliance-to"
+                type="date"
+                value={complianceReportTo}
+                onChange={(event) => setComplianceReportTo(event.target.value)}
+              />
+            </div>
+            <Button className="w-full sm:w-auto" onClick={() => void handleDownloadComplianceReport()} disabled={complianceReportLoading}>
+              {complianceReportLoading ? 'Downloading...' : 'Download Report'}
+            </Button>
+          </div>
+          {complianceReportError && (
+            <p className="mt-3 text-sm font-semibold text-[var(--danger-text)]">{complianceReportError}</p>
           )}
         </CardContent>
       </Card>
