@@ -4,7 +4,12 @@ from datetime import UTC, date, datetime
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from api.routers.sessions import _build_pdf_report, _manufacturer_select_expression, _mask_device_serial
+from api.routers.sessions import (
+    _build_pdf_report,
+    _compute_compliance,
+    _manufacturer_select_expression,
+    _mask_device_serial,
+)
 
 
 class _ScalarResult:
@@ -28,6 +33,7 @@ def _seed_session(
     user_id: str,
     folder_date: date | None = None,
     *,
+    duration_seconds: int = 28800,
     total_ahi_events: int = 16,
     avg_pressure: float | None = 10.2,
     p95_pressure: float | None = 12.4,
@@ -51,7 +57,7 @@ def _seed_session(
                 total_ahi_events, avg_pressure, p95_pressure, avg_leak, therapy_mode, mask_type{manufacturer_column}
             ) VALUES (
                 CAST(:sid AS uuid), :sid, :fd, :start, :start,
-                28800, :device_serial, FALSE, CAST(:uid AS uuid),
+                :duration_seconds, :device_serial, FALSE, CAST(:uid AS uuid),
                 :total_ahi_events, :avg_pressure, :p95_pressure, :avg_leak, :therapy_mode, :mask_type{manufacturer_value}
             )
         """),
@@ -60,6 +66,7 @@ def _seed_session(
             "fd": folder_date,
             "start": datetime(2025, 1, 15, 22, 0, 0, tzinfo=UTC),
             "uid": user_id,
+            "duration_seconds": duration_seconds,
             "total_ahi_events": total_ahi_events,
             "avg_pressure": avg_pressure,
             "p95_pressure": p95_pressure,
@@ -255,3 +262,100 @@ class TestExportSessionPdf:
         assert resp.status_code == 200
         assert resp.content.startswith(b"%PDF")
         assert b"Unavailable" in resp.content
+
+    def test_doctor_report_includes_compliance_section(self, client: TestClient, auth_headers, test_user, db):
+        _seed_session(db, test_user["id"], date(2026, 5, 1))
+        resp = client.get("/sessions/export/pdf?from=20260501&to=20260503", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert b"Compliance Detail" in resp.content
+        assert b"Compliant nights" in resp.content
+        assert b"Longest streak" in resp.content
+
+    def test_doctor_report_shows_compliance_metrics(self, client: TestClient, auth_headers, test_user, db):
+        _seed_session(db, test_user["id"], date(2026, 5, 1), duration_seconds=14400)
+        _seed_session(db, test_user["id"], date(2026, 5, 2), duration_seconds=7200)
+        resp = client.get("/sessions/export/pdf?from=20260501&to=20260502", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert resp.content.startswith(b"%PDF")
+        assert b"Compliance" in resp.content
+
+
+class TestExportCompliancePdf:
+    def test_compute_compliance_all_compliant(self):
+        nights = [
+            {"folder_date": date(2026, 5, 1), "duration_seconds": 18000},
+            {"folder_date": date(2026, 5, 2), "duration_seconds": 16200},
+        ]
+        result = _compute_compliance(nights, total_nights=2)
+        assert result["nights_compliant"] == 2
+        assert result["compliance_pct"] == 100.0
+        assert result["avg_hours"] == 4.75
+
+    def test_compute_compliance_partial(self):
+        nights = [
+            {"folder_date": date(2026, 5, 1), "duration_seconds": 18000},
+            {"folder_date": date(2026, 5, 2), "duration_seconds": 7200},
+        ]
+        result = _compute_compliance(nights, total_nights=2)
+        assert result["nights_compliant"] == 1
+        assert result["compliance_pct"] == 50.0
+
+    def test_compute_compliance_streak(self):
+        nights = [
+            {"folder_date": date(2026, 5, 1), "duration_seconds": 18000},
+            {"folder_date": date(2026, 5, 2), "duration_seconds": 18000},
+            {"folder_date": date(2026, 5, 3), "duration_seconds": 7200},
+            {"folder_date": date(2026, 5, 4), "duration_seconds": 18000},
+        ]
+        result = _compute_compliance(nights, total_nights=4)
+        assert result["nights_compliant"] == 3
+        assert result["longest_streak"] == 2
+
+    def test_compute_compliance_empty(self):
+        result = _compute_compliance([], total_nights=3)
+        assert result["nights_compliant"] == 0
+        assert result["compliance_pct"] == 0.0
+        assert result["avg_hours"] == 0.0
+        assert result["longest_streak"] == 0
+
+    def test_requires_auth(self, client: TestClient):
+        resp = client.get("/sessions/export/compliance/pdf?from=20260501&to=20260530")
+        assert resp.status_code == 401
+
+    def test_rejects_invalid_date_format(self, client: TestClient, auth_headers):
+        resp = client.get("/sessions/export/compliance/pdf?from=2026-05-01&to=20260530", headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_rejects_to_before_from(self, client: TestClient, auth_headers):
+        resp = client.get("/sessions/export/compliance/pdf?from=20260530&to=20260501", headers=auth_headers)
+        assert resp.status_code == 400
+
+    def test_valid_request_returns_pdf_with_filename(self, client: TestClient, auth_headers, test_user, db):
+        _seed_session(db, test_user["id"], date(2026, 5, 1))
+        resp = client.get("/sessions/export/compliance/pdf?from=20260501&to=20260530", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/pdf")
+        assert resp.headers["content-disposition"] == "attachment; filename=sleeplab-compliance-20260501-20260530.pdf"
+        assert resp.content.startswith(b"%PDF")
+
+    def test_compliance_pdf_includes_daily_table(self, client: TestClient, auth_headers, test_user, db):
+        _seed_session(db, test_user["id"], date(2026, 5, 1))
+        resp = client.get("/sessions/export/compliance/pdf?from=20260501&to=20260503", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert b"Daily Usage" in resp.content
+        assert b"Usage (hours)" in resp.content
+        assert b"Compliant" in resp.content
+        assert b"2026-05-01" in resp.content
+
+    def test_compliance_pdf_shows_summary(self, client: TestClient, auth_headers, test_user, db):
+        _seed_session(db, test_user["id"], date(2026, 5, 1))
+        resp = client.get("/sessions/export/compliance/pdf?from=20260501&to=20260501", headers=auth_headers)
+
+        assert resp.status_code == 200
+        assert b"SleepLab Compliance Report" in resp.content
+        assert b"Compliance rate" in resp.content
+        assert b"Average nightly usage" in resp.content
