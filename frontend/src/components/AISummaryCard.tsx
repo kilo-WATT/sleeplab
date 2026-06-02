@@ -6,7 +6,7 @@ import GlossaryText from './GlossaryText'
 import { Button } from './ui/button'
 import { Card, CardContent } from './ui/card'
 
-export default function AISummaryCard({ enabled }: { enabled: boolean }) {
+export default function AISummaryCard({ enabled, caveat }: { enabled: boolean; caveat?: string }) {
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -19,7 +19,7 @@ export default function AISummaryCard({ enabled }: { enabled: boolean }) {
   if (aiConfigured !== true) {
     return null
   }
-  return <AIInsightsCard enabled={enabled} data={data} isLoading={isLoading} onRefresh={refresh} />
+  return <AIInsightsCard enabled={enabled} data={data} isLoading={isLoading} onRefresh={refresh} caveat={caveat} />
 }
 
 export function AIInsightsCard({
@@ -27,11 +27,13 @@ export function AIInsightsCard({
   data,
   isLoading,
   onRefresh,
+  caveat,
 }: {
   enabled: boolean
   data: AISummaryResponse | null
   isLoading: boolean
   onRefresh?: () => void
+  caveat?: string
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -41,9 +43,14 @@ export function AIInsightsCard({
     <Card className="overflow-hidden border-[var(--border)] bg-[radial-gradient(circle_at_top_left,_rgba(82,81,167,0.10),_transparent_28%),radial-gradient(circle_at_90%_18%,_rgba(106,161,54,0.10),_transparent_20%),var(--surface-strong)]">
       <CardContent className="!p-6 sm:!p-8">
         <div className="flex min-h-10 items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span className="inline-block h-2 w-2 rounded-full bg-[var(--accent)]" />
-            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--accent)]">AI Insights</p>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-[var(--accent)]" />
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--accent)]">AI Insights</p>
+            </div>
+            {caveat && (
+              <p className="pl-4 text-xs text-[var(--muted-foreground)]">{caveat}</p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <div className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
