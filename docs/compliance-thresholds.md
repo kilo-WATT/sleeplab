@@ -51,11 +51,7 @@ Most commercial plans that cover CPAP follow the Medicare LCD framework closely.
 | Extended maintenance period | Plans monitoring long-term usage may look back 180 days instead of 90. Adjust `MAINTENANCE_LOOKBACK_DAYS=180`. |
 | Three-tier borderline | A handful of plans flag borderline usage (e.g., 3–3.9 hours) separately. Set `BORDERLINE_THRESHOLD_HOURS` to the lower bound of the borderline range. |
 
----
-
-### Cigna-style
-
-Cigna's criteria as of recent LCD guidance:
+**Example — stricter commercial plan with last-window evaluation:**
 
 | Setting | Value |
 |---|---|
@@ -65,7 +61,9 @@ Cigna's criteria as of recent LCD guidance:
 | Evaluation period | 90 days |
 | Window logic | `last_consecutive` |
 | Maintenance lookback | 180 days |
-| Borderline threshold | *(optional — ~3.0 hours to show borderline zone)* |
+| Borderline threshold | *(optional — e.g., 3.0 hours to show borderline zone on charts)* |
+
+Always verify the specific criteria with the plan directly. Coverage requirements vary by contract and change over time.
 
 ---
 
