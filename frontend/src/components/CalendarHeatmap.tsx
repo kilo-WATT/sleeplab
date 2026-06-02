@@ -9,6 +9,7 @@ interface Props {
   sessions: SessionSummary[]
   metric?: CalendarMetric
   mode?: 'all' | 'single'
+  collapseOnMobile?: boolean
 }
 
 interface CalendarEntry {
@@ -128,10 +129,11 @@ function buildMonthDays(year: number, month: number, padToSixWeeks = false): (Da
   return days
 }
 
-export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all' }: Props) {
+export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all', collapseOnMobile = false }: Props) {
   const navigate = useNavigate()
   const [selectedMonth, setSelectedMonth] = useState<{ year: number; month: number } | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [calendarExpanded, setCalendarExpanded] = useState(false)
   const pickerRef = useRef<HTMLDivElement | null>(null)
 
   const byDate = useMemo(() => {
@@ -278,9 +280,59 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
   }
 
   const monthDays = buildMonthDays(selected.year, selected.month, true)
+  const recordedMonthDays = monthDays.filter((date): date is Date => Boolean(date && byDate[toIso(date)]))
+  const previewDays = recordedMonthDays.slice(0, 10)
+  const extraPreviewDays = Math.max(0, recordedMonthDays.length - previewDays.length)
 
   return (
-    <div className="space-y-4">
+    <>
+      {collapseOnMobile && !calendarExpanded ? (
+        <div className="space-y-3 md:hidden">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+              {MONTHS_LONG[selected.month]} {selected.year}
+            </p>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-2 text-sm font-bold text-[var(--accent)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]"
+              onClick={() => setCalendarExpanded(true)}
+            >
+              Show calendar
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+              Recorded nights
+            </p>
+            <div className="flex min-h-8 flex-wrap items-center gap-1.5">
+            {previewDays.length > 0 ? previewDays.map((date) => {
+              const iso = toIso(date)
+              const entry = byDate[iso]
+              return (
+                <button
+                  key={iso}
+                  type="button"
+                  className="inline-flex h-7 min-w-7 items-center justify-center rounded-[7px] px-1 text-[11px] font-bold text-white transition hover:scale-105"
+                  style={{ background: getDotColor(entry) }}
+                  title={getDotTooltip(iso, entry)}
+                  onClick={() => navigate(`/sessions/${iso}`)}
+                  aria-label={getDotTooltip(iso, entry).replace('\n', ' ')}
+                >
+                  {date.getDate()}
+                </button>
+              )
+            }) : (
+              <span className="text-sm text-[var(--muted-foreground)]">No recorded nights this month.</span>
+            )}
+            {extraPreviewDays > 0 ? (
+              <span className="ml-1 text-sm font-semibold text-[var(--muted-foreground)]">+{extraPreviewDays} more</span>
+            ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className={`space-y-4 ${collapseOnMobile && !calendarExpanded ? 'hidden md:block' : ''}`}>
       <div className="relative flex items-center justify-between gap-2" ref={pickerRef}>
         <button
           type="button"
@@ -396,6 +448,7 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
           })}
         </div>
       </div>
-    </div>
+      </div>
+    </>
   )
 }

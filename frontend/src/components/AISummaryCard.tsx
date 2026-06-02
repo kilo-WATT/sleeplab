@@ -36,6 +36,7 @@ export function AIInsightsCard({
   caveat?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [showMobileDetails, setShowMobileDetails] = useState(false)
 
   const headline = data?.headline ?? data?.insights
 
@@ -85,35 +86,45 @@ export function AIInsightsCard({
               </p>
             )}
 
-            <div className="mt-5 grid gap-4 md:grid-cols-3">
-              <InsightColumn
-                title="Observed"
-                items={data?.high_confidence_observations ?? data?.going_well ?? []}
-                accentClass="border-[var(--accent-border)]"
-                labelClass="text-[var(--accent)]"
-              />
-              <InsightColumn
-                title="Possible"
-                items={data?.possible_patterns ?? data?.whats_not ?? []}
-                accentClass="border-[rgba(233,120,75,0.35)]"
-                labelClass="text-[var(--orange-700)]"
-              />
-              <InsightColumn
-                title="Review"
-                items={data?.things_to_review ?? data?.recommended_changes ?? []}
-                accentClass="border-[rgba(106,161,54,0.35)]"
-                labelClass="text-[var(--green-700)]"
-              />
-            </div>
+            <button
+              type="button"
+              className="mt-4 w-full rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-2 text-sm font-bold text-[var(--accent)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] md:hidden"
+              onClick={() => setShowMobileDetails((value) => !value)}
+            >
+              {showMobileDetails ? 'Hide full analysis' : 'Show full analysis'}
+            </button>
 
-            {data?.missing_or_uncertain && data.missing_or_uncertain.length > 0 && (
-              <InsightColumn
-                title="Uncertain"
-                items={data.missing_or_uncertain}
-                accentClass="mt-5 border-[var(--border)]"
-                labelClass="text-[var(--muted-foreground)]"
-              />
-            )}
+            <div className={`${showMobileDetails ? 'block' : 'hidden'} md:block`}>
+              <div className="mt-5 grid gap-4 md:grid-cols-3">
+                <InsightColumn
+                  title="Observed"
+                  items={data?.high_confidence_observations ?? data?.going_well ?? []}
+                  accentClass="border-[var(--accent-border)]"
+                  labelClass="text-[var(--accent)]"
+                />
+                <InsightColumn
+                  title="Possible"
+                  items={data?.possible_patterns ?? data?.whats_not ?? []}
+                  accentClass="border-[rgba(233,120,75,0.35)]"
+                  labelClass="text-[var(--orange-700)]"
+                />
+                <InsightColumn
+                  title="Review"
+                  items={data?.things_to_review ?? data?.recommended_changes ?? []}
+                  accentClass="border-[rgba(106,161,54,0.35)]"
+                  labelClass="text-[var(--green-700)]"
+                />
+              </div>
+
+              {data?.missing_or_uncertain && data.missing_or_uncertain.length > 0 && (
+                <InsightColumn
+                  title="Uncertain"
+                  items={data.missing_or_uncertain}
+                  accentClass="mt-5 border-[var(--border)]"
+                  labelClass="text-[var(--muted-foreground)]"
+                />
+              )}
+            </div>
 
             <div className="mt-5 border-t border-[var(--border)] pt-4">
               <button

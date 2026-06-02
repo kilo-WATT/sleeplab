@@ -220,10 +220,11 @@ export default function Dashboard() {
   }
 
   const primaryCardContent = 'flex h-full flex-col items-start px-4 pb-4 pt-5 sm:px-6 sm:pb-6 sm:pt-7'
+  const mobilePrimaryChipContent = 'flex h-full flex-col items-start px-4 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-5 lg:min-h-[108px]'
   const statLabelClass = 'flex items-center gap-1.5 text-xs font-bold text-[var(--foreground)] sm:gap-2 sm:text-sm'
   const statValueClass = 'mt-2 text-3xl font-semibold sm:text-4xl'
   const statDescriptionClass = 'mt-1 text-xs leading-5 text-[var(--muted-foreground)] sm:text-sm'
-  const statLinkClass = 'mt-3 inline-flex items-center gap-1 text-xs font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)] sm:text-sm'
+  const statLinkClass = 'mt-3 hidden items-center gap-1 text-xs font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)] sm:inline-flex sm:text-sm'
 
   const chipContent = 'flex h-full min-h-[104px] flex-col items-start px-4 pb-4 pt-4 sm:min-h-[108px] sm:px-6 sm:pb-5 sm:pt-5'
   const chipLabel = 'flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.08em] text-[var(--muted-foreground)] [&_button]:h-4 [&_button]:w-4 [&_button]:translate-y-[-1px] [&_button]:text-[10px]'
@@ -252,8 +253,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-12 lg:gap-4">
-          <Card className="lg:col-span-4">
+        <div className="grid grid-cols-6 gap-3 lg:grid-cols-12 lg:gap-4">
+          <Card className="order-1 col-span-3 lg:col-span-4">
             <CardContent className={primaryCardContent}>
             <div className={statLabelClass}>
               <span>Average AHI</span>
@@ -268,7 +269,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-4">
+          <Card className="order-2 col-span-3 lg:col-span-4">
             <CardContent className={primaryCardContent}>
             <div className={statLabelClass}>
               <span>Compliance</span>
@@ -289,7 +290,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-4">
+          <Card className="order-3 col-span-3 lg:col-span-4">
             <CardContent className={primaryCardContent}>
             <div className={statLabelClass}>
               <span>Average Pressure</span>
@@ -304,7 +305,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-3">
+          <Card className="order-5 col-span-2 lg:order-4 lg:col-span-3">
             <CardContent className={chipContent}>
             <div className={chipLabel}>
               <span>Resp. Events</span>
@@ -315,7 +316,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-3">
+          <Card className="order-6 col-span-2 lg:order-5 lg:col-span-3">
             <CardContent className={chipContent}>
             <div className={chipLabel}>
               <span>Avg Usage</span>
@@ -326,7 +327,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-3">
+          <Card className="order-7 col-span-2 lg:order-6 lg:col-span-3">
             <CardContent className={chipContent}>
             <div className={chipLabel}>
               <span>Avg Leak</span>
@@ -337,13 +338,13 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-3">
-            <CardContent className={chipContent}>
+          <Card className="order-4 col-span-3 lg:order-7 lg:col-span-3">
+            <CardContent className={mobilePrimaryChipContent}>
             <div className={chipLabel}>
               <span>Best Night</span>
               <InfoPopover title="Best night">{statHelp.bestNight}</InfoPopover>
             </div>
-            <div className={`${chipValue} ${ahiTone(bestNight?.ahi ?? null)}`}>
+            <div className={`mt-2 text-3xl font-semibold leading-none lg:text-[1.7rem] ${ahiTone(bestNight?.ahi ?? null)}`}>
               {bestNight ? `AHI ${bestNight.ahi?.toFixed(1)}` : '—'}
             </div>
             {bestNight && (
@@ -359,11 +360,11 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <div className="order-5 md:order-2">
+      <div className="order-2 md:order-2">
         <AISummaryCard enabled={summary.nights_with_data > 0} caveat={caveat} />
       </div>
 
-      <div className="order-2 grid grid-cols-1 gap-5 md:order-3 lg:grid-cols-2">
+      <div className="order-3 grid grid-cols-1 gap-5 md:order-3 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Nights to Review</CardTitle>
@@ -398,7 +399,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="hidden md:block">
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -430,13 +431,44 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="order-3 md:order-4">
+      <div className="order-4 md:order-4">
         <AHITrendChart
           trend={summary.ahi_trend}
           perDayData={perDayData}
           flaggedNights={flaggedNights}
         />
       </div>
+
+      <Card className="order-5 md:hidden">
+        <CardHeader>
+          <div className="flex flex-col gap-3">
+            <div>
+              <CardTitle>Sleep Calendar</CardTitle>
+              <CardDescription>Click any recorded night to open the session view.</CardDescription>
+            </div>
+            <div className="flex self-start rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1">
+              {calMetrics.map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  className={`rounded-full px-3 py-2 text-xs font-bold transition ${
+                    calendarMetric === m.key
+                      ? 'bg-[var(--surface-strong)] text-[var(--accent)]'
+                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                  onClick={() => setCalendarMetric(m.key)}
+                  aria-pressed={calendarMetric === m.key}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <CalendarHeatmap sessions={sessions} metric={calendarMetric} mode="single" collapseOnMobile />
+        </CardContent>
+      </Card>
 
       <div className="order-6 md:order-5">
         <WearableSleepSummaryChart data={wearableSummary} />
