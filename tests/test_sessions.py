@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from api.routers.sessions import (
     _build_pdf_report,
-    _compute_compliance,
+    _compute_adherence_summary,
     _manufacturer_select_expression,
     _mask_device_serial,
 )
@@ -283,40 +283,40 @@ class TestExportSessionPdf:
 
 
 class TestExportCompliancePdf:
-    def test_compute_compliance_all_compliant(self):
+    def test_compute_adherence_summary_all_compliant(self):
         nights = [
             {"folder_date": date(2026, 5, 1), "duration_seconds": 18000},
             {"folder_date": date(2026, 5, 2), "duration_seconds": 16200},
         ]
-        result = _compute_compliance(nights, total_nights=2)
+        result = _compute_adherence_summary(nights, total_nights=2)
         assert result["nights_compliant"] == 2
-        assert result["compliance_pct"] == 100.0
+        assert result["adherence_pct"] == 100.0
         assert result["avg_hours"] == 4.75
 
-    def test_compute_compliance_partial(self):
+    def test_compute_adherence_summary_partial(self):
         nights = [
             {"folder_date": date(2026, 5, 1), "duration_seconds": 18000},
             {"folder_date": date(2026, 5, 2), "duration_seconds": 7200},
         ]
-        result = _compute_compliance(nights, total_nights=2)
+        result = _compute_adherence_summary(nights, total_nights=2)
         assert result["nights_compliant"] == 1
-        assert result["compliance_pct"] == 50.0
+        assert result["adherence_pct"] == 50.0
 
-    def test_compute_compliance_streak(self):
+    def test_compute_adherence_summary_streak(self):
         nights = [
             {"folder_date": date(2026, 5, 1), "duration_seconds": 18000},
             {"folder_date": date(2026, 5, 2), "duration_seconds": 18000},
             {"folder_date": date(2026, 5, 3), "duration_seconds": 7200},
             {"folder_date": date(2026, 5, 4), "duration_seconds": 18000},
         ]
-        result = _compute_compliance(nights, total_nights=4)
+        result = _compute_adherence_summary(nights, total_nights=4)
         assert result["nights_compliant"] == 3
         assert result["longest_streak"] == 2
 
-    def test_compute_compliance_empty(self):
-        result = _compute_compliance([], total_nights=3)
+    def test_compute_adherence_summary_empty(self):
+        result = _compute_adherence_summary([], total_nights=3)
         assert result["nights_compliant"] == 0
-        assert result["compliance_pct"] == 0.0
+        assert result["adherence_pct"] == 0.0
         assert result["avg_hours"] == 0.0
         assert result["longest_streak"] == 0
 
