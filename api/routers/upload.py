@@ -36,11 +36,29 @@ UPLOAD_SESSIONS: dict[str, UploadSession] = {}
 
 
 class StartUploadRequest(BaseModel):
+    """Pydantic model representing CPAP datalog upload initiation payload.
+
+    Attributes:
+        root_name: The root folder name of the ResMed DATALOG directory.
+        from_date: Optional start date threshold in YYYY-MM-DD format.
+    """
+
     root_name: str
     from_date: str | None = None
 
 
 class OximeterImportResult(BaseModel):
+    """Pydantic model representing the result of importing a single oximeter file.
+
+    Attributes:
+        filename: The original imported file name.
+        status: The resulting status label ('imported', 'skipped', 'unmatched', 'failed').
+        message: Informational details or error message.
+        session_id: The ID string of the matched CPAP session, if matched.
+        folder_date: The date directory string of the session, if matched.
+        sample_count: Count of telemetry samples imported, if successful.
+    """
+
     filename: str
     status: Literal["imported", "skipped", "unmatched", "failed"]
     message: str
@@ -50,6 +68,16 @@ class OximeterImportResult(BaseModel):
 
 
 class OximeterImportResponse(BaseModel):
+    """Pydantic model representing aggregated results for multiple oximeter file imports.
+
+    Attributes:
+        imported: Total number of files successfully imported.
+        skipped: Total number of files skipped (e.g. already had SpO2 data).
+        unmatched: Total number of files that could not be matched to a session.
+        failed: Total number of files that failed during parsing.
+        results: Detailed list of import outcomes per file.
+    """
+
     imported: int
     skipped: int
     unmatched: int
@@ -59,6 +87,13 @@ class OximeterImportResponse(BaseModel):
 
 @dataclass
 class ImportJobStatus:
+    """Dataclass representing the current runtime execution status of a datalog import background job.
+
+    Attributes:
+        running: True if a background import job is currently executing for the user.
+        started_at: ISO-8601 UTC timestamp of when the job started.
+    """
+
     running: bool
     started_at: str | None = None
 
@@ -67,6 +102,11 @@ IMPORT_JOBS: dict[str, ImportJobStatus] = {}
 
 
 def _mark_import_running(user_id: str) -> None:
+    """Mark the import job status as active for a specific user.
+
+    Args:
+        user_id: The unique user identifier.
+    """
     IMPORT_JOBS[user_id] = ImportJobStatus(
         running=True,
         started_at=datetime.now(UTC).isoformat(),
@@ -74,10 +114,23 @@ def _mark_import_running(user_id: str) -> None:
 
 
 def _mark_import_finished(user_id: str) -> None:
+    """Mark the import job status as inactive for a specific user.
+
+    Args:
+        user_id: The unique user identifier.
+    """
     IMPORT_JOBS[user_id] = ImportJobStatus(running=False, started_at=None)
 
 
 def _run_import(datalog_path: str, user_id: str, from_date: str | None, cleanup_dir: str | None = None) -> None:
+    """Execute the import background script as a subprocess and clean up.
+
+    Args:
+        datalog_path: The filesystem path to the uploaded DATALOG folder.
+        user_id: The unique user identifier.
+        from_date: Optional start date filter for imported data.
+        cleanup_dir: Optional directory to recursively remove after completion.
+    """
     cmd = [
         sys.executable,
         str(IMPORTER_SCRIPT),
@@ -103,6 +156,19 @@ def start_datalog_upload(
     body: StartUploadRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """Initiate a multi-file datalog upload session.
+
+    Args:
+        body: The StartUploadRequest payload.
+        current_user: The authenticated user's details.
+
+    Returns:
+        A dictionary containing the generated upload_id and status message.
+
+    Raises:
+        HTTPException: If from_date is malformed, root_name is invalid or unsafe,
+            or the backend importer script is missing.
+    """
     normalized_from_date = None
     if body.from_date:
         normalized_from_date = body.from_date.replace("-", "")
@@ -140,6 +206,20 @@ def upload_datalog_batch(
     files: list[UploadFile] = File(...),
     current_user: dict = Depends(get_current_user),
 ):
+    """Upload a batch of files for an active datalog upload session.
+
+    Args:
+        upload_id: The unique identifier of the active upload session.
+        files: The list of UploadFile items.
+        current_user: The authenticated user's details.
+
+    Returns:
+        A dictionary showing acceptance status, uploaded file count, and total files in session.
+
+    Raises:
+        HTTPException: If the upload session is not found/authorized, if no files are provided,
+            or if any file path is malformed or unsafe.
+    """
     session = _require_session(upload_id, current_user["id"])
 
     if not files:
@@ -179,6 +259,19 @@ def finish_datalog_upload(
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
 ):
+    """Complete a datalog upload session and launch a background import job.
+
+    Args:
+        upload_id: The unique identifier of the active upload session.
+        background_tasks: FastAPI background tasks dependency.
+        current_user: The authenticated user's details.
+
+    Returns:
+        A status dictionary confirming the import has been scheduled.
+
+    Raises:
+        HTTPException: If the upload session is not found/authorized or if no files were uploaded.
+    """
     session = _require_session(upload_id, current_user["id"])
     if session.file_count == 0:
         raise HTTPException(status_code=400, detail="No files uploaded for this import session")
@@ -199,6 +292,18 @@ def finish_datalog_upload(
 
 
 def _require_session(upload_id: str, user_id: str) -> UploadSession:
+    """Retrieve an active upload session, validating ownership.
+
+    Args:
+        upload_id: The unique upload session ID.
+        user_id: The expected user owner ID.
+
+    Returns:
+        The matching UploadSession instance.
+
+    Raises:
+        HTTPException: If the session does not exist or does not belong to the user.
+    """
     session = UPLOAD_SESSIONS.get(upload_id)
     if session is None or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Upload session not found")
@@ -207,6 +312,14 @@ def _require_session(upload_id: str, user_id: str) -> UploadSession:
 
 @router.get("/status")
 def get_upload_status(current_user: dict = Depends(get_current_user)):
+    """Retrieve the current import status for the logged-in user.
+
+    Args:
+        current_user: The authenticated user's details.
+
+    Returns:
+        A dictionary containing running status and start timestamp.
+    """
     job = IMPORT_JOBS.get(current_user["id"])
     if job is None:
         return {"running": False, "started_at": None}
@@ -230,7 +343,9 @@ async def upload_oximeter_files(
 
     if machine_tz is not None:
         try:
-            timezone_name = normalize_timezone(machine_tz) or get_timezone_settings(db, current_user["id"])["machine_tz"]
+            timezone_name = (
+                normalize_timezone(machine_tz) or get_timezone_settings(db, current_user["id"])["machine_tz"]
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
@@ -265,8 +380,9 @@ def _import_oximeter_recording(
     recording: OximeterRecording,
     overwrite: bool,
 ) -> OximeterImportResult:
-    session = db.execute(
-        text("""
+    session = (
+        db.execute(
+            text("""
             WITH candidates AS (
                 SELECT
                     id::text AS id,
@@ -291,8 +407,11 @@ def _import_oximeter_recording(
             ORDER BY overlap_seconds DESC, ABS(EXTRACT(EPOCH FROM (start_datetime - :record_start))) ASC
             LIMIT 1
         """),
-        {"uid": user_id, "record_start": recording.started_at, "record_end": recording.ended_at},
-    ).mappings().first()
+            {"uid": user_id, "record_start": recording.started_at, "record_end": recording.ended_at},
+        )
+        .mappings()
+        .first()
+    )
 
     if session is None:
         return OximeterImportResult(

@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 
 def _seed_session(db, user_id: str, folder_date: date | None = None):
+    """Test  seed session."""
     if folder_date is None:
         folder_date = date.today()
     session_id = str(uuid.uuid4())
@@ -31,7 +32,10 @@ def _seed_session(db, user_id: str, folder_date: date | None = None):
 
 
 class TestListSessions:
+    """Test suite for list sessions."""
+
     def test_list_authenticated(self, client: TestClient, auth_headers, test_user, db):
+        """Test list authenticated."""
         _seed_session(db, test_user["id"])
         resp = client.get("/sessions/", headers=auth_headers)
         assert resp.status_code == 200
@@ -40,12 +44,16 @@ class TestListSessions:
         assert len(data) >= 1
 
     def test_list_unauthenticated(self, client: TestClient):
+        """Test list unauthenticated."""
         resp = client.get("/sessions/")
         assert resp.status_code == 401
 
 
 class TestGetSession:
+    """Test suite for get session."""
+
     def test_get_detail(self, client: TestClient, auth_headers, test_user, db):
+        """Test get detail."""
         sid = _seed_session(db, test_user["id"])
         resp = client.get(f"/sessions/{sid}", headers=auth_headers)
         assert resp.status_code == 200
@@ -60,6 +68,7 @@ class TestGetSession:
         assert data.get("machine_tz") is None
 
     def test_get_nonexistent(self, client: TestClient, auth_headers):
+        """Test get nonexistent."""
         fake_id = "00000000-0000-0000-0000-000000000000"
         resp = client.get(f"/sessions/{fake_id}", headers=auth_headers)
         assert resp.status_code == 404
