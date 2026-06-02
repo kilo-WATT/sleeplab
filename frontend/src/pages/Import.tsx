@@ -488,6 +488,7 @@ function collectEdfFilesFromInput(files: File[], rootName: string): SelectedImpo
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function collectOximeterFilesFromInput(files: File[]): File[] {
   return files
     .filter((file) => {

@@ -139,6 +139,7 @@ function AppLayout() {
   useEffect(() => {
     const storedTheme = window.localStorage.getItem('cpap-theme')
     if (storedTheme === 'light' || storedTheme === 'dark') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTheme(storedTheme)
       return
     }
@@ -153,6 +154,7 @@ function AppLayout() {
 
   useEffect(() => {
     if (!user || isLoading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsSyncing(false)
       wasSyncingRef.current = false
       window.sessionStorage.removeItem(IMPORT_SYNC_STORAGE_KEY)

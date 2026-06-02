@@ -19,6 +19,7 @@ export function useAISummary(enabled: boolean) {
 
   useEffect(() => {
     if (!enabled) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setData(null)
       setIsLoading(false)
       return

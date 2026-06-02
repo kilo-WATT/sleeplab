@@ -86,6 +86,7 @@ export default function SessionDetail() {
   const eventWindowCacheRef = useRef<Map<string, EventWindowResponse>>(new Map())
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setSpo2(null)
     setEquipment(null)

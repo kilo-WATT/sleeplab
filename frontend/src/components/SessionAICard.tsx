@@ -47,6 +47,7 @@ export default function SessionAICard({ sessionId }: { sessionId: string }) {
     if (aiConfigured !== true) {
       return
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setData(null)
     setExpanded(false)

@@ -424,6 +424,7 @@ function TrendAICard() {
     if (aiConfigured !== true) {
       return
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     api
       .getTrendAISummary(refreshState.force)
