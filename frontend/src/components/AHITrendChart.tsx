@@ -96,7 +96,7 @@ export default function AHITrendChart({ trend, perDayData, flaggedNights = [] }:
               <button
                 key={m.key}
                 type="button"
-                className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${
+                className={`rounded-full px-4 py-2 text-sm font-bold transition sm:px-3 sm:py-1.5 sm:text-xs ${
                   metric === m.key
                     ? 'bg-[var(--surface-strong)] text-[var(--accent)]'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
