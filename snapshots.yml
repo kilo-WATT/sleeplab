@@ -1,3 +1,5 @@
 snapshots:
   - name: "home-page"
     url: "/"
+  - name: "registration"
+    url: "/register"
