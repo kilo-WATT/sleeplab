@@ -568,7 +568,8 @@ def get_session_by_date(
                 (array_agg(s.therapy_mode    ORDER BY s.duration_seconds DESC))[1] AS therapy_mode,
                 (array_agg(s.mask_type       ORDER BY s.duration_seconds DESC))[1] AS mask_type,
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
-                (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c
+                (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
+                (array_agg(s.machine_tz      ORDER BY s.duration_seconds DESC))[1] AS machine_tz
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
             WHERE s.duration_seconds >= 600
