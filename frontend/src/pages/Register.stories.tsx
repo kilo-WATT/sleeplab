@@ -1,9 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react'
 import { fireEvent, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
 
 import { api } from '../api/client'
-import { AuthProvider } from '../context/AuthContext'
 import Register from './Register'
 
 // Ensure we are in a logged-out state for the stories
@@ -24,13 +22,7 @@ const meta: Meta<typeof Register> = {
     (Story) => {
       // Restore default behavior on every render
       api.register = originalRegister
-      return (
-        <MemoryRouter>
-          <AuthProvider>
-            <Story />
-          </AuthProvider>
-        </MemoryRouter>
-      )
+      return <Story />
     },
   ],
   parameters: {

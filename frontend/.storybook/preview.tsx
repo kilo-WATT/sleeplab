@@ -10,13 +10,16 @@ initialize({ onUnhandledRequest: 'bypass' });
 
 const preview: Preview = {
   decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <AuthProvider>
-          <Story />
-        </AuthProvider>
-      </MemoryRouter>
-    ),
+    (Story, context) => {
+      const initialEntries: string[] = context.parameters.initialEntries ?? ['/']
+      return (
+        <MemoryRouter initialEntries={initialEntries}>
+          <AuthProvider>
+            <Story />
+          </AuthProvider>
+        </MemoryRouter>
+      )
+    },
   ],
   loaders: [mswLoader],
   parameters: {

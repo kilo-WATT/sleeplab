@@ -1,18 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter } from 'react-router-dom';
 import Import, { OximeterImportSummary } from './Import';
 
 const meta = {
   title: 'Pages/Import',
   component: Import,
   tags: ['autodocs'],
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 } satisfies Meta<typeof Import>;
 
 export default meta;

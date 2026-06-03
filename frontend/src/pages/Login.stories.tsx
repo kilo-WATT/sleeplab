@@ -1,7 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react'
-import { MemoryRouter } from 'react-router-dom'
 
-import { AuthProvider } from '../context/AuthContext'
 import Login from './Login'
 
 const meta: Meta<typeof Login> = {
@@ -12,14 +10,7 @@ const meta: Meta<typeof Login> = {
     (Story) => {
       // Ensure we start in a logged-out state so the component doesn't immediately redirect
       window.localStorage.removeItem('cpap_auth_token')
-
-      return (
-        <MemoryRouter>
-          <AuthProvider>
-            <Story />
-          </AuthProvider>
-        </MemoryRouter>
-      )
+      return <Story />
     },
   ],
 }

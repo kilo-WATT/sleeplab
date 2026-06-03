@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react'
-import { MemoryRouter } from 'react-router-dom'
 
 import Dashboard from './Dashboard'
 import { api } from '../api/client'
@@ -115,13 +114,6 @@ const meta: Meta<typeof Dashboard> = {
   title: 'Pages/Dashboard',
   component: Dashboard,
   tags: ['autodocs', 'ai-generated'],
-  decorators: [
-    (Story) => (
-      <MemoryRouter>
-        <Story />
-      </MemoryRouter>
-    ),
-  ],
 }
 
 export default meta

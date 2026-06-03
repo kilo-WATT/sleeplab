@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import SessionDetail from './SessionDetail';
 import { api } from '../api/client';
 import type { EquipmentType } from '../api/client';
@@ -93,6 +93,9 @@ const meta: Meta<typeof SessionDetail> = {
   title: 'Pages/SessionDetail',
   component: SessionDetail,
   tags: ['autodocs', 'ai-generated'],
+  parameters: {
+    initialEntries: ['/sessions/2023-10-01'],
+  },
   decorators: [
     (Story, context) => {
       const session = context.parameters.sessionData !== undefined ? context.parameters.sessionData : mockSession;
@@ -132,11 +135,9 @@ const meta: Meta<typeof SessionDetail> = {
       }
 
       return (
-        <MemoryRouter initialEntries={['/sessions/2023-10-01']}>
-          <Routes>
-            <Route path="/sessions/:date" element={<Story />} />
-          </Routes>
-        </MemoryRouter>
+        <Routes>
+          <Route path="/sessions/:date" element={<Story />} />
+        </Routes>
       );
     },
   ],

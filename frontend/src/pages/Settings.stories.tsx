@@ -1,8 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { Route, Routes } from 'react-router-dom'
 
 import { api, authTokenStore, UnauthorizedError, type ImportSettings, type AuthUser } from '../api/client'
-import { AuthProvider } from '../context/AuthContext'
 import SettingsPage from './Settings'
 
 const mockUser: AuthUser = {
@@ -44,6 +43,9 @@ const meta = {
   title: 'Pages/SettingsPage',
   component: SettingsPage,
   tags: ['autodocs', 'ai-generated'],
+  parameters: {
+    initialEntries: ['/settings'],
+  },
   decorators: [
     (Story, context) => {
       const { mockAuth = true, mockSettings = defaultSettings, rejectSettings = false } = context.parameters
@@ -72,16 +74,12 @@ const meta = {
       api.deleteAllSessions = async () => {}
 
       return (
-        <MemoryRouter initialEntries={['/settings']}>
-          <AuthProvider>
-            <div className="p-4 bg-[var(--background)] min-h-screen">
-              <Routes>
-                <Route path="/settings" element={<Story />} />
-                <Route path="/login" element={<div className="p-4 text-[var(--danger-text)] text-center font-bold">Redirected to /login</div>} />
-              </Routes>
-            </div>
-          </AuthProvider>
-        </MemoryRouter>
+        <div className="p-4 bg-[var(--background)] min-h-screen">
+          <Routes>
+            <Route path="/settings" element={<Story />} />
+            <Route path="/login" element={<div className="p-4 text-[var(--danger-text)] text-center font-bold">Redirected to /login</div>} />
+          </Routes>
+        </div>
       )
     },
   ],

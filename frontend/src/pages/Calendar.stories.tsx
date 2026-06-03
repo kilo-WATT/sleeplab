@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react'
-import { MemoryRouter } from 'react-router-dom'
 import CalendarPage from './Calendar'
 import { api } from '../api/client'
 import type { SessionSummary } from '../api/client'
@@ -143,11 +142,7 @@ const meta: Meta<typeof CalendarPage> = {
       if (mockGetSessions) {
         api.getSessions = mockGetSessions
       }
-      return (
-        <MemoryRouter>
-          <Story />
-        </MemoryRouter>
-      )
+      return <Story />
     },
   ],
 }

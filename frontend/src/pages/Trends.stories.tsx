@@ -1,5 +1,4 @@
 import type { Meta, StoryObj } from '@storybook/react'
-import { MemoryRouter } from 'react-router-dom'
 import { api } from '../api/client'
 import type { SummaryStats, OverviewDailyStat, TrendAISummaryResponse, ImportSettings } from '../api/client'
 import TrendsPage from './Trends'
@@ -106,11 +105,7 @@ const meta: Meta<typeof TrendsPage> = {
       } else {
         Object.assign(api, defaultApiMocks)
       }
-      return (
-        <MemoryRouter>
-          <Story />
-        </MemoryRouter>
-      )
+      return <Story />
     }
   ]
 }
