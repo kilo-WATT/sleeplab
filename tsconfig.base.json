@@ -1,1 +1,5 @@
-{"compilerOptions": {}}
+{
+  "compilerOptions": {
+    "skipLibCheck": true
+  }
+}

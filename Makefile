@@ -62,6 +62,9 @@ test-backend-db: ## Run only DB-marked backend tests (requires Postgres)
 test-frontend: ## Run frontend unit tests with vitest (single run)
 	npm test --prefix frontend
 
+test-storybook: ## Run Storybook components tests with vitest (requires browser)
+	npm run test:storybook --prefix frontend
+
 test-watch: ## Run frontend tests in watch mode
 	npm run test:watch --prefix frontend
 
@@ -109,6 +112,12 @@ ci: lint typecheck test-backend test-frontend ## Full CI suite: lint → typeche
 
 docs-capture: build ## Orchestrates the Vite preview server and Playwright script
 	npm run docs-capture
+
+storybook: ## Start the Storybook server
+	npx nx run frontend:storybook
+
+docs-storybook: ## Build Storybook static documentation
+	npx nx run frontend:build-storybook
 
 clean: ## Remove build artifacts and reset Nx cache
 	rm -rf frontend/dist node_modules docs/public/ui-snapshots
