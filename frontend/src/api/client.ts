@@ -34,7 +34,7 @@ export interface LoginRequest {
   password: string
 }
 
-export interface RegisterRequest extends LoginRequest {}
+export type RegisterRequest = LoginRequest
 
 export interface UpdateProfileRequest {
   first_name: string
