@@ -49,3 +49,6 @@ venv/
 # Local temp / upload artifacts
 tmp/
 *.tmp
+
+
+storybook-static
