@@ -103,6 +103,8 @@ export default function SettingsPage() {
     if (!user) {
       return
     }
+    // Mirror the authenticated profile into editable form fields when the user changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFirstName(user.first_name)
     setLastName(user.last_name)
     setEmail(user.email)
