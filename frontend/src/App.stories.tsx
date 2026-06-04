@@ -6,6 +6,7 @@ const meta = {
   component: App,
   parameters: {
     layout: 'fullscreen',
+    skipGlobalRouter: true,
   },
   tags: ['autodocs', 'ai-generated'],
 } satisfies Meta<typeof App>;

@@ -11,6 +11,9 @@ initialize({ onUnhandledRequest: 'bypass' });
 const preview: Preview = {
   decorators: [
     (Story, context) => {
+      if (context.parameters.skipGlobalRouter) {
+        return <Story />
+      }
       const initialEntries: string[] = context.parameters.initialEntries ?? ['/']
       return (
         <MemoryRouter initialEntries={initialEntries}>
