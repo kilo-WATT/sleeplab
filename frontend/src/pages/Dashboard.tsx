@@ -12,6 +12,8 @@ import { ChevronRightIcon } from '../components/icons/ChevronIcons'
 import InfoPopover from '../components/InfoPopover'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Input } from '../components/ui/input'
+import { Label } from '../components/ui/label'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
 
 function ahiTone(ahi: number | null) {
@@ -57,13 +59,39 @@ function buildPrimaryByDate(sessions: SessionSummary[]): Map<string, SessionSumm
   return map
 }
 
+function formatInputDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function compactDate(value: string) {
+  return value.replaceAll('-', '')
+}
+
+function defaultReportRange() {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(to.getDate() - 29)
+  return {
+    from: formatInputDate(from),
+    to: formatInputDate(to),
+  }
+}
+
 export default function Dashboard() {
+  const initialReportRange = defaultReportRange()
   const [summary, setSummary] = useState<SummaryStats | null>(null)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [wearableSummary, setWearableSummary] = useState<WearableDailySummary[]>([])
   const [calendarMetric, setCalendarMetric] = useState<CalendarMetric>('ahi')
+  const [reportFrom, setReportFrom] = useState(initialReportRange.from)
+  const [reportTo, setReportTo] = useState(initialReportRange.to)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadDashboard() {
@@ -240,6 +268,37 @@ export default function Dashboard() {
     { key: 'usage', label: 'Usage' },
     { key: 'leak',  label: 'Leak' },
   ]
+
+  async function handleDownloadReport() {
+    setReportError(null)
+    if (!reportFrom || !reportTo) {
+      setReportError('Choose a start and end date.')
+      return
+    }
+    if (reportTo < reportFrom) {
+      setReportError('End date must be on or after start date.')
+      return
+    }
+
+    const fromCompact = compactDate(reportFrom)
+    const toCompact = compactDate(reportTo)
+    setReportLoading(true)
+    try {
+      const blob = await api.downloadSessionReportPdf(fromCompact, toCompact)
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `sleeplab-report-${fromCompact}-${toCompact}.pdf`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : 'Could not download report.')
+    } finally {
+      setReportLoading(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-5 sm:gap-8">
@@ -439,7 +498,42 @@ export default function Dashboard() {
         />
       </div>
 
-      <Card className="order-5 md:hidden">
+      <Card className="order-5">
+        <CardHeader>
+          <CardTitle>Doctor Report</CardTitle>
+          <CardDescription>Export a PDF therapy summary for a selected date range.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+            <div className="space-y-1.5">
+              <Label htmlFor="report-from">From</Label>
+              <Input
+                id="report-from"
+                type="date"
+                value={reportFrom}
+                onChange={(event) => setReportFrom(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="report-to">To</Label>
+              <Input
+                id="report-to"
+                type="date"
+                value={reportTo}
+                onChange={(event) => setReportTo(event.target.value)}
+              />
+            </div>
+            <Button className="w-full sm:w-auto" onClick={() => void handleDownloadReport()} disabled={reportLoading}>
+              {reportLoading ? 'Downloading...' : 'Download Report'}
+            </Button>
+          </div>
+          {reportError && (
+            <p className="mt-3 text-sm font-semibold text-[var(--danger-text)]">{reportError}</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="order-6 md:hidden">
         <CardHeader>
           <div className="flex flex-col gap-3">
             <div>
@@ -470,7 +564,7 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <div className="order-6 md:order-5">
+      <div className="order-7 md:order-5">
         <WearableSleepSummaryChart data={wearableSummary} />
       </div>
     </div>
