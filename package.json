@@ -14,7 +14,8 @@
     "check:workspace-lockfile": "node scripts/check-workspace-lockfile.mjs"
   },
   "optionalDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "1.0.2"
+    "@rolldown/binding-linux-x64-gnu": "1.0.2",
+    "lightningcss-linux-x64-gnu": "1.32.0"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",

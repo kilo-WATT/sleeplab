@@ -17,27 +17,53 @@ if (!fs.existsSync(rootLockPath)) {
 const lock = JSON.parse(fs.readFileSync(rootLockPath, "utf8"));
 const packages = lock.packages ?? {};
 const rolldown = packages["node_modules/rolldown"] ?? packages["frontend/node_modules/rolldown"];
+const lightningcss =
+  packages["node_modules/lightningcss"] ?? packages["frontend/node_modules/lightningcss"];
 
 if (!rolldown) {
   console.error("rolldown is missing from the root workspace lockfile.");
   process.exit(1);
 }
 
-const linuxBinding = "@rolldown/binding-linux-x64-gnu";
-const optionalBindings = rolldown.optionalDependencies ?? {};
-
-if (!(linuxBinding in optionalBindings)) {
-  console.error("rolldown is missing the linux-x64-gnu optional binding in the root workspace lockfile.");
+if (!lightningcss) {
+  console.error("lightningcss is missing from the root workspace lockfile.");
   process.exit(1);
 }
 
-const bindingEntries = [
-  `node_modules/${linuxBinding}`,
-  `frontend/node_modules/${linuxBinding}`,
+const requiredBindings = [
+  {
+    name: "@rolldown/binding-linux-x64-gnu",
+    owner: "rolldown",
+    dependencies: rolldown.optionalDependencies ?? {},
+  },
+  {
+    name: "lightningcss-linux-x64-gnu",
+    owner: "lightningcss",
+    dependencies: lightningcss.optionalDependencies ?? {},
+  },
 ];
 
-if (!bindingEntries.some((entry) => packages[entry])) {
-  console.error("Root workspace lockfile is missing the linux-x64-gnu rolldown binding entry.");
+for (const binding of requiredBindings) {
+  if (!(binding.name in binding.dependencies)) {
+    console.error(`${binding.owner} is missing the ${binding.name} optional binding in the root workspace lockfile.`);
+    process.exit(1);
+  }
+}
+
+for (const binding of requiredBindings) {
+  const bindingEntries = [
+    `node_modules/${binding.name}`,
+    `frontend/node_modules/${binding.name}`,
+  ];
+
+  if (!bindingEntries.some((entry) => packages[entry])) {
+    console.error(`Root workspace lockfile is missing the ${binding.name} entry.`);
+    process.exit(1);
+  }
+}
+
+if (!("@rolldown/binding-linux-x64-gnu" in (rolldown.optionalDependencies ?? {}))) {
+  console.error("rolldown is missing the linux-x64-gnu optional binding in the root workspace lockfile.");
   process.exit(1);
 }
 
