@@ -424,6 +424,7 @@ function TrendAICard() {
     if (aiConfigured !== true) {
       return
     }
+    // Reset the AI trend card before fetching fresh analysis for the selected refresh state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     api
