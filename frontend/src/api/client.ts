@@ -60,6 +60,8 @@ export interface StartImportResponse {
 export interface ImportStatusResponse {
   running: boolean
   started_at: string | null
+  status: 'running' | 'completed' | 'failed'
+  message: string | null
 }
 
 export interface OximeterImportResult {
@@ -72,6 +74,8 @@ export interface OximeterImportResult {
 }
 
 export interface OximeterImportResponse {
+  status: 'completed' | 'partial' | 'failed'
+  message: string
   imported: number
   skipped: number
   unmatched: number
