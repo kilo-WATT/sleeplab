@@ -211,6 +211,7 @@ export interface SessionSummary {
   machine_tz: string | null
 }
 
+/** Score breakdown for a single therapy metric (AHI, leak, duration, or SpO2). */
 export interface TherapyScoreComponent {
   score: number
   max_score: number
@@ -220,6 +221,7 @@ export interface TherapyScoreComponent {
   unavailable_reason: string | null
 }
 
+/** Overall nightly therapy quality score (0–100) with letter grade and per-metric breakdown. */
 export interface TherapyScore {
   total: number
   grade: 'A' | 'B' | 'C' | 'D' | 'F'
@@ -254,6 +256,7 @@ export interface SessionDetail extends SessionSummary {
   temperature_c: number | null
 }
 
+/** Aggregated AHI comparison for nights carrying a specific user-applied tag vs. untagged baseline. */
 export interface TagInsight {
   tag: string
   night_count: number
