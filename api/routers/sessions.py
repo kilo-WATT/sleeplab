@@ -620,7 +620,7 @@ def get_session(
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
                 (array_agg(s.machine_tz      ORDER BY s.duration_seconds DESC))[1] AS machine_tz,
                 NULL AS manufacturer,
-                TRUE AS parser_validated
+                TRUE AS parser_validated,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
                 COALESCE((
                     SELECT s2.tags
@@ -1204,7 +1204,7 @@ def get_session_by_date(
                       AND s2.tags IS NOT NULL
                     ORDER BY s2.duration_seconds DESC
                     LIMIT 1
-                ), ARRAY[]::text[]) AS tags
+                ), ARRAY[]::text[]) AS tags,
                 NULL AS manufacturer,
                 TRUE AS parser_validated
             FROM sessions s
