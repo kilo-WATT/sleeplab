@@ -9,6 +9,7 @@ class SessionSummary(BaseModel):
     folder_date: date
     block_index: int
     start_datetime: datetime
+    end_datetime: datetime | None = None
     duration_seconds: int
     ahi: Optional[float]
     central_apnea_count: int
