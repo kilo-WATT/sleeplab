@@ -14,10 +14,8 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import (
-    EquipmentResponse,
     EventRecord,
     EventWindowResponse,
-    InferredEquipment,
     MetricsResponse,
     SessionDetail,
     SessionSummary,
@@ -77,7 +75,7 @@ def _manufacturer_select_expression(db: Session) -> str:
         return (
             "COALESCE("
             "(array_agg(s.manufacturer ORDER BY s.duration_seconds DESC) "
-            "FILTER (WHERE s.manufacturer IS NOT NULL))[1], "
+            "FILTER (WHERE s.manufacturer IS NOT NULL AND s.manufacturer <> ''))[1], "
             "'Unknown'"
             ") AS manufacturer"
         )
@@ -465,6 +463,7 @@ def list_sessions(
                 (array_agg(id::text ORDER BY duration_seconds DESC))[1] AS id,
                 (array_agg(session_id ORDER BY duration_seconds DESC))[1] AS session_id,
                 MIN(start_datetime) AS start_datetime,
+                MAX(start_datetime + (duration_seconds || ' seconds')::interval) AS end_datetime,
                 0 AS block_index,
                 SUM(duration_seconds) AS duration_seconds,
                 SUM(total_ahi_events) AS total_ahi_events,
@@ -488,7 +487,7 @@ def list_sessions(
             {"AND" if where else "WHERE"} duration_seconds >= 600
             GROUP BY folder_date
         )
-        SELECT id, session_id, folder_date, block_index, start_datetime, duration_seconds,
+        SELECT id, session_id, folder_date, block_index, start_datetime, end_datetime, duration_seconds,
                ahi, central_apnea_count, obstructive_apnea_count, hypopnea_count,
                apnea_count, arousal_count, total_ahi_events,
                avg_pressure, p95_pressure, avg_leak, has_spo2, machine_tz
@@ -578,8 +577,10 @@ def get_session(
     db: Session = Depends(get_db),
 ):
     """Full session detail — aggregated across all blocks for the night."""
+    manufacturer_select = _manufacturer_select_expression(db)
+
     row = db.execute(
-        text("""
+        text(f"""
             WITH night AS (
                 SELECT folder_date, user_id
                 FROM sessions
@@ -591,6 +592,7 @@ def get_session(
                 s.folder_date,
                 0 AS block_index,
                 MIN(s.start_datetime) AS start_datetime,
+                MAX(s.start_datetime + (s.duration_seconds || ' seconds')::interval) AS end_datetime,
                 MIN(s.start_datetime) AS pld_start_datetime,
                 SUM(s.duration_seconds) AS duration_seconds,
                 SUM(s.total_ahi_events) AS total_ahi_events,
@@ -619,7 +621,7 @@ def get_session(
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
                 (array_agg(s.machine_tz      ORDER BY s.duration_seconds DESC))[1] AS machine_tz,
-                NULL AS manufacturer,
+                {manufacturer_select},
                 TRUE AS parser_validated,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
                 COALESCE((
@@ -1102,28 +1104,30 @@ def _session_detail_response(row, user_id: str, db: Session) -> SessionDetail:
 
 
 def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: Session) -> float | None:
+    manufacturer_select = _manufacturer_select_expression(db)
+
     rows = db.execute(
-        text("""
+        text(f"""
             SELECT
-                folder_date,
-                SUM(duration_seconds) AS duration_seconds,
-                SUM(total_ahi_events) AS total_ahi_events,
-                AVG(avg_leak) AS avg_leak,
-                BOOL_OR(has_spo2) AS has_spo2,
-                CASE WHEN SUM(duration_seconds) > 0
-                     THEN ROUND((SUM(total_ahi_events) / (SUM(duration_seconds) / 3600.0))::numeric, 2)
+                s.folder_date,
+                SUM(s.duration_seconds) AS duration_seconds,
+                SUM(s.total_ahi_events) AS total_ahi_events,
+                AVG(s.avg_leak) AS avg_leak,
+                BOOL_OR(s.has_spo2) AS has_spo2,
+                CASE WHEN SUM(s.duration_seconds) > 0
+                     THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
                      ELSE NULL END AS ahi,
-                AVG(avg_spo2) AS avg_spo2,
-                MIN(min_spo2) AS min_spo2,
-                NULL AS manufacturer,
+                AVG(s.avg_spo2) AS avg_spo2,
+                MIN(s.min_spo2) AS min_spo2,
+                {manufacturer_select},
                 TRUE AS parser_validated
-            FROM sessions
-            WHERE user_id = CAST(:uid AS uuid)
-              AND duration_seconds >= 600
-              AND folder_date >= CAST(:folder_date AS date) - INTERVAL '30 days'
-              AND folder_date < CAST(:folder_date AS date)
-            GROUP BY folder_date
-            ORDER BY folder_date
+            FROM sessions s
+            WHERE s.user_id = CAST(:uid AS uuid)
+              AND s.duration_seconds >= 600
+              AND s.folder_date >= CAST(:folder_date AS date) - INTERVAL '30 days'
+              AND s.folder_date < CAST(:folder_date AS date)
+            GROUP BY s.folder_date
+            ORDER BY s.folder_date
         """),
         {"uid": user_id, "folder_date": folder_date},
     ).mappings().all()
@@ -1157,8 +1161,10 @@ def get_session_by_date(
     db: Session = Depends(get_db),
 ):
     """Get session detail by date (YYYY-MM-DD)."""
+    manufacturer_select = _manufacturer_select_expression(db)
+
     row = db.execute(
-        text("""
+        text(f"""
             WITH night AS (
                 SELECT folder_date, user_id
                 FROM sessions
@@ -1171,6 +1177,7 @@ def get_session_by_date(
                 s.folder_date,
                 0 AS block_index,
                 MIN(s.start_datetime) AS start_datetime,
+                MAX(s.start_datetime + (s.duration_seconds || ' seconds')::interval) AS end_datetime,
                 MIN(s.start_datetime) AS pld_start_datetime,
                 SUM(s.duration_seconds) AS duration_seconds,
                 SUM(s.total_ahi_events) AS total_ahi_events,
@@ -1209,7 +1216,7 @@ def get_session_by_date(
                     ORDER BY s2.duration_seconds DESC
                     LIMIT 1
                 ), ARRAY[]::text[]) AS tags,
-                NULL AS manufacturer,
+                {manufacturer_select},
                 TRUE AS parser_validated
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id

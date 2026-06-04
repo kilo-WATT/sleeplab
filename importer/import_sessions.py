@@ -238,6 +238,7 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
                 'pld_start_datetime': pld_start,
                 'duration_seconds':   duration_s,
                 'device_serial':      pld_header.device_serial or None,
+                'manufacturer':       'ResMed',
                 'has_spo2':           spo2_data is not None,
                 'therapy_mode':       None,
                 'mask_type':          None,
