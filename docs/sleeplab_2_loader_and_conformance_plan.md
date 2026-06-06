@@ -52,6 +52,13 @@ Research baseline:
 - This plan was based on current `cpap-parser` commit `37394cf` and OSCAR's
   local `master` checkout.
 
+This branch also contains an executable, persistence-independent prototype in
+`importer/loaders/`. It registers structural adapters for ResMed, Philips
+Respironics, Lowenstein, Fisher & Paykel, and BMC; reports evidence, identity,
+and capabilities; and deliberately leaves full import unimplemented. Run
+`python -m importer.loaders <sd-card-or-archive-root>` to inspect a source
+without changing production import behavior.
+
 ## OSCAR detection lifecycle
 
 OSCAR's lifecycle is distributed across a small base interface, a loader
@@ -219,7 +226,6 @@ multiple machines.
 class DetectedDevice:
     adapter_id: str
     source_root: Path
-    canonical_root: Path
     device_path: Path
     manufacturer_hint: str | None
     family_hint: str | None
@@ -486,21 +492,24 @@ matching adapter. When two candidates are close:
 This directly addresses `cpap-parser`'s current first-`can_handle()`-wins
 behavior.
 
-### Canonical root selection
+### Explicit source root
 
-Detectors should search a small bounded ancestor/descendant window and return a
-canonical root:
+The public operation is **Select SD Card / Root Folder**. The detector receives
+that directory as `source_root` and inspects only that root and
+manufacturer-defined paths below it. It must not search parents, reinterpret a
+selected `DATALOG` or `P-Series` directory, or recursively scan unrelated
+directories.
 
-- if a user selects ResMed `DATALOG`, return its parent containing `STR.edf`;
-- if a user selects PRS1 `P-Series`, return its parent card root;
-- if a user selects an individual PRS1 machine directory, return both card root
-  and device path;
-- if a ZIP adds one wrapper directory, unwrap only when that directory is the
-  sole non-metadata child;
-- do not recursively scan an arbitrary server filesystem.
+Archive extraction is a separate source-preparation step. If an archive has a
+single wrapper directory, the extraction coordinator may offer that directory
+as the root before invoking detection. That decision and its provenance belong
+to the coordinator, not to a manufacturer adapter.
 
-The source selection and canonical root must both be retained in
-`DetectedDevice` for diagnostics.
+Selecting ResMed `DATALOG`, PRS1 `P-Series`, or an individual machine
+subdirectory therefore returns no match. The UI should explain that the user
+must select the SD-card or extracted-archive root. `DetectedDevice.source_root`
+retains the exact inspected root, while `device_path` identifies a machine
+directory discovered beneath it.
 
 ### Multiple machines
 
