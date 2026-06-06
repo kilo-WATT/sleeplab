@@ -18,13 +18,18 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from db import (
     clear_session_waveform,
+    finish_import_run,
     get_conn,
-    get_session_db_id,
+    reconcile_machine,
+    replace_derived_values,
     replace_session_events,
     replace_session_metrics,
     replace_session_spo2,
     replace_session_waveform,
+    replace_signal_channels,
+    source_file_id,
     upsert_session,
+    upsert_session_block,
 )
 from edf_parser import parse_brp, parse_eve, parse_pld, parse_sa2, read_header
 
@@ -215,7 +220,18 @@ def events_for_block(events: list, csl_start: datetime, block_start: datetime, d
     return assigned
 
 
-def import_folder(folder: Path, folder_date: date, conn, user_id: str):
+def import_folder(
+    folder: Path,
+    folder_date: date,
+    conn,
+    user_id: str,
+    *,
+    import_run_id: str | None = None,
+    machine_id: str | None = None,
+    adapter_id: str = "resmed-native-v2",
+    source_root: Path | None = None,
+    run_stats: dict | None = None,
+):
     blocks = discover_session_blocks(folder)
     if not blocks:
         return 0
@@ -285,9 +301,83 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
                 'user_id':            user_id,
                 **summary,
             }
+            if import_run_id:
+                resolved_machine_id = machine_id or reconcile_machine(
+                    conn,
+                    user_id=user_id,
+                    adapter_id=adapter_id,
+                    manufacturer="ResMed",
+                    serial_number=pld_header.device_serial or None,
+                )
+                session_data.update(
+                    {
+                        "machine_id": resolved_machine_id,
+                        "import_run_id": import_run_id,
+                        "source_session_key": session_id,
+                        "provenance_status": "native_resmed_partial",
+                    }
+                )
 
             session_db_id = upsert_session(conn, session_data)
-            replace_session_events(conn, session_db_id, events, csl_start)
+            if import_run_id:
+                pld_source_id = source_file_id(
+                    conn,
+                    import_run_id,
+                    _relative_source_path(block["pld_path"], source_root),
+                )
+                event_source_id = source_file_id(
+                    conn,
+                    import_run_id,
+                    _relative_source_path(block["eve_path"], source_root),
+                )
+                csl_source_id = source_file_id(
+                    conn,
+                    import_run_id,
+                    _relative_source_path(block["csl_path"], source_root),
+                )
+                source_ids = [value for value in (pld_source_id, event_source_id, csl_source_id) if value]
+                replace_session_events(
+                    conn,
+                    session_db_id,
+                    events,
+                    csl_start,
+                    import_run_id=import_run_id,
+                    source_file_id_value=event_source_id,
+                    adapter_id=adapter_id,
+                )
+                upsert_session_block(
+                    conn,
+                    session_db_id=str(session_db_id),
+                    import_run_id=import_run_id,
+                    source_block_key=f"{session_id}:therapy",
+                    start_datetime=pld_start,
+                    end_datetime=pld_start + timedelta(seconds=duration_s),
+                    source_file_ids=source_ids,
+                )
+                channel_count = replace_signal_channels(
+                    conn,
+                    session_db_id=str(session_db_id),
+                    import_run_id=import_run_id,
+                    source_file_id_value=pld_source_id,
+                    adapter_id=adapter_id,
+                    header=pld_header,
+                )
+                derived_count = replace_derived_values(
+                    conn,
+                    user_id=user_id,
+                    machine_id=resolved_machine_id,
+                    session_db_id=str(session_db_id),
+                    import_run_id=import_run_id,
+                    adapter_id=adapter_id,
+                    summary=summary,
+                )
+                if run_stats is not None:
+                    run_stats["blocks"] = run_stats.get("blocks", 0) + 1
+                    run_stats["events"] = run_stats.get("events", 0) + len(events)
+                    run_stats["channels"] = run_stats.get("channels", 0) + channel_count
+                    run_stats["derived_values"] = run_stats.get("derived_values", 0) + derived_count
+            else:
+                replace_session_events(conn, session_db_id, events, csl_start)
             replace_session_metrics(conn, session_db_id, pld_header, pld_channels, pld_start)
 
             if spo2_data and spo2_header:
@@ -300,8 +390,19 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
         except Exception as e:
             conn.rollback()
             print(f"    ERROR block {block_idx} ({session_id}): {e}")
+            if run_stats is not None:
+                run_stats.setdefault("errors", []).append(f"{session_id}: {e}")
 
     return imported
+
+
+def _relative_source_path(path: Path | None, source_root: Path | None) -> str | None:
+    if path is None or source_root is None:
+        return None
+    try:
+        return path.resolve().relative_to(source_root.resolve()).as_posix()
+    except ValueError:
+        return None
 
 
 def replace_waveforms_for_block(conn, session_db_id: str, block: dict, events: list, csl_start, machine_tz: ZoneInfo) -> bool:
@@ -375,6 +476,10 @@ def parse_args():
     parser.add_argument("--user-id", required=True, dest="user_id", help="User UUID to associate sessions with")
     parser.add_argument("--folder", help="Import only this folder (YYYYMMDD)")
     parser.add_argument("--from", dest="from_date", help="Import folders from this date onward (YYYYMMDD)")
+    parser.add_argument("--import-run-id")
+    parser.add_argument("--machine-id")
+    parser.add_argument("--adapter-id", default="resmed-native-v2")
+    parser.add_argument("--source-root")
     return parser.parse_args()
 
 
@@ -383,6 +488,9 @@ def main():
     datalog = Path(args.datalog)
     user_id = args.user_id
     conn = get_conn()
+    run_stats = {"blocks": 0, "events": 0, "channels": 0, "derived_values": 0}
+    errors: list[str] = run_stats.setdefault("errors", [])
+    source_root = Path(args.source_root) if args.source_root else None
 
     if args.folder:
         folder = datalog / args.folder
@@ -390,8 +498,29 @@ def main():
             print(f"Folder not found: {folder}")
             sys.exit(1)
         folder_date = date(int(args.folder[:4]), int(args.folder[4:6]), int(args.folder[6:8]))
-        n = import_folder(folder, folder_date, conn, user_id)
+        n = import_folder(
+            folder,
+            folder_date,
+            conn,
+            user_id,
+            import_run_id=args.import_run_id,
+            machine_id=args.machine_id,
+            adapter_id=args.adapter_id,
+            source_root=source_root,
+            run_stats=run_stats,
+        )
         print(f"{args.folder}: {n} session block(s) imported")
+        if args.import_run_id:
+            finish_import_run(
+                conn,
+                args.import_run_id,
+                status="success" if n else "partial",
+                imported_sessions=n,
+                imported_blocks=run_stats["blocks"],
+                imported_events=run_stats["events"],
+                imported_channels=run_stats["channels"],
+                errors=[] if n else ["No importable session blocks were found."],
+            )
         conn.close()
         return
 
@@ -409,7 +538,22 @@ def main():
             continue
 
         print(f"  {folder.name} ... ", end="", flush=True)
-        n = import_folder(folder, folder_date, conn, user_id)
+        try:
+            n = import_folder(
+                folder,
+                folder_date,
+                conn,
+                user_id,
+                import_run_id=args.import_run_id,
+                machine_id=args.machine_id,
+                adapter_id=args.adapter_id,
+                source_root=source_root,
+                run_stats=run_stats,
+            )
+        except Exception as exc:
+            errors.append(f"{folder.name}: {exc}")
+            print(f"ERROR: {exc}")
+            continue
         if n > 0:
             print(f"{n} block(s)")
             total_sessions += n
@@ -417,6 +561,22 @@ def main():
         else:
             print("(empty)")
 
+    if args.import_run_id:
+        status = "success"
+        if errors and total_sessions:
+            status = "partial"
+        elif errors or not total_sessions:
+            status = "failed"
+        finish_import_run(
+            conn,
+            args.import_run_id,
+            status=status,
+            imported_sessions=total_sessions,
+            imported_blocks=run_stats["blocks"],
+            imported_events=run_stats["events"],
+            imported_channels=run_stats["channels"],
+            errors=errors or ([] if total_sessions else ["No importable session blocks were found."]),
+        )
     conn.close()
     print(f"\nDone. {total_sessions} session blocks imported across {total_folders} nights.")
 

@@ -2,6 +2,7 @@
 PostgreSQL connection and upsert helpers for the CPAP importer.
 """
 
+import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -36,6 +37,127 @@ def get_conn() -> Any:
         A psycopg2 connection object initialized with DB_DSN.
     """
     return psycopg2.connect(DB_DSN)
+
+
+def reconcile_machine(
+    conn: Any,
+    *,
+    user_id: str,
+    adapter_id: str,
+    manufacturer: str | None,
+    serial_number: str | None,
+) -> str:
+    """Find or create a deterministic machine record for direct/legacy imports."""
+
+    serial = serial_number.strip() if serial_number and serial_number.strip() else None
+    identity_key = (
+        f"{adapter_id}:serial:{serial.casefold()}"
+        if serial
+        else f"{adapter_id}:unresolved-user:{user_id}"
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO cpap_machines (
+                user_id, manufacturer, serial_number, adapter_id, identity_key,
+                identity_confidence, support_status, validation_status,
+                source_identity, last_seen_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, 'experimental', 'partial',
+                '{"source":"native-import-fallback"}'::jsonb, NOW(), NOW()
+            )
+            ON CONFLICT (user_id, identity_key) DO UPDATE SET
+                manufacturer = COALESCE(EXCLUDED.manufacturer, cpap_machines.manufacturer),
+                serial_number = COALESCE(EXCLUDED.serial_number, cpap_machines.serial_number),
+                last_seen_at = NOW(),
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (user_id, manufacturer, serial, adapter_id, identity_key, "probable" if serial else "none"),
+        )
+        return str(cur.fetchone()[0])
+
+
+def finish_import_run(
+    conn: Any,
+    import_run_id: str,
+    *,
+    status: str,
+    imported_sessions: int,
+    imported_blocks: int,
+    imported_events: int,
+    imported_channels: int,
+    errors: list[str],
+) -> None:
+    """Finalize a durable import run after native importer execution."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE import_source_files
+            SET disposition = 'skipped',
+                warning_state = warning_state || '[{"code":"not_consumed","message":"File was inspected but not consumed by the execution adapter."}]'::jsonb
+            WHERE import_run_id = %s AND disposition = 'unknown'
+            """,
+            (import_run_id,),
+        )
+        cur.execute(
+            """
+            UPDATE import_runs
+            SET status = %s,
+                imported_session_count = %s,
+                imported_block_count = %s,
+                imported_event_count = %s,
+                imported_channel_count = %s,
+                errors = %s::jsonb,
+                skipped_files = (
+                    SELECT COALESCE(
+                        jsonb_agg(jsonb_build_object(
+                            'path', relative_path,
+                            'role', parser_role,
+                            'reason', 'not_consumed'
+                        ) ORDER BY relative_path),
+                        '[]'::jsonb
+                    )
+                    FROM import_source_files
+                    WHERE import_run_id = %s AND disposition = 'skipped'
+                ),
+                completed_at = NOW(),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (
+                status,
+                imported_sessions,
+                imported_blocks,
+                imported_events,
+                imported_channels,
+                json.dumps([{"code": "native_import_error", "message": error} for error in errors]),
+                import_run_id,
+                import_run_id,
+            ),
+        )
+    conn.commit()
+
+
+def source_file_id(conn: Any, import_run_id: str | None, relative_path: str | None) -> str | None:
+    """Resolve one persisted manifest entry and mark it used."""
+
+    if not import_run_id or not relative_path:
+        return None
+    normalized = relative_path.replace("\\", "/")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE import_source_files
+            SET disposition = 'used'
+            WHERE import_run_id = %s AND relative_path = %s
+            RETURNING id
+            """,
+            (import_run_id, normalized),
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row else None
 
 
 def session_exists(conn: Any, user_id: str, session_id: str) -> bool:
@@ -91,6 +213,17 @@ def upsert_session(conn: Any, data: dict) -> int:
     data.setdefault("manufacturer", None)
     data.setdefault("leak_kind", None)
     data.setdefault("leak_unit", None)
+    if not data.get("machine_id"):
+        data["machine_id"] = reconcile_machine(
+            conn,
+            user_id=data["user_id"],
+            adapter_id=data.get("adapter_id") or "legacy-session-v1",
+            manufacturer=data.get("manufacturer"),
+            serial_number=data.get("device_serial"),
+        )
+    data.setdefault("import_run_id", None)
+    data.setdefault("source_session_key", data["session_id"])
+    data.setdefault("provenance_status", "legacy_unknown")
     sql = """
     INSERT INTO sessions (
         session_id, folder_date, block_index, start_datetime, pld_start_datetime,
@@ -100,7 +233,8 @@ def upsert_session(conn: Any, data: dict) -> int:
         avg_pressure, p95_pressure, avg_leak, avg_resp_rate, avg_tidal_vol,
         avg_min_vent, avg_snore, avg_flow_lim, has_spo2,
         therapy_mode, mask_type, humidity_level, temperature_c,
-        machine_tz, manufacturer, leak_kind, leak_unit, user_id, updated_at
+        machine_tz, manufacturer, leak_kind, leak_unit, user_id,
+        machine_id, import_run_id, source_session_key, provenance_status, updated_at
     ) VALUES (
         %(session_id)s, %(folder_date)s, %(block_index)s, %(start_datetime)s, %(pld_start_datetime)s,
         %(duration_seconds)s, %(device_serial)s, %(ahi)s,
@@ -109,9 +243,12 @@ def upsert_session(conn: Any, data: dict) -> int:
         %(avg_pressure)s, %(p95_pressure)s, %(avg_leak)s, %(avg_resp_rate)s, %(avg_tidal_vol)s,
         %(avg_min_vent)s, %(avg_snore)s, %(avg_flow_lim)s, %(has_spo2)s,
         %(therapy_mode)s, %(mask_type)s, %(humidity_level)s, %(temperature_c)s,
-        %(machine_tz)s, %(manufacturer)s, %(leak_kind)s, %(leak_unit)s, %(user_id)s, NOW()
+        %(machine_tz)s, %(manufacturer)s, %(leak_kind)s, %(leak_unit)s, %(user_id)s,
+        %(machine_id)s, %(import_run_id)s, %(source_session_key)s, %(provenance_status)s, NOW()
     )
-    ON CONFLICT (user_id, session_id) DO UPDATE SET
+    ON CONFLICT (machine_id, source_session_key)
+        WHERE machine_id IS NOT NULL AND source_session_key IS NOT NULL
+    DO UPDATE SET
         folder_date             = EXCLUDED.folder_date,
         block_index             = EXCLUDED.block_index,
         start_datetime          = EXCLUDED.start_datetime,
@@ -142,6 +279,8 @@ def upsert_session(conn: Any, data: dict) -> int:
         manufacturer            = COALESCE(NULLIF(EXCLUDED.manufacturer, ''), NULLIF(sessions.manufacturer, '')),
         leak_kind               = COALESCE(EXCLUDED.leak_kind, sessions.leak_kind),
         leak_unit               = COALESCE(EXCLUDED.leak_unit, sessions.leak_unit),
+        import_run_id           = COALESCE(EXCLUDED.import_run_id, sessions.import_run_id),
+        provenance_status       = EXCLUDED.provenance_status,
         -- user_id intentionally excluded: re-import must not change ownership
         updated_at              = NOW()
     RETURNING id
@@ -151,7 +290,16 @@ def upsert_session(conn: Any, data: dict) -> int:
         return cur.fetchone()[0]
 
 
-def replace_session_events(conn, session_db_id: int, events: list, csl_start: datetime):
+def replace_session_events(
+    conn,
+    session_db_id: int,
+    events: list,
+    csl_start: datetime,
+    *,
+    import_run_id: str | None = None,
+    source_file_id_value: str | None = None,
+    adapter_id: str = "legacy-session-v1",
+):
     """Delete existing events for this session and insert the new list."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM session_events WHERE session_id = %s", (session_db_id,))
@@ -160,16 +308,201 @@ def replace_session_events(conn, session_db_id: int, events: list, csl_start: da
         return
 
     rows = []
-    for onset, duration, event_type in _dedupe_events(events):
+    for index, (onset, duration, event_type) in enumerate(_dedupe_events(events)):
         event_dt = csl_start + timedelta(seconds=onset)
-        rows.append((session_db_id, event_type, onset, duration if duration is not None else None, event_dt))
+        source_event_key = (
+            f"{source_file_id_value or 'generated'}:{event_type}:{round(float(onset), 3)}:"
+            f"{round(float(duration or 0), 3)}:{index}"
+        )
+        rows.append(
+            (
+                session_db_id,
+                event_type,
+                onset,
+                duration if duration is not None else None,
+                event_dt,
+                source_event_key,
+                event_type,
+                import_run_id,
+                source_file_id_value,
+                adapter_id,
+                "strong" if source_file_id_value else "probable",
+                "partial",
+            )
+        )
 
     sql = """
-    INSERT INTO session_events (session_id, event_type, onset_seconds, duration_seconds, event_datetime)
+    INSERT INTO session_events (
+        session_id, event_type, onset_seconds, duration_seconds, event_datetime,
+        source_event_key, source_event_type, import_run_id, source_file_id,
+        adapter_id, confidence, validation_status
+    )
     VALUES %s
     """
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(cur, sql, rows)
+
+
+def upsert_session_block(
+    conn: Any,
+    *,
+    session_db_id: str,
+    import_run_id: str | None,
+    source_block_key: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+    source_file_ids: list[str],
+) -> None:
+    """Persist one explicit therapy block."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO session_blocks (
+                session_id, import_run_id, source_block_key, block_kind,
+                start_datetime, end_datetime, source_file_ids, confidence,
+                validation_status, updated_at
+            ) VALUES (%s, %s, %s, 'therapy', %s, %s, %s::uuid[], 'strong', 'partial', NOW())
+            ON CONFLICT (session_id, source_block_key) DO UPDATE SET
+                import_run_id = EXCLUDED.import_run_id,
+                start_datetime = EXCLUDED.start_datetime,
+                end_datetime = EXCLUDED.end_datetime,
+                source_file_ids = EXCLUDED.source_file_ids,
+                confidence = EXCLUDED.confidence,
+                validation_status = EXCLUDED.validation_status,
+                updated_at = NOW()
+            """,
+            (
+                session_db_id,
+                import_run_id,
+                source_block_key,
+                start_datetime,
+                end_datetime,
+                source_file_ids,
+            ),
+        )
+
+
+def replace_signal_channels(
+    conn: Any,
+    *,
+    session_db_id: str,
+    import_run_id: str | None,
+    source_file_id_value: str | None,
+    adapter_id: str,
+    header: Any,
+) -> int:
+    """Replace channel metadata discovered in a parsed EDF header."""
+
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM signal_channels WHERE session_id = %s", (session_db_id,))
+    rows = []
+    duration = float(header.duration_per_record or 0)
+    for signal in header.signals:
+        if signal.label == "Crc16":
+            continue
+        sample_rate = signal.num_samples_per_record / duration if duration > 0 else None
+        normalized_name, channel_kind, leak_kind = _normalized_signal(signal.label, sample_rate)
+        rows.append(
+            (
+                session_db_id,
+                import_run_id,
+                source_file_id_value,
+                normalized_name,
+                signal.label,
+                signal.dim or None,
+                sample_rate,
+                channel_kind,
+                "sample",
+                leak_kind,
+                adapter_id,
+                "strong",
+                "partial",
+            )
+        )
+    if rows:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO signal_channels (
+                    session_id, import_run_id, source_file_id, normalized_name,
+                    source_name, unit, sample_rate_hz, channel_kind, value_kind,
+                    leak_kind, adapter_id, confidence, validation_status
+                ) VALUES %s
+                """,
+                rows,
+            )
+    return len(rows)
+
+
+def replace_derived_values(
+    conn: Any,
+    *,
+    user_id: str,
+    machine_id: str,
+    session_db_id: str,
+    import_run_id: str | None,
+    adapter_id: str,
+    summary: dict,
+) -> int:
+    """Persist provenance for native importer summary calculations."""
+
+    units = {
+        "ahi": "events/hour",
+        "avg_pressure": "cmH2O",
+        "p95_pressure": "cmH2O",
+        "avg_leak": "L/s",
+    }
+    rows = [
+        (
+            user_id,
+            machine_id,
+            session_db_id,
+            import_run_id,
+            key,
+            json.dumps(value),
+            units.get(key),
+            "sleeplab.native_resmed.summary",
+            "1",
+            json.dumps(["session_events", "session_metrics"]),
+            adapter_id,
+            "partial",
+        )
+        for key, value in summary.items()
+    ]
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM derived_values WHERE session_id = %s", (session_db_id,))
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO derived_values (
+                user_id, machine_id, session_id, import_run_id, key, value, unit,
+                method, method_version, input_refs, adapter_id, validation_status
+            ) VALUES %s
+            """,
+            rows,
+        )
+    return len(rows)
+
+
+def _normalized_signal(source_name: str, sample_rate: float | None) -> tuple[str, str, str | None]:
+    names = {
+        "MaskPress.2s": "mask_pressure",
+        "Press.2s": "pressure",
+        "EprPress.2s": "epr_pressure",
+        "Leak.2s": "leak",
+        "RespRate.2s": "respiratory_rate",
+        "TidVol.2s": "tidal_volume",
+        "MinVent.2s": "minute_ventilation",
+        "Snore.2s": "snore",
+        "FlowLim.2s": "flow_limitation",
+        "Flow.40ms": "flow",
+        "Press.40ms": "pressure",
+    }
+    normalized = names.get(source_name, f"unknown:{source_name}")
+    kind = "waveform" if sample_rate and sample_rate >= 5 else "low_rate"
+    return normalized, kind, "unintentional" if normalized == "leak" else None
 
 
 def replace_session_metrics(conn, session_db_id: int, header, channels: dict, start_datetime: datetime | None = None):

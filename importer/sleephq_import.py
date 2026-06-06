@@ -627,6 +627,7 @@ def persist_sessions(
                     stats["inserted"] += 1
                 continue
 
+            session_data["adapter_id"] = "sleephq-api-v1"
             upsert_session(conn, session_data)
             conn.commit()
 

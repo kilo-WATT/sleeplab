@@ -101,11 +101,11 @@ def _session_data(**overrides):
 
 
 def test_upsert_session_persists_manufacturer_without_null_clobber():
-    conn = FakeConn(rows=[(123,)])
+    conn = FakeConn(rows=[("machine-1",), (123,)])
 
     assert importer_db.upsert_session(conn, _session_data()) == 123
 
-    sql, params = conn.cursor_obj.statements[0]
+    sql, params = conn.cursor_obj.statements[1]
     assert "manufacturer" in sql
     assert "%(manufacturer)s" in sql
     assert "manufacturer            = COALESCE(NULLIF(EXCLUDED.manufacturer, ''), NULLIF(sessions.manufacturer, ''))" in sql
@@ -113,13 +113,13 @@ def test_upsert_session_persists_manufacturer_without_null_clobber():
 
 
 def test_upsert_session_defaults_unknown_manufacturer_to_null():
-    conn = FakeConn(rows=[(123,)])
+    conn = FakeConn(rows=[("machine-1",), (123,)])
     data = _session_data()
     data.pop("manufacturer")
 
     assert importer_db.upsert_session(conn, data) == 123
 
-    _sql, params = conn.cursor_obj.statements[0]
+    _sql, params = conn.cursor_obj.statements[1]
     assert params["manufacturer"] is None
 
 

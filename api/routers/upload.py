@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from importer.loaders import ImportPlanError, create_import_plan, import_plan_dict, prepare_execution
 
 from ..auth import get_current_user
-from ..database import get_db
+from ..database import SessionLocal, get_db
+from ..import_runs import create_import_run
 from ..oximeter import OximeterParseError, OximeterRecording, parse_viatom_binary
 from ..settings_store import get_timezone_settings, normalize_timezone
 
@@ -159,7 +160,16 @@ def _mark_import_finished(
     )
 
 
-def _run_import(datalog_path: str, user_id: str, from_date: str | None, cleanup_dir: str | None = None) -> None:
+def _run_import(
+    datalog_path: str,
+    user_id: str,
+    from_date: str | None,
+    cleanup_dir: str | None = None,
+    import_run_id: str | None = None,
+    machine_id: str | None = None,
+    adapter_id: str | None = None,
+    source_root: str | None = None,
+) -> None:
     """Execute the import background script as a subprocess and clean up.
 
     Args:
@@ -179,6 +189,14 @@ def _run_import(datalog_path: str, user_id: str, from_date: str | None, cleanup_
 
     if from_date:
         cmd.extend(["--from", from_date])
+    if import_run_id:
+        cmd.extend(["--import-run-id", import_run_id])
+    if machine_id:
+        cmd.extend(["--machine-id", machine_id])
+    if adapter_id:
+        cmd.extend(["--adapter-id", adapter_id])
+    if source_root:
+        cmd.extend(["--source-root", source_root])
 
     try:
         result = subprocess.run(cmd, cwd=str(IMPORTER_SCRIPT.parent), check=False)
@@ -186,13 +204,49 @@ def _run_import(datalog_path: str, user_id: str, from_date: str | None, cleanup_
             _mark_import_finished(user_id, "completed", "Import completed.")
         else:
             logger.error("DATALOG import failed for user %s with exit code %s", user_id, result.returncode)
+            _fail_durable_import_run(import_run_id, f"Importer exited with status {result.returncode}.")
             _mark_import_finished(user_id, "failed", "Import failed. Check the uploaded files and try again.")
-    except Exception:
+    except Exception as exc:
         logger.exception("DATALOG import failed for user %s", user_id)
+        _fail_durable_import_run(import_run_id, str(exc))
         _mark_import_finished(user_id, "failed", "Import failed. Check the uploaded files and try again.")
     finally:
         if cleanup_dir:
             shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+def _fail_durable_import_run(import_run_id: str | None, message: str) -> None:
+    if not import_run_id:
+        return
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("""
+                UPDATE import_runs
+                SET status = 'failed',
+                    errors = errors || CAST(:error AS jsonb),
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = CAST(:run_id AS uuid)
+                  AND status IN ('pending', 'running')
+            """),
+            {
+                "run_id": import_run_id,
+                "error": f'[{{"code":"execution_failed","message":{_json_string(message)}}}]',
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Could not mark import run %s failed", import_run_id)
+    finally:
+        db.close()
+
+
+def _json_string(value: str) -> str:
+    import json
+
+    return json.dumps(value)
 
 
 @router.post("/datalog/start")
@@ -365,6 +419,7 @@ def finish_source_import(
     upload_id: str,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Start the existing native importer for a detected ResMed source."""
 
@@ -375,6 +430,13 @@ def finish_source_import(
     except ImportPlanError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    run_id, machine_id = create_import_run(
+        db,
+        user_id=session.user_id,
+        plan=plan,
+        source_root=session.source_root,
+        source_label=session.source_root.name,
+    )
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)
     background_tasks.add_task(
@@ -383,8 +445,16 @@ def finish_source_import(
         session.user_id,
         session.from_date,
         str(session.temp_root),
+        run_id,
+        machine_id,
+        execution.adapter_id,
+        str(execution.source_root),
     )
-    return {"status": "accepted", "message": "ResMed import started."}
+    return {
+        "status": "accepted",
+        "message": "ResMed import started.",
+        "import_run_id": run_id,
+    }
 
 
 @router.delete("/source/{upload_id}")
