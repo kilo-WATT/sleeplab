@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 
 import { api } from '../api/client'
-import type { ImportPlanResponse, OximeterImportResponse } from '../api/client'
+import type { ImportPlanResponse, ImportRunSummary, OximeterImportResponse } from '../api/client'
 import { CheckCircleIcon } from '../components/icons/ChevronIcons'
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { Button } from '../components/ui/button'
@@ -40,6 +40,7 @@ export default function Import() {
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle')
   const [sourceUploadId, setSourceUploadId] = useState<string | null>(null)
   const [importPlan, setImportPlan] = useState<ImportPlanResponse | null>(null)
+  const [importRuns, setImportRuns] = useState<ImportRunSummary[]>([])
 
   // SleepHQ import state
   const [isSyncing, setIsSyncing] = useState(false)
@@ -73,6 +74,10 @@ export default function Import() {
         setLocalLastStatus(s.last_local_import_status)
       })
       .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    void api.getImportRuns(10).then(setImportRuns).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -200,6 +205,8 @@ export default function Import() {
       await api.finishSourceImport(sourceUploadId)
       window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
       setSourceUploadId(null)
+      const runs = await api.getImportRuns(10)
+      setImportRuns(runs)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed')
     } finally {
@@ -363,6 +370,7 @@ export default function Import() {
           ) : null}
         </CardContent>
       </Card>
+      <ImportHistory runs={importRuns} />
       <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
           <CardTitle className="text-2xl">Import O2 Ring Data</CardTitle>
@@ -497,15 +505,79 @@ export default function Import() {
   )
 }
 
+function ImportHistory({ runs }: { runs: ImportRunSummary[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-2xl">Import history</CardTitle>
+        <CardDescription>
+          Durable diagnostics for reviewed CPAP card imports. Detection-only devices do not appear here because no
+          import was executed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {runs.length === 0 ? (
+          <p className="text-sm text-[var(--muted-foreground)]">No 2.0 import runs have been recorded yet.</p>
+        ) : (
+          runs.map((run) => <ImportRunCard key={run.id} run={run} />)
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ImportRunCard({ run }: { run: ImportRunSummary }) {
+  const machineName = [
+    run.machine_manufacturer || run.detected_manufacturer,
+    run.machine_model || run.machine_family || run.detected_family,
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const diagnostics = [...run.warnings.map((warning) => warning.message), ...run.errors.map((error) => error.message)]
+
+  return (
+    <div className="space-y-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-bold text-[var(--foreground)]">{machineName || 'Unresolved CPAP machine'}</p>
+          <p className="text-xs text-[var(--muted-foreground)]">
+            {run.adapter_id} | {run.source_file_count} source files
+          </p>
+        </div>
+        <span className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-1 text-xs font-bold text-[var(--foreground)]">
+          {run.status}
+        </span>
+      </div>
+      <dl className="grid gap-3 text-sm sm:grid-cols-4">
+        <InspectionValue label="Validation" value={run.validation_status} />
+        <InspectionValue label="Sessions" value={String(run.imported_session_count)} />
+        <InspectionValue label="Blocks" value={String(run.imported_block_count)} />
+        <InspectionValue label="Events" value={String(run.imported_event_count)} />
+      </dl>
+      <p className="truncate font-mono text-xs text-[var(--muted-foreground)]" title={run.source_fingerprint}>
+        {run.source_fingerprint}
+      </p>
+      {diagnostics.map((message, index) => (
+        <p key={`${message}-${index}`} className="text-sm text-[var(--orange-700)]">
+          {message}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 async function collectSourceFiles(
   directoryHandle: FileSystemDirectoryHandle,
   prefix = '',
 ): Promise<SelectedImportFile[]> {
   const entries: SelectedImportFile[] = []
+  const iterableDirectory = directoryHandle as FileSystemDirectoryHandle & {
+    entries(): AsyncIterableIterator<[string, FileSystemHandle]>
+  }
 
-  for await (const [name, handle] of directoryHandle.entries()) {
+  for await (const [name, handle] of iterableDirectory.entries()) {
     if (handle.kind === 'file') {
-      const file = await handle.getFile()
+      const file = await (handle as FileSystemFileHandle).getFile()
       entries.push({
         file,
         relativePath: prefix ? `${prefix}/${name}` : name,
@@ -513,7 +585,10 @@ async function collectSourceFiles(
       continue
     }
 
-    const nested = await collectSourceFiles(handle, prefix ? `${prefix}/${name}` : name)
+    const nested = await collectSourceFiles(
+      handle as FileSystemDirectoryHandle,
+      prefix ? `${prefix}/${name}` : name,
+    )
     entries.push(...nested)
   }
 

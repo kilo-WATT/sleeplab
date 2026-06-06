@@ -13,6 +13,7 @@ from .env import load_env
 from .routers import (
     ai_summary,
     config,
+    imports,
     llm,
     sessions,
     stats,
@@ -188,6 +189,7 @@ app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 app.include_router(stats.router, prefix="/stats", tags=["stats"])
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
+app.include_router(imports.router, prefix="/imports", tags=["imports"])
 app.include_router(ai_summary.router, prefix="/stats", tags=["stats"])
 app.include_router(llm.router, prefix="/llm", tags=["llm"])
 app.include_router(import_settings_router.router, prefix="/import", tags=["import"])

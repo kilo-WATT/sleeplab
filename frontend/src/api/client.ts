@@ -87,6 +87,52 @@ export interface ChangePasswordRequest {
 export interface ImportResponse {
   status: string
   message: string
+  import_run_id?: string
+}
+
+export interface CpapMachineSummary {
+  id: string
+  manufacturer: string | null
+  family: string | null
+  model: string | null
+  product_code: string | null
+  serial_number: string | null
+  firmware_version: string | null
+  support_status: 'supported' | 'validated' | 'experimental' | 'detected_only' | 'unsupported' | 'unknown'
+  validation_status: 'unvalidated' | 'partial' | 'validated' | 'failed'
+}
+
+export interface ImportRunSummary {
+  id: string
+  adapter_id: string
+  adapter_version: string | null
+  source_type: string
+  source_fingerprint: string
+  source_label: string | null
+  status: 'pending' | 'running' | 'success' | 'partial' | 'failed' | 'cancelled'
+  validation_status: 'unvalidated' | 'partial' | 'validated' | 'failed'
+  detected_manufacturer: string | null
+  detected_family: string | null
+  detected_capabilities: Record<string, LoaderCapability>
+  warnings: LoaderInspectionWarning[]
+  errors: Array<{ code?: string; message: string }>
+  skipped_files: Array<{ path?: string; reason?: string }>
+  imported_session_count: number
+  imported_block_count: number
+  imported_event_count: number
+  imported_channel_count: number
+  started_at: string | null
+  completed_at: string | null
+  machine_id: string | null
+  machine_manufacturer: string | null
+  machine_family: string | null
+  machine_model: string | null
+  machine_product_code: string | null
+  machine_serial_number: string | null
+  machine_firmware_version: string | null
+  machine_support_status: CpapMachineSummary['support_status'] | null
+  machine_validation_status: CpapMachineSummary['validation_status'] | null
+  source_file_count: number
 }
 
 /**
@@ -819,6 +865,8 @@ export const api = {
       method: 'DELETE',
     }),
   getImportStatus: () => get<ImportStatusResponse>('/upload/status'),
+  getImportRuns: (limit = 25) => get<ImportRunSummary[]>('/imports/runs', { limit }),
+  getCpapMachines: () => get<CpapMachineSummary[]>('/imports/machines'),
   uploadOximeterFiles: (files: File[], options?: { machine_tz?: string; overwrite?: boolean }) => {
     const formData = new FormData()
     for (const file of files) {
