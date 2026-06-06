@@ -41,6 +41,7 @@ export default function Import() {
   const [sourceUploadId, setSourceUploadId] = useState<string | null>(null)
   const [importPlan, setImportPlan] = useState<ImportPlanResponse | null>(null)
   const [importRuns, setImportRuns] = useState<ImportRunSummary[]>([])
+  const [sourceImportMessage, setSourceImportMessage] = useState<string | null>(null)
 
   // SleepHQ import state
   const [isSyncing, setIsSyncing] = useState(false)
@@ -95,6 +96,7 @@ export default function Import() {
     setTotalFiles(0)
     setImportPlan(null)
     setSourceUploadId(null)
+    setSourceImportMessage(null)
 
     if (!supportsDirectorySelection()) {
       setError('This browser does not support folder import. Try Chrome or Edge, or use the desktop app.')
@@ -149,6 +151,7 @@ export default function Import() {
     setSelectedFiles(files)
     setImportPlan(null)
     setSourceUploadId(null)
+    setSourceImportMessage(null)
     setFolderLabel(files.length > 0 ? `${root} (${files.length} files)` : `${root} (no files found)`)
   }
 
@@ -193,7 +196,7 @@ export default function Import() {
   }
 
   const uploadPercent = totalFiles > 0 ? Math.round((uploadedFiles / totalFiles) * 100) : 0
-  const canImportDetectedSource = importPlan?.executable === true
+  const canImportDetectedSource = importPlan?.executable === true && sourceUploadId !== null
 
   async function handleDetectedImport() {
     if (!sourceUploadId || !canImportDetectedSource) {
@@ -202,9 +205,14 @@ export default function Import() {
     setIsSubmitting(true)
     setError(null)
     try {
-      await api.finishSourceImport(sourceUploadId)
+      const result = await api.finishSourceImport(sourceUploadId)
       window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
       setSourceUploadId(null)
+      setSourceImportMessage(
+        result.import_run_id
+          ? `Import started. Run ${result.import_run_id.slice(0, 8)} is now processing in the background.`
+          : result.message,
+      )
       const runs = await api.getImportRuns(10)
       setImportRuns(runs)
     } catch (err) {
@@ -361,12 +369,20 @@ export default function Import() {
             </Button>
           </form>
           {importPlan ? (
-            <LoaderInspectionPanel
-              plan={importPlan}
-              canImport={Boolean(canImportDetectedSource)}
-              isImporting={isSubmitting}
-              onImport={handleDetectedImport}
-            />
+            <>
+              <LoaderInspectionPanel
+                plan={importPlan}
+                canImport={Boolean(canImportDetectedSource)}
+                isImporting={isSubmitting}
+                importStarted={sourceImportMessage !== null}
+                onImport={handleDetectedImport}
+              />
+              {sourceImportMessage ? (
+                <div className="mt-4 rounded-[16px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] px-4 py-3 text-sm font-medium text-[var(--olive-deep)]">
+                  {sourceImportMessage}
+                </div>
+              ) : null}
+            </>
           ) : null}
         </CardContent>
       </Card>
@@ -621,11 +637,13 @@ export function LoaderInspectionPanel({
   plan,
   canImport,
   isImporting,
+  importStarted,
   onImport,
 }: {
   plan: ImportPlanResponse
   canImport: boolean
   isImporting: boolean
+  importStarted: boolean
   onImport: () => void
 }) {
   const [showSerial, setShowSerial] = useState(false)
@@ -753,7 +771,7 @@ export function LoaderInspectionPanel({
       {inspection.matched ? (
         <div className="space-y-2">
           <Button onClick={onImport} disabled={!canImport || isImporting}>
-            {isImporting ? 'Starting import...' : 'Import detected data'}
+            {isImporting ? 'Starting import...' : importStarted ? 'Import started' : 'Import detected data'}
           </Button>
           {!canImport ? (
             <div className="space-y-1 text-sm text-[var(--muted-foreground)]">

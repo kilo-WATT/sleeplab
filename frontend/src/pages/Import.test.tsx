@@ -160,6 +160,7 @@ describe('LoaderInspectionPanel', () => {
         }}
         canImport={false}
         isImporting={false}
+        importStarted={false}
         onImport={() => {}}
       />,
     )
