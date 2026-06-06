@@ -52,12 +52,20 @@ Research baseline:
 - This plan was based on current `cpap-parser` commit `37394cf` and OSCAR's
   local `master` checkout.
 
-This branch also contains an executable, persistence-independent prototype in
-`importer/loaders/`. It registers structural adapters for ResMed, Philips
-Respironics, Lowenstein, Fisher & Paykel, and BMC; reports evidence, identity,
-and capabilities; and deliberately leaves full import unimplemented. Run
+This branch now forms the `2.0.0-alpha.1` vertical slice. The GUI accepts an SD
+card or root folder, stages the source without manufacturer assumptions, runs
+the loader registry, peeks identity, reports capabilities and inferred
+coverage, masks serial numbers by default, and creates a content-addressed
+import plan. Execution is rejected if the staged source changes after
+inspection. The plan coordinator currently routes validated ResMed layouts to
+SleepLab's native importer; other detected vendors remain visible but blocked
+until their execution adapters pass conformance testing.
+
+The persistence-independent detector remains available in `importer/loaders/`.
+It registers structural adapters for ResMed, Philips Respironics, Lowenstein,
+Fisher & Paykel, and BMC. Run
 `python -m importer.loaders <sd-card-or-archive-root>` to inspect a source
-without changing production import behavior.
+without importing it.
 
 ## OSCAR detection lifecycle
 

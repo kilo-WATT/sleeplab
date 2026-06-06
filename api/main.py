@@ -69,12 +69,10 @@ def parse_version_parts(version: str | None) -> tuple[int, ...] | None:
     if not normalized:
         return None
 
-    parts: list[int] = []
-    for piece in normalized.split("."):
-        if not piece.isdigit():
-            return None
-        parts.append(int(piece))
-    return tuple(parts)
+    match = re.fullmatch(r"(\d+(?:\.\d+)*)(?:[-+].+|a\d+|b\d+|rc\d+)?", normalized)
+    if match is None:
+        return None
+    return tuple(int(piece) for piece in match.group(1).split("."))
 
 
 def is_newer_version(candidate: str | None, current: str) -> bool:

@@ -50,8 +50,10 @@ def test_source_inspection_detects_resmed_from_card_root():
         result = inspect_uploaded_source(upload_id, current_user={"id": "resmed-user"})
 
         assert result["source_root"] == "RESMED-SD"
-        assert result["matched"] is True
-        assert result["devices"][0]["adapter_id"] == "resmed-native-v2"
+        assert result["inspection"]["matched"] is True
+        assert result["inspection"]["devices"][0]["adapter_id"] == "resmed-native-v2"
+        assert result["source_manifest"]["file_count"] == 3
+        assert result["executable"] is True
     finally:
         _cleanup(upload_id)
 
@@ -73,14 +75,43 @@ def test_source_inspection_detects_prs1_and_blocks_unconnected_importer():
 
         result = inspect_uploaded_source(upload_id, current_user={"id": "prs1-user"})
 
-        assert result["matched"] is True
-        assert result["devices"][0]["adapter_id"] == "philips-prs1-v2"
-        assert result["devices"][0]["identity"]["model_number"] == "560P"
-        with pytest.raises(HTTPException, match="full importer is not connected"):
+        assert result["inspection"]["matched"] is True
+        assert result["inspection"]["devices"][0]["adapter_id"] == "philips-prs1-v2"
+        assert result["inspection"]["devices"][0]["identity"]["model_number"] == "560P"
+        assert result["executable"] is False
+        with pytest.raises(HTTPException, match="does not implement execution"):
             finish_source_import(
                 upload_id,
                 BackgroundTasks(),
                 current_user={"id": "prs1-user"},
+            )
+    finally:
+        _cleanup(upload_id)
+
+
+def test_source_import_requires_reinspection_after_staged_files_change():
+    upload_id = _start("changed-user", "RESMED-SD")
+    try:
+        upload_source_batch(
+            upload_id,
+            [
+                _file("STR.edf", b"summary"),
+                _file("DATALOG/20260601/20260601_220000_PLD.edf", b"session"),
+            ],
+            current_user={"id": "changed-user"},
+        )
+        inspect_uploaded_source(upload_id, current_user={"id": "changed-user"})
+        upload_source_batch(
+            upload_id,
+            [_file("DATALOG/20260601/20260601_220000_EVE.edf", b"events")],
+            current_user={"id": "changed-user"},
+        )
+
+        with pytest.raises(HTTPException, match="changed after inspection"):
+            finish_source_import(
+                upload_id,
+                BackgroundTasks(),
+                current_user={"id": "changed-user"},
             )
     finally:
         _cleanup(upload_id)

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from importer.loaders import inspect_source_root
+from importer.loaders import ImportPlanError, create_import_plan, import_plan_dict, prepare_execution
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -41,6 +41,7 @@ class UploadSession:
     source_root: Path
     from_date: str | None
     file_count: int = 0
+    planned_fingerprint: str | None = None
 
 
 UPLOAD_SESSIONS: dict[str, UploadSession] = {}
@@ -351,8 +352,11 @@ def inspect_uploaded_source(
     session = _require_session(upload_id, current_user["id"])
     if session.file_count == 0:
         raise HTTPException(status_code=400, detail="No files uploaded for this source")
-    result = inspect_source_root(session.source_root)
+    plan = create_import_plan(session.source_root)
+    session.planned_fingerprint = plan.source_manifest.fingerprint
+    result = import_plan_dict(plan)
     result["source_root"] = session.source_root.name
+    result["inspection"]["source_root"] = session.source_root.name
     return result
 
 
@@ -365,22 +369,17 @@ def finish_source_import(
     """Start the existing native importer for a detected ResMed source."""
 
     session = _require_session(upload_id, current_user["id"])
-    report = inspect_source_root(session.source_root)
-    adapters = {device["adapter_id"] for device in report["devices"]}
-    if adapters != {"resmed-native-v2"} or report["ambiguous"]:
-        raise HTTPException(
-            status_code=409,
-            detail="This detected source can be inspected, but its full importer is not connected yet.",
-        )
-    datalog_path = session.source_root / "DATALOG"
-    if not datalog_path.is_dir():
-        raise HTTPException(status_code=400, detail="Detected ResMed source is missing DATALOG")
+    plan = create_import_plan(session.source_root)
+    try:
+        execution = prepare_execution(plan, session.source_root, session.planned_fingerprint)
+    except ImportPlanError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)
     background_tasks.add_task(
         _run_import,
-        str(datalog_path),
+        str(execution.import_root),
         session.user_id,
         session.from_date,
         str(session.temp_root),

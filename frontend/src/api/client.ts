@@ -152,6 +152,48 @@ export interface LoaderInspectionResponse {
   warnings: LoaderInspectionWarning[]
 }
 
+export interface SourceRoleSummary {
+  role: string
+  file_count: number
+  size_bytes: number
+}
+
+export interface ImportCoverageSummary {
+  first_date: string | null
+  last_date: string | null
+  therapy_days: number
+  estimated_session_blocks: number
+  waveform_files: number
+  event_files: number
+  oximetry_files: number
+  settings_files: number
+}
+
+export interface DeviceImportPlan {
+  adapter_id: string
+  device_path: string
+  execution_status: 'ready' | 'blocked'
+  execution_backend: string | null
+  coverage: ImportCoverageSummary
+  blockers: string[]
+  warnings: string[]
+}
+
+export interface ImportPlanResponse {
+  plan_version: string
+  source_root: string
+  source_manifest: {
+    fingerprint: string
+    file_count: number
+    total_bytes: number
+    roles: SourceRoleSummary[]
+  }
+  inspection: LoaderInspectionResponse
+  devices: DeviceImportPlan[]
+  executable: boolean
+  blockers: string[]
+}
+
 /**
  * Properties and structure for the import status response.
  */
@@ -694,7 +736,9 @@ export const api = {
   getOverviewStats: (days = 180) => get<OverviewStats>('/stats/overview', { days }),
   getAISummary: (days = 30, force = false) => get<AISummaryResponse>('/stats/ai-summary', { days, force }),
   getSessionAISummary: (sessionId: string, force = false) =>
-    get<SessionAISummaryResponse>(`/stats/sessions/${sessionId}/ai-summary`, { force }),
+    get<SessionAISummaryResponse>(`/stats/sessions/${sessionId}/ai-summary`, {
+      force,
+    }),
   getTrendAISummary: (force = false) => get<TrendAISummaryResponse>('/stats/trend-ai', { force }),
   getSessions: (params?: { per_page?: number; date_from?: string; date_to?: string }) =>
     get<SessionSummary[]>('/sessions/', params as Record<string, string | number> | undefined),
@@ -702,17 +746,25 @@ export const api = {
   getSession: (id: string) => get<SessionDetail>(`/sessions/${id}`),
   getSessionByDate: (date: string) => get<SessionDetail>(`/sessions/by-date/${date}`),
   getTagInsights: () => get<TagInsight[]>('/sessions/tag-insights'),
-  updateSessionNote: (id: string, note: string) =>
-    put<SessionDetail>(`/sessions/${id}/note`, { note }),
-  updateSessionTags: (id: string, tags: string[]) =>
-    put<SessionDetail>(`/sessions/${id}/tags`, { tags }),
+  updateSessionNote: (id: string, note: string) => put<SessionDetail>(`/sessions/${id}/note`, { note }),
+  updateSessionTags: (id: string, tags: string[]) => put<SessionDetail>(`/sessions/${id}/tags`, { tags }),
   updateSessionTimezone: (id: string, machineTz: string) =>
     put<SessionDetail>(`/sessions/${id}/timezone`, { machine_tz: machineTz }),
   getEvents: (id: string) => get<EventRecord[]>(`/sessions/${id}/events`),
-  getEventWindow: (id: string, eventId: number, params?: { before_seconds?: number; after_seconds?: number; waveform_downsample?: number }) =>
-    get<EventWindowResponse>(`/sessions/${id}/events/${eventId}/window`, params as Record<string, string | number> | undefined),
-  getMetrics: (id: string, downsample = 15) =>
-    get<MetricsResponse>(`/sessions/${id}/metrics`, { downsample }),
+  getEventWindow: (
+    id: string,
+    eventId: number,
+    params?: {
+      before_seconds?: number
+      after_seconds?: number
+      waveform_downsample?: number
+    },
+  ) =>
+    get<EventWindowResponse>(
+      `/sessions/${id}/events/${eventId}/window`,
+      params as Record<string, string | number> | undefined,
+    ),
+  getMetrics: (id: string, downsample = 15) => get<MetricsResponse>(`/sessions/${id}/metrics`, { downsample }),
   getSessionSpo2: (id: string) => get<SpO2Response>(`/sessions/${id}/spo2`),
   listEquipment: () => get<Equipment[]>('/equipment/'),
   createEquipment: (payload: EquipmentCreate) => post<Equipment>('/equipment/', payload),
@@ -736,30 +788,31 @@ export const api = {
     for (const entry of files) {
       formData.append('files', entry.file, entry.relativePath)
     }
-    return postForm<{ status: string; uploaded_files: number; total_files: number }>(
-      `/upload/datalog/${uploadId}/batch`,
-      formData,
-    )
+    return postForm<{
+      status: string
+      uploaded_files: number
+      total_files: number
+    }>(`/upload/datalog/${uploadId}/batch`, formData)
   },
   finishImportUpload: (uploadId: string) => post<ImportResponse>(`/upload/datalog/${uploadId}/finish`),
-  startSourceUpload: (rootName: string) =>
-    post<StartImportResponse>('/upload/source/start', { root_name: rootName }),
+  startSourceUpload: (rootName: string) => post<StartImportResponse>('/upload/source/start', { root_name: rootName }),
   uploadSourceBatch: (uploadId: string, files: Array<{ file: File; relativePath: string }>) => {
     const formData = new FormData()
     for (const entry of files) {
       formData.append('files', entry.file, entry.relativePath)
     }
-    return postForm<{ status: string; uploaded_files: number; total_files: number }>(
-      `/upload/source/${uploadId}/batch`,
-      formData,
-    )
+    return postForm<{
+      status: string
+      uploaded_files: number
+      total_files: number
+    }>(`/upload/source/${uploadId}/batch`, formData)
   },
-  inspectSourceUpload: (uploadId: string) =>
-    post<LoaderInspectionResponse>(`/upload/source/${uploadId}/inspect`),
-  finishSourceImport: (uploadId: string) =>
-    post<ImportResponse>(`/upload/source/${uploadId}/finish`),
+  inspectSourceUpload: (uploadId: string) => post<ImportPlanResponse>(`/upload/source/${uploadId}/inspect`),
+  finishSourceImport: (uploadId: string) => post<ImportResponse>(`/upload/source/${uploadId}/finish`),
   discardSourceUpload: (uploadId: string) =>
-    request<{ status: string }>(`/upload/source/${uploadId}`, { method: 'DELETE' }),
+    request<{ status: string }>(`/upload/source/${uploadId}`, {
+      method: 'DELETE',
+    }),
   getImportStatus: () => get<ImportStatusResponse>('/upload/status'),
   uploadOximeterFiles: (files: File[], options?: { machine_tz?: string; overwrite?: boolean }) => {
     const formData = new FormData()
@@ -780,7 +833,10 @@ export const api = {
   triggerLocalImport: () => post<{ status: string; message: string }>('/import/trigger-local'),
   getWearableData: (date: string) => get<WearableData>('/wearable/data', { date }),
   getWearableSummary: (dateFrom: string, dateTo: string) =>
-    get<WearableDailySummary[]>('/wearable/summary', { date_from: dateFrom, date_to: dateTo }),
+    get<WearableDailySummary[]>('/wearable/summary', {
+      date_from: dateFrom,
+      date_to: dateTo,
+    }),
   getAppConfig: () => get<AppConfig>('/config'),
 }
 

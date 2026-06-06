@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 
 import { api } from '../api/client'
-import type { LoaderInspectionResponse, OximeterImportResponse } from '../api/client'
+import type { ImportPlanResponse, OximeterImportResponse } from '../api/client'
 import { CheckCircleIcon } from '../components/icons/ChevronIcons'
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { Button } from '../components/ui/button'
@@ -39,7 +39,7 @@ export default function Import() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle')
   const [sourceUploadId, setSourceUploadId] = useState<string | null>(null)
-  const [inspection, setInspection] = useState<LoaderInspectionResponse | null>(null)
+  const [importPlan, setImportPlan] = useState<ImportPlanResponse | null>(null)
 
   // SleepHQ import state
   const [isSyncing, setIsSyncing] = useState(false)
@@ -65,11 +65,14 @@ export default function Import() {
   const [oximeterError, setOximeterError] = useState<string | null>(null)
 
   useEffect(() => {
-    api.getImportSettings().then((s) => {
-      setLocalPath(s.local_datalog_path)
-      setLocalLastAt(s.last_local_import_at)
-      setLocalLastStatus(s.last_local_import_status)
-    }).catch(() => {})
+    api
+      .getImportSettings()
+      .then((s) => {
+        setLocalPath(s.local_datalog_path)
+        setLocalLastAt(s.last_local_import_at)
+        setLocalLastStatus(s.last_local_import_status)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -85,7 +88,7 @@ export default function Import() {
     setUploadPhase('idle')
     setUploadedFiles(0)
     setTotalFiles(0)
-    setInspection(null)
+    setImportPlan(null)
     setSourceUploadId(null)
 
     if (!supportsDirectorySelection()) {
@@ -139,7 +142,7 @@ export default function Import() {
     }
     setRootName(root)
     setSelectedFiles(files)
-    setInspection(null)
+    setImportPlan(null)
     setSourceUploadId(null)
     setFolderLabel(files.length > 0 ? `${root} (${files.length} files)` : `${root} (no files found)`)
   }
@@ -170,7 +173,7 @@ export default function Import() {
       }
 
       const result = await api.inspectSourceUpload(upload_id)
-      setInspection(result)
+      setImportPlan(result)
       setUploadPhase('complete')
     } catch (err) {
       if (uploadId) {
@@ -185,10 +188,7 @@ export default function Import() {
   }
 
   const uploadPercent = totalFiles > 0 ? Math.round((uploadedFiles / totalFiles) * 100) : 0
-  const canImportDetectedSource = inspection?.matched
-    && !inspection.ambiguous
-    && inspection.devices.length > 0
-    && inspection.devices.every((device) => device.adapter_id === 'resmed-native-v2')
+  const canImportDetectedSource = importPlan?.executable === true
 
   async function handleDetectedImport() {
     if (!sourceUploadId || !canImportDetectedSource) {
@@ -240,7 +240,11 @@ export default function Import() {
     setOximeterFiles(files)
     setOximeterResult(null)
     setOximeterError(null)
-    setOximeterLabel(files.length > 0 ? `${files.length} O2 file${files.length === 1 ? '' : 's'} selected` : 'No compatible O2 files selected')
+    setOximeterLabel(
+      files.length > 0
+        ? `${files.length} O2 file${files.length === 1 ? '' : 's'} selected`
+        : 'No compatible O2 files selected',
+    )
     event.target.value = ''
   }
 
@@ -255,7 +259,9 @@ export default function Import() {
     setOximeterError(null)
     setOximeterResult(null)
     try {
-      const result = await api.uploadOximeterFiles(oximeterFiles, { overwrite: oximeterOverwrite })
+      const result = await api.uploadOximeterFiles(oximeterFiles, {
+        overwrite: oximeterOverwrite,
+      })
       setOximeterResult(result)
       if (result.imported > 0) {
         window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
@@ -273,13 +279,16 @@ export default function Import() {
         <CardHeader>
           <CardTitle className="text-2xl">Import Sleep Data</CardTitle>
           <CardDescription>
-            Insert your CPAP SD card and select the <span className="font-bold text-[var(--foreground)]">SD card or root folder</span>. SleepLab will inspect its structure, identify the machine, and show what data the loader can read before importing anything.
+            Insert your CPAP SD card and select the{' '}
+            <span className="font-bold text-[var(--foreground)]">SD card or root folder</span>. SleepLab will inspect
+            its structure, identify the machine, and show what data the loader can read before importing anything.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {supportsDirectorySelection() ? null : (
             <div className="mb-5 rounded-[16px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-4 py-3 text-sm text-[var(--orange-700)]">
-              <span className="font-bold">Browser not supported.</span> Folder import requires either the Chromium directory picker or a browser that supports directory uploads.
+              <span className="font-bold">Browser not supported.</span> Folder import requires either the Chromium
+              directory picker or a browser that supports directory uploads.
             </div>
           )}
           <form className="space-y-5" onSubmit={handleSubmit}>
@@ -294,7 +303,13 @@ export default function Import() {
             <div className="space-y-3">
               <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
                 <p className="text-sm text-[var(--foreground)]">{folderLabel}</p>
-                <Button className="mt-4" type="button" variant="outline" onClick={handleSelectFolder} disabled={isSubmitting}>
+                <Button
+                  className="mt-4"
+                  type="button"
+                  variant="outline"
+                  onClick={handleSelectFolder}
+                  disabled={isSubmitting}
+                >
                   Select SD card / root folder
                 </Button>
               </div>
@@ -338,9 +353,9 @@ export default function Import() {
               {isSubmitting ? 'Inspecting...' : 'Inspect SD card'}
             </Button>
           </form>
-          {inspection ? (
+          {importPlan ? (
             <LoaderInspectionPanel
-              inspection={inspection}
+              plan={importPlan}
               canImport={Boolean(canImportDetectedSource)}
               isImporting={isSubmitting}
               onImport={handleDetectedImport}
@@ -352,30 +367,34 @@ export default function Import() {
         <CardHeader>
           <CardTitle className="text-2xl">Import O2 Ring Data</CardTitle>
           <CardDescription>
-            Upload ViHealth or O2 Insight Pro binary files from Wellue/Viatom oximeters. SleepLab will match each recording to an existing CPAP session by time.
+            Upload ViHealth or O2 Insight Pro binary files from Wellue/Viatom oximeters. SleepLab will match each
+            recording to an existing CPAP session by time.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-5" onSubmit={handleOximeterImport}>
-            <input
-              ref={oximeterInputRef}
-              hidden
-              multiple
-              type="file"
-              onChange={handleOximeterInputChange}
-            />
+            <input ref={oximeterInputRef} hidden multiple type="file" onChange={handleOximeterInputChange} />
             <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
               <p className="text-sm text-[var(--foreground)]">{oximeterLabel}</p>
               {oximeterFiles.length > 0 ? (
                 <div className="mt-3 max-h-24 overflow-auto rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
                   {oximeterFiles.map((file) => (
-                    <p key={`${file.name}-${file.size}`} className="truncate text-xs font-medium text-[var(--muted-foreground)]">
+                    <p
+                      key={`${file.name}-${file.size}`}
+                      className="truncate text-xs font-medium text-[var(--muted-foreground)]"
+                    >
                       {file.name}
                     </p>
                   ))}
                 </div>
               ) : null}
-              <Button className="mt-4" type="button" variant="outline" onClick={() => oximeterInputRef.current?.click()} disabled={isOximeterImporting}>
+              <Button
+                className="mt-4"
+                type="button"
+                variant="outline"
+                onClick={() => oximeterInputRef.current?.click()}
+                disabled={isOximeterImporting}
+              >
                 Select O2 files
               </Button>
             </div>
@@ -388,7 +407,9 @@ export default function Import() {
               />
               <span>
                 <span className="block font-bold text-[var(--foreground)]">Replace existing SpO2 data</span>
-                <span className="text-[var(--muted-foreground)]">Leave this off to skip sessions that already have oximeter data.</span>
+                <span className="text-[var(--muted-foreground)]">
+                  Leave this off to skip sessions that already have oximeter data.
+                </span>
               </span>
             </label>
             {oximeterResult ? <OximeterImportSummary result={oximeterResult} /> : null}
@@ -406,8 +427,8 @@ export default function Import() {
             Run a one-time import of recent CPAP sessions from your SleepHQ account. Configure your credentials in{' '}
             <Link className="font-medium text-[var(--foreground)] underline underline-offset-2" to="/settings">
               Settings
-            </Link>
-            {' '}first, then re-run this whenever you want to pull in newer sessions.
+            </Link>{' '}
+            first, then re-run this whenever you want to pull in newer sessions.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -437,15 +458,23 @@ export default function Import() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-lg border border-[var(--border)] px-4 py-3 text-sm space-y-1">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Server path</p>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                Server path
+              </p>
               <p className="font-mono text-[var(--foreground)]">{localPath}</p>
             </div>
             {localLastAt && (
               <div className="rounded-lg border border-[var(--border)] px-4 py-3 text-sm space-y-1">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Last import</p>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                  Last import
+                </p>
                 <p className="text-[var(--foreground)]">{new Date(localLastAt).toLocaleString()}</p>
                 {localLastStatus && (
-                  <p className={localLastStatus.startsWith('ok') ? 'text-[var(--olive-deep)]' : 'text-[var(--danger-text)]'}>
+                  <p
+                    className={
+                      localLastStatus.startsWith('ok') ? 'text-[var(--olive-deep)]' : 'text-[var(--danger-text)]'
+                    }
+                  >
                     {localLastStatus}
                   </p>
                 )}
@@ -514,66 +543,135 @@ function getInputRootName(files: File[]) {
 }
 
 export function LoaderInspectionPanel({
-  inspection,
+  plan,
   canImport,
   isImporting,
   onImport,
 }: {
-  inspection: LoaderInspectionResponse
+  plan: ImportPlanResponse
   canImport: boolean
   isImporting: boolean
   onImport: () => void
 }) {
+  const [showSerial, setShowSerial] = useState(false)
+  const inspection = plan.inspection
   return (
     <div className="mt-6 space-y-4 border-t border-[var(--border)] pt-6">
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Loader result</p>
         <h3 className="mt-1 text-lg font-bold text-[var(--foreground)]">
-          {inspection.matched ? `${inspection.devices.length} machine${inspection.devices.length === 1 ? '' : 's'} detected` : 'Source not recognized'}
+          {inspection.matched
+            ? `${inspection.devices.length} machine${inspection.devices.length === 1 ? '' : 's'} detected`
+            : 'Source not recognized'}
         </h3>
       </div>
-      {inspection.devices.map((device, index) => (
-        <div key={`${device.adapter_id}-${device.device_path}-${index}`} className="space-y-4 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="font-bold text-[var(--foreground)]">
-                {device.identity.manufacturer || device.manufacturer_hint || 'Unknown manufacturer'}
-                {(device.identity.model || device.family_hint) ? ` ${device.identity.model || device.family_hint}` : ''}
-              </p>
-              <p className="text-sm text-[var(--muted-foreground)]">{device.adapter_id} · {device.confidence} confidence</p>
-            </div>
-            <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
-              {device.device_path === '.' ? 'Card root' : device.device_path}
+      <div className="grid gap-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm sm:grid-cols-3">
+        <InspectionValue label="Files staged" value={String(plan.source_manifest.file_count)} />
+        <InspectionValue label="Source size" value={formatBytes(plan.source_manifest.total_bytes)} />
+        <InspectionValue label="Plan version" value={plan.plan_version} />
+        <div className="sm:col-span-3">
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+            Source fingerprint
+          </p>
+          <p
+            className="mt-1 truncate font-mono text-xs text-[var(--foreground)]"
+            title={plan.source_manifest.fingerprint}
+          >
+            {plan.source_manifest.fingerprint}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 sm:col-span-3">
+          {plan.source_manifest.roles.map((role) => (
+            <span
+              key={role.role}
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs text-[var(--foreground)]"
+            >
+              {role.role.replaceAll('_', ' ')}: {role.file_count}
             </span>
-          </div>
-          <dl className="grid gap-3 text-sm sm:grid-cols-2">
-            <InspectionValue label="Serial" value={device.identity.serial_number} />
-            <InspectionValue label="Model number" value={device.identity.model_number} />
-            <InspectionValue label="Firmware" value={device.identity.firmware_version} />
-            <InspectionValue label="Timezone basis" value={device.timezone_basis} />
-          </dl>
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Detection evidence</p>
-            <ul className="mt-2 space-y-1 text-sm text-[var(--foreground)]">
-              {device.evidence.map((evidence) => (
-                <li key={`${evidence.kind}-${evidence.relative_path}`}>{evidence.relative_path}: {evidence.observed}</li>
-              ))}
-            </ul>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(device.capabilities).map(([name, capability]) => (
-              <span key={name} className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs text-[var(--foreground)]">
-                {name.replaceAll('_', ' ')}: {capability.available ? capability.validation : 'unavailable'}
-              </span>
-            ))}
-          </div>
-          {device.warnings.map((warning) => (
-            <p key={warning.code} className="text-sm text-[var(--orange-700)]">{warning.message}</p>
           ))}
         </div>
-      ))}
+      </div>
+      {inspection.devices.map((device, index) => {
+        const devicePlan = findDevicePlan(plan, device.adapter_id, device.device_path)
+        return (
+          <div
+            key={`${device.adapter_id}-${device.device_path}-${index}`}
+            className="space-y-4 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-[var(--foreground)]">
+                  {device.identity.manufacturer || device.manufacturer_hint || 'Unknown manufacturer'}
+                  {device.identity.model || device.family_hint ? ` ${device.identity.model || device.family_hint}` : ''}
+                </p>
+                <p className="text-sm text-[var(--muted-foreground)]">
+                  {device.adapter_id} | {device.confidence} confidence
+                </p>
+              </div>
+              <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
+                {device.device_path === '.' ? 'Card root' : device.device_path}
+              </span>
+            </div>
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Serial</dt>
+                <dd className="mt-1 flex items-center gap-2 break-all text-[var(--foreground)]">
+                  <span>
+                    {showSerial
+                      ? device.identity.serial_number || 'Not available'
+                      : maskSerial(device.identity.serial_number)}
+                  </span>
+                  {device.identity.serial_number ? (
+                    <button
+                      className="text-xs font-bold text-[var(--accent)] underline underline-offset-2"
+                      type="button"
+                      onClick={() => setShowSerial((value) => !value)}
+                    >
+                      {showSerial ? 'Hide' : 'Show'}
+                    </button>
+                  ) : null}
+                </dd>
+              </div>
+              <InspectionValue label="Model number" value={device.identity.model_number} />
+              <InspectionValue label="Firmware" value={device.identity.firmware_version} />
+              <InspectionValue label="Timezone basis" value={device.timezone_basis} />
+            </dl>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                Detection evidence
+              </p>
+              <ul className="mt-2 space-y-1 text-sm text-[var(--foreground)]">
+                {device.evidence.map((evidence) => (
+                  <li key={`${evidence.kind}-${evidence.relative_path}`}>
+                    {evidence.relative_path}: {evidence.observed}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(device.capabilities).map(([name, capability]) => (
+                <span
+                  key={name}
+                  className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs text-[var(--foreground)]"
+                >
+                  {name.replaceAll('_', ' ')}: {capability.available ? capability.validation : 'unavailable'}
+                </span>
+              ))}
+            </div>
+            {device.warnings.map((warning) => (
+              <p key={warning.code} className="text-sm text-[var(--orange-700)]">
+                {warning.message}
+              </p>
+            ))}
+            {devicePlan ? <CoveragePanel device={devicePlan} /> : null}
+          </div>
+        )
+      })}
       {inspection.warnings.map((warning) => (
-        <p key={warning.code} className="rounded-[16px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-4 py-3 text-sm text-[var(--orange-700)]">
+        <p
+          key={warning.code}
+          className="rounded-[16px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-4 py-3 text-sm text-[var(--orange-700)]"
+        >
           {warning.message}
         </p>
       ))}
@@ -583,12 +681,57 @@ export function LoaderInspectionPanel({
             {isImporting ? 'Starting import...' : 'Import detected data'}
           </Button>
           {!canImport ? (
-            <p className="text-sm text-[var(--muted-foreground)]">
-              Detection works for this source, but its full importer is not connected to the 2.0 contract yet.
-            </p>
+            <div className="space-y-1 text-sm text-[var(--muted-foreground)]">
+              {plan.blockers.map((blocker) => (
+                <p key={blocker}>{blocker}</p>
+              ))}
+            </div>
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function findDevicePlan(plan: ImportPlanResponse, adapterId: string, devicePath: string) {
+  return plan.devices.find((device) => device.adapter_id === adapterId && device.device_path === devicePath)
+}
+
+function CoveragePanel({ device }: { device: ImportPlanResponse['devices'][number] }) {
+  const coverage = device.coverage
+  return (
+    <div className="space-y-3 border-t border-[var(--border)] pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Import coverage</p>
+        <span
+          className={
+            device.execution_status === 'ready'
+              ? 'rounded-full bg-[var(--accent-soft)] px-2.5 py-1 text-xs font-bold text-[var(--accent)]'
+              : 'rounded-full bg-[rgba(233,120,75,0.1)] px-2.5 py-1 text-xs font-bold text-[var(--orange-700)]'
+          }
+        >
+          {device.execution_status}
+        </span>
+      </div>
+      <dl className="grid gap-3 text-sm sm:grid-cols-3">
+        <InspectionValue
+          label="Date range"
+          value={coverage.first_date && coverage.last_date ? `${coverage.first_date} to ${coverage.last_date}` : null}
+        />
+        <InspectionValue label="Therapy days" value={String(coverage.therapy_days)} />
+        <InspectionValue label="Estimated blocks" value={String(coverage.estimated_session_blocks)} />
+        <InspectionValue label="Event files" value={String(coverage.event_files)} />
+        <InspectionValue label="Waveform files" value={String(coverage.waveform_files)} />
+        <InspectionValue label="Oximetry files" value={String(coverage.oximetry_files)} />
+      </dl>
+      {device.execution_backend ? (
+        <p className="text-xs text-[var(--muted-foreground)]">Execution backend: {device.execution_backend}</p>
+      ) : null}
+      {device.blockers.map((blocker) => (
+        <p key={blocker} className="text-sm text-[var(--orange-700)]">
+          {blocker}
+        </p>
+      ))}
     </div>
   )
 }
@@ -600,6 +743,24 @@ function InspectionValue({ label, value }: { label: string; value: string | null
       <dd className="mt-1 break-all text-[var(--foreground)]">{value || 'Not available'}</dd>
     </div>
   )
+}
+
+function maskSerial(serial: string | null) {
+  if (!serial) {
+    return 'Not available'
+  }
+  const visible = serial.slice(-4)
+  return `${'*'.repeat(Math.max(4, serial.length - visible.length))}${visible}`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /**
