@@ -80,6 +80,32 @@ def test_resmed_requires_the_sd_card_root(registry: LoaderRegistry, tmp_path: Pa
     assert report.warnings[0].code == "unrecognized_source"
 
 
+def test_resmed_peeks_space_delimited_airsense_10_identity(registry: LoaderRegistry, tmp_path: Path):
+    (tmp_path / "DATALOG").mkdir()
+    (tmp_path / "STR.edf").write_bytes(b"")
+    (tmp_path / "Identification.tgt").write_text(
+        "\n".join(
+            [
+                "#IMF 0001",
+                "#SRN TEST-SERIAL-001",
+                "#PNA AirSense_10_AutoSet",
+                "#PCD 37160",
+                "#BID TEST-BUILD-ID",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    detected = registry.detect(tmp_path).candidates[0]
+    identity = registry.get_adapter(detected.adapter_id).peek_info(detected)
+
+    assert identity.family == "AirSense 10"
+    assert identity.model == "AirSense 10 AutoSet"
+    assert identity.model_number == "37160"
+    assert identity.serial_number == "TEST-SERIAL-001"
+    assert identity.firmware_version is None
+
+
 def test_inspection_snapshot_uses_explicit_root_and_does_not_import(registry: LoaderRegistry, tmp_path: Path):
     (tmp_path / "DATALOG").mkdir()
     (tmp_path / "STR.edf").write_bytes(b"")

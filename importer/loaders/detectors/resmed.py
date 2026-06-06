@@ -180,10 +180,21 @@ def _read_tgt_identity(path: Path) -> dict[str, str]:
     fields: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw_line.strip().lstrip("#")
-        if "=" not in line:
+        if not line:
             continue
-        key, value = line.split("=", 1)
+        if "=" in line:
+            key, value = line.split("=", 1)
+        else:
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+            key, value = parts
         normalized = mapping.get(key.strip().upper())
         if normalized and value.strip():
-            fields[normalized] = value.strip()
+            fields[normalized] = value.strip().replace("_", " ") if normalized == "model" else value.strip()
+    model = fields.get("model", "")
+    for series in ("AirSense 11", "AirCurve 11", "AirSense 10", "AirCurve 10", "Sleepmate 10"):
+        if series.casefold() in model.casefold():
+            fields["series"] = series
+            break
     return fields
