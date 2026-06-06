@@ -1,0 +1,54 @@
+{
+  "fixture_id": "synthetic-resmed-minimal",
+  "schema_version": "1.0",
+  "fixture_kind": "synthetic",
+  "source_directory": "source",
+  "redistribution": "repository",
+  "anonymization": {
+    "method": "Generated structural fixture with no patient or real device data.",
+    "reviewed": true,
+    "reviewed_at": "2026-06-06"
+  },
+  "source_hash": "generated-in-repository",
+  "reference": {
+    "oscar_version": null,
+    "oscar_export_hash": null,
+    "parser_id": "resmed-native-v2",
+    "parser_version": "2.0-alpha"
+  },
+  "expected": {
+    "matched": true,
+    "ambiguous": false,
+    "device_count": 1,
+    "adapter_id": "resmed-native-v2",
+    "manufacturer": "ResMed",
+    "family": "AirSense 10",
+    "executable": true,
+    "source_file_count": 5,
+    "capabilities": {
+      "identity": {
+        "available": true,
+        "validation": "partial"
+      },
+      "sessions": {
+        "available": true,
+        "validation": "validated"
+      },
+      "settings": {
+        "available": true,
+        "validation": "unvalidated"
+      },
+      "source_manifest": {
+        "available": false,
+        "validation": "unvalidated"
+      }
+    },
+    "coverage": {
+      "therapy_days": 1,
+      "estimated_session_blocks": 1,
+      "event_files": 1,
+      "waveform_files": 0,
+      "settings_files": 1
+    }
+  }
+}

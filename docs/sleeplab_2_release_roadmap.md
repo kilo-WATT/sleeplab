@@ -222,14 +222,20 @@ These are valuable but should not block a trustworthy 2.0:
 
 ## Immediate implementation order
 
-1. Persist `cpap_machines` and machine-scoped source session identity.
-2. Persist `import_runs`, source files, warnings, and validation state.
-3. Persist `session_blocks`, settings snapshots, channel metadata, and event
-   provenance.
-4. Parse selected ResMed `STR.edf` settings and mask-on/off intervals.
-5. Add the fixture manifest and normalized conformance runner.
+The alpha branch now persists the first three items and includes a synthetic
+manifest-driven conformance runner. Native ResMed writes machine/run/session
+provenance, explicit PLD therapy blocks, PLD channel metadata, event
+provenance, and derived summary provenance. Settings tables and APIs exist but
+STR/CSL extraction is still pending.
+
+1. Parse selected ResMed `STR.edf` settings and mask-on/off intervals.
+2. Expand native ResMed metadata to BRP/SA2 channels and source absence reasons.
+3. Add persisted duplicate/incremental import conformance tests.
+4. Obtain two anonymized ResMed fixtures with OSCAR references.
+5. Add the first Lowenstein read-only normalized fixture comparison.
 6. Pin/package `cpap-parser` and implement Lowenstein read-only conformance.
 7. Enable Lowenstein persistence after its fixture gate passes.
 8. Add PRS1/DreamStation fixture-backed import work.
-9. Add the import-history, machine, settings, and diagnostics UI.
+9. Expand the import-history UI with source-file drill-down and settings
+   change history.
 10. Begin beta only after the alpha exit gate is met.

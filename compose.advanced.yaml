@@ -104,13 +104,6 @@ services:
       # API key for the wearable data provider.
       WEARABLE_DEFAULT_API_KEY: ${WEARABLE_DEFAULT_API_KEY:-}
 
-      # --- Time zones --------------------------------------------------------
-      # IANA timezone the CPAP machine is set to (e.g. America/New_York).
-      # Used to interpret naive local timestamps in EDF files before storing as UTC.
-      MACHINE_TZ: ${MACHINE_TZ:-UTC}
-      # IANA timezone for chart labels and session cards in the UI.
-      DISPLAY_TZ: ${DISPLAY_TZ:-UTC}
-
     # -------------------------------------------------------------------------
     # Optional: Local DATALOG import
     # -------------------------------------------------------------------------
