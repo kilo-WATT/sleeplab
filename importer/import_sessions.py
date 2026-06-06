@@ -176,6 +176,35 @@ def dedupe_events(events: list) -> list:
     return deduped
 
 
+def derive_large_leak_events(
+    leak_values: list[float],
+    csl_start: datetime,
+    block_start: datetime,
+    sample_seconds: float = 2.0,
+    threshold_lps: float = 0.4,
+) -> list[tuple[float, float, str]]:
+    """Convert a compatible unintentional-leak signal into duration events."""
+    events: list[tuple[float, float, str]] = []
+    span_start: int | None = None
+    block_offset = (block_start - csl_start).total_seconds()
+
+    for index, value in enumerate(leak_values):
+        if value >= threshold_lps and span_start is None:
+            span_start = index
+        elif value < threshold_lps and span_start is not None:
+            end_seconds = block_offset + index * sample_seconds
+            duration = (index - span_start) * sample_seconds
+            events.append((end_seconds, duration, "Large Leak"))
+            span_start = None
+
+    if span_start is not None:
+        end_seconds = block_offset + len(leak_values) * sample_seconds
+        duration = (len(leak_values) - span_start) * sample_seconds
+        events.append((end_seconds, duration, "Large Leak"))
+
+    return events
+
+
 def events_for_block(events: list, csl_start: datetime, block_start: datetime, duration_seconds: int) -> list:
     block_end = block_start + timedelta(seconds=duration_seconds)
     assigned = []
@@ -218,6 +247,13 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
             pld_start = _localize(pld_header.start_datetime, machine_tz)
             duration_s = int(pld_header.num_records * pld_header.duration_per_record)
             events = events_for_block(events, csl_start, pld_start, duration_s)
+            events.extend(
+                derive_large_leak_events(
+                    pld_channels.get("Leak.2s", []),
+                    csl_start,
+                    pld_start,
+                )
+            )
 
             # Parse SA2/SAD (optional)
             spo2_data = None
@@ -238,6 +274,8 @@ def import_folder(folder: Path, folder_date: date, conn, user_id: str):
                 'duration_seconds':   duration_s,
                 'device_serial':      pld_header.device_serial or None,
                 'manufacturer':       'ResMed',
+                'leak_kind':          'unintentional',
+                'leak_unit':          'L/s',
                 'has_spo2':           spo2_data is not None,
                 'therapy_mode':       None,
                 'mask_type':          None,

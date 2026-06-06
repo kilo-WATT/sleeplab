@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
+import { leakToLpm } from '../lib/units'
 
 /**
  * Helper function for ahi tone.
@@ -186,7 +187,7 @@ export default function Dashboard() {
 
   const leakSessions = primarySessions.filter(s => s.avg_leak !== null)
   const avgLeak = leakSessions.length > 0
-    ? leakSessions.reduce((sum, s) => sum + (s.avg_leak ?? 0), 0) / leakSessions.length
+    ? leakSessions.reduce((sum, s) => sum + (leakToLpm(s.avg_leak, s.leak_unit) ?? 0), 0) / leakSessions.length
     : null
 
   const bestNight = primarySessions
@@ -195,7 +196,7 @@ export default function Dashboard() {
 
   const perDayData: Record<string, { pressure: number | null; leak: number | null }> = {}
   for (const [date, s] of primaryByDate) {
-    perDayData[date] = { pressure: s.avg_pressure, leak: s.avg_leak }
+    perDayData[date] = { pressure: s.avg_pressure, leak: leakToLpm(s.avg_leak, s.leak_unit) }
   }
 
   const flaggedNights: FlaggedNight[] = []
@@ -223,8 +224,8 @@ export default function Dashboard() {
     flaggedNights.push({
       date: s.folder_date,
       label: 'Highest leak',
-      detail: `${s.avg_leak?.toFixed(0)} L/min`,
-      severity: (s.avg_leak ?? 0) >= 40 ? 'high' : 'warn',
+      detail: `${leakToLpm(s.avg_leak, s.leak_unit)?.toFixed(0)} L/min`,
+      severity: (leakToLpm(s.avg_leak, s.leak_unit) ?? 0) >= 40 ? 'high' : 'warn',
     })
     flaggedDatesSet.add(s.folder_date)
   }

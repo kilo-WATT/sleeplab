@@ -45,6 +45,9 @@ class SessionSummary(BaseModel):
     avg_pressure: float | None
     p95_pressure: float | None
     avg_leak: float | None
+    manufacturer: str | None = None
+    leak_kind: Literal["total", "unintentional", "large_leak", "unknown"] | None = None
+    leak_unit: str | None = None
     has_spo2: bool
     machine_tz: str | None = None
 
@@ -266,6 +269,8 @@ class EventWindowResponse(BaseModel):
     neighboring_events: list[EventRecord]
     metrics: MetricsResponse
     waveform: WaveformResponse
+    leak_kind: Literal["total", "unintentional", "large_leak", "unknown"] | None = None
+    leak_unit: str | None = None
 
 
 EquipmentType = Literal["cushion", "headgear", "tubing", "humidifier_chamber", "filter"]

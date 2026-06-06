@@ -26,6 +26,7 @@ const EVENT_COLORS: Record<string, string> = {
   'Hypopnea':          '#E9784B',
   'Apnea':             '#C9B715',
   'Arousal':           '#6AA136',
+  'Large Leak':        '#b8b8b8',
 }
 
 /**
@@ -67,8 +68,8 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
   const startTs = new Date(startDatetime).getTime()
   const fallbackStartTs = Number.isFinite(startTs) ? startTs : 0
   const eventRanges = events.map((event) => {
-    const ts = eventTimestamp(event, fallbackStartTs)
-    return [ts, ts + (event.duration_seconds ?? 0) * 1000] as [number, number]
+    const end = eventTimestamp(event, fallbackStartTs)
+    return [end - (event.duration_seconds ?? 0) * 1000, end] as [number, number]
   })
   const requestedDomainStart = timeDomain?.[0]
   const requestedDomainEnd = timeDomain?.[1]
@@ -118,7 +119,7 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
           {events.map((evt) => {
             const isSelected = selectedEventId === evt.id
             const ts = eventTimestamp(evt, fallbackStartTs)
-            const markerStartTs = isSelected && evt.duration_seconds
+            const markerStartTs = evt.duration_seconds
               ? Math.max(domainStart, ts - evt.duration_seconds * 1000)
               : ts
             const widthPct = evt.duration_seconds

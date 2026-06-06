@@ -305,6 +305,9 @@ export interface SessionSummary {
   avg_pressure: number | null
   p95_pressure: number | null
   avg_leak: number | null
+  manufacturer?: string | null
+  leak_kind?: 'total' | 'unintentional' | 'large_leak' | 'unknown' | null
+  leak_unit?: string | null
   has_spo2: boolean
   machine_tz: string | null
 }
@@ -472,6 +475,8 @@ export interface EventWindowResponse {
   neighboring_events: EventRecord[]
   metrics: MetricsResponse
   waveform: WaveformResponse
+  leak_kind?: 'total' | 'unintentional' | 'large_leak' | 'unknown' | null
+  leak_unit?: string | null
 }
 
 /**

@@ -89,6 +89,8 @@ def upsert_session(conn: Any, data: dict) -> int:
         The database ID of the inserted or updated session.
     """
     data.setdefault("manufacturer", None)
+    data.setdefault("leak_kind", None)
+    data.setdefault("leak_unit", None)
     sql = """
     INSERT INTO sessions (
         session_id, folder_date, block_index, start_datetime, pld_start_datetime,
@@ -98,7 +100,7 @@ def upsert_session(conn: Any, data: dict) -> int:
         avg_pressure, p95_pressure, avg_leak, avg_resp_rate, avg_tidal_vol,
         avg_min_vent, avg_snore, avg_flow_lim, has_spo2,
         therapy_mode, mask_type, humidity_level, temperature_c,
-        machine_tz, manufacturer, user_id, updated_at
+        machine_tz, manufacturer, leak_kind, leak_unit, user_id, updated_at
     ) VALUES (
         %(session_id)s, %(folder_date)s, %(block_index)s, %(start_datetime)s, %(pld_start_datetime)s,
         %(duration_seconds)s, %(device_serial)s, %(ahi)s,
@@ -107,7 +109,7 @@ def upsert_session(conn: Any, data: dict) -> int:
         %(avg_pressure)s, %(p95_pressure)s, %(avg_leak)s, %(avg_resp_rate)s, %(avg_tidal_vol)s,
         %(avg_min_vent)s, %(avg_snore)s, %(avg_flow_lim)s, %(has_spo2)s,
         %(therapy_mode)s, %(mask_type)s, %(humidity_level)s, %(temperature_c)s,
-        %(machine_tz)s, %(manufacturer)s, %(user_id)s, NOW()
+        %(machine_tz)s, %(manufacturer)s, %(leak_kind)s, %(leak_unit)s, %(user_id)s, NOW()
     )
     ON CONFLICT (user_id, session_id) DO UPDATE SET
         folder_date             = EXCLUDED.folder_date,
@@ -138,6 +140,8 @@ def upsert_session(conn: Any, data: dict) -> int:
         temperature_c           = EXCLUDED.temperature_c,
         machine_tz              = EXCLUDED.machine_tz,
         manufacturer            = COALESCE(NULLIF(EXCLUDED.manufacturer, ''), NULLIF(sessions.manufacturer, '')),
+        leak_kind               = COALESCE(EXCLUDED.leak_kind, sessions.leak_kind),
+        leak_unit               = COALESCE(EXCLUDED.leak_unit, sessions.leak_unit),
         -- user_id intentionally excluded: re-import must not change ownership
         updated_at              = NOW()
     RETURNING id

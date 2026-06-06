@@ -54,8 +54,8 @@ describe('computeMetricsDomain', () => {
     const domain = computeMetricsDomain(metricsToPoints(metricsResponse([...tinyBlock, ...realBlocks])))
 
     expect(domain).not.toBeNull()
-    expect(domain![0]).toBe(realBlockOneStart - 12 * 60 * 1000)
-    expect(domain![1]).toBe(realBlockThreeEnd + 12 * 60 * 1000)
+    expect(domain![0]).toBe(realBlockOneStart)
+    expect(domain![1]).toBe(realBlockThreeEnd)
     expect(domain![0]).toBeGreaterThan(tinyBlock[1])
   })
 
@@ -91,5 +91,13 @@ describe('computeMetricsDomain', () => {
     expect(blockOne.every((ts) => plottedSampleTimes.has(ts))).toBe(true)
     expect(blockTwo.every((ts) => plottedSampleTimes.has(ts))).toBe(true)
     expect(blockThree.every((ts) => plottedSampleTimes.has(ts))).toBe(true)
+  })
+
+  it('converts canonical leak samples from L/s to L/min', () => {
+    const timestamp = Date.UTC(2026, 5, 2, 4, 0)
+    const metrics = metricsResponse([timestamp])
+    metrics.leak = [0.2]
+
+    expect(metricsToPoints(metrics)[0].leak).toBe(12)
   })
 })

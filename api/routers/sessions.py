@@ -310,7 +310,7 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
         ["Total nights recorded", str(nights_used)],
         ["Average pressure", _format_metric(avg_pressure, " cmH2O")],
         ["P95 pressure", _format_metric(p95_pressure, " cmH2O")],
-        ["Average leak", _format_metric(avg_leak * 1000 if avg_leak is not None else None, " mL/s")],
+        ["Average leak", _format_metric(avg_leak * 60 if avg_leak is not None else None, " L/min")],
     ]
 
     story = [
@@ -500,6 +500,9 @@ def list_sessions(
                 AVG(avg_pressure) AS avg_pressure,
                 MAX(p95_pressure) AS p95_pressure,
                 AVG(avg_leak) AS avg_leak,
+                (array_agg(manufacturer ORDER BY duration_seconds DESC))[1] AS manufacturer,
+                (array_agg(leak_kind ORDER BY duration_seconds DESC))[1] AS leak_kind,
+                (array_agg(leak_unit ORDER BY duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(has_spo2) AS has_spo2,
                 (array_agg(machine_tz ORDER BY duration_seconds DESC))[1] AS machine_tz,
                 CASE
@@ -515,7 +518,8 @@ def list_sessions(
         SELECT id, session_id, folder_date, block_index, start_datetime, end_datetime, duration_seconds,
                ahi, central_apnea_count, obstructive_apnea_count, hypopnea_count,
                apnea_count, arousal_count, total_ahi_events,
-               avg_pressure, p95_pressure, avg_leak, has_spo2, machine_tz
+               avg_pressure, p95_pressure, avg_leak, manufacturer, leak_kind, leak_unit,
+               has_spo2, machine_tz
         FROM night
         ORDER BY folder_date DESC
         LIMIT :limit OFFSET :offset
@@ -630,6 +634,8 @@ def get_session(
                 AVG(s.avg_pressure) AS avg_pressure,
                 MAX(s.p95_pressure) AS p95_pressure,
                 AVG(s.avg_leak) AS avg_leak,
+                (array_agg(s.leak_kind ORDER BY s.duration_seconds DESC))[1] AS leak_kind,
+                (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(s.has_spo2) AS has_spo2,
                 CASE WHEN SUM(s.duration_seconds) > 0
                      THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
@@ -792,7 +798,8 @@ def get_event_window(
     event_row = (
         db.execute(
             text("""
-            SELECT se.id, se.event_type, se.onset_seconds, se.duration_seconds, se.event_datetime
+            SELECT se.id, se.event_type, se.onset_seconds, se.duration_seconds, se.event_datetime,
+                   s.leak_kind, s.leak_unit
             FROM session_events se
             JOIN sessions s ON se.session_id = s.id
             WHERE se.id = :event_id
@@ -896,6 +903,8 @@ def get_event_window(
             flow=[_f(r["flow"]) for r in waveform_rows],
             pressure=[_f(r["pressure"]) for r in waveform_rows],
         ),
+        leak_kind=event_row["leak_kind"],
+        leak_unit=event_row["leak_unit"],
     )
 
 
@@ -1193,7 +1202,6 @@ def _session_detail_response(row, user_id: str, db: Session) -> SessionDetail:
         current_score=therapy_score.total,
         db=db,
     )
-    data.pop("manufacturer", None)
     data.pop("parser_validated", None)
     return SessionDetail.model_validate(data)
 
@@ -1212,6 +1220,8 @@ def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: S
                 SUM(s.duration_seconds) AS duration_seconds,
                 SUM(s.total_ahi_events) AS total_ahi_events,
                 AVG(s.avg_leak) AS avg_leak,
+                (array_agg(s.leak_kind ORDER BY s.duration_seconds DESC))[1] AS leak_kind,
+                (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(s.has_spo2) AS has_spo2,
                 CASE WHEN SUM(s.duration_seconds) > 0
                      THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
@@ -1288,6 +1298,8 @@ def get_session_by_date(
                 AVG(s.avg_pressure) AS avg_pressure,
                 MAX(s.p95_pressure) AS p95_pressure,
                 AVG(s.avg_leak) AS avg_leak,
+                (array_agg(s.leak_kind ORDER BY s.duration_seconds DESC))[1] AS leak_kind,
+                (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(s.has_spo2) AS has_spo2,
                 CASE WHEN SUM(s.duration_seconds) > 0
                      THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)

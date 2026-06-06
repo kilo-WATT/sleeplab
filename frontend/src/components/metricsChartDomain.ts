@@ -1,4 +1,5 @@
 import type { MetricsResponse } from '../api/client'
+import { leakToLpm } from '../lib/units'
 
 export type MetricPoint = {
   ts: number
@@ -14,7 +15,6 @@ export type MetricKey = keyof Omit<MetricPoint, 'ts'>
 
 const GAP_THRESHOLD_MS = 5 * 60 * 1000
 const MIN_THERAPY_BLOCK_MS = 300 * 1000
-const DOMAIN_PADDING_MS = 12 * 60 * 1000
 
 function hasAnyMetricValue(point: MetricPoint) {
   return point.pressure != null
@@ -33,7 +33,7 @@ export function metricsToPoints(metrics: MetricsResponse): MetricPoint[] {
   return metrics.timestamps.map((ts, i) => ({
     ts: new Date(ts).getTime(),
     pressure: metrics.pressure[i],
-    leak: metrics.leak[i] != null ? metrics.leak[i]! * 1000 : null,
+    leak: leakToLpm(metrics.leak[i]),
     resp_rate: metrics.resp_rate[i],
     flow_lim: metrics.flow_lim[i],
     snore: metrics.snore[i],
@@ -69,7 +69,7 @@ export function computeMetricsDomain(points: MetricPoint[]): [number, number] | 
   const lastBlock = includedBlocks.at(-1)!
   const lastTs = lastBlock.at(-1)!.ts
 
-  return [firstTs - DOMAIN_PADDING_MS, lastTs + DOMAIN_PADDING_MS]
+  return [firstTs, lastTs]
 }
 
 export function addMetricGapBreaks(points: MetricPoint[]): MetricPoint[] {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import type { SessionSummary } from '../api/client'
+import { leakToLpm } from '../lib/units'
 
 export type CalendarMetric = 'ahi' | 'usage' | 'leak'
 
@@ -157,7 +158,7 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
         entries[session.folder_date] = {
           ahi: session.ahi,
           hours: session.duration_hours,
-          leak: session.avg_leak,
+          leak: leakToLpm(session.avg_leak, session.leak_unit),
           durationSeconds: session.duration_seconds,
         }
       }

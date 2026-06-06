@@ -9,6 +9,7 @@ import InfoPopover from '../components/InfoPopover'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
+import { leakToLpm } from '../lib/units'
 
 const TREND_FLAG_COLORS = {
   good: {
@@ -590,9 +591,11 @@ function humanizeEventType(eventType: string) {
  */
 function formatMetricValue(value: number | null | undefined, metric: TrendMetric) {
   if (value == null) return '-'
+  const displayValue = metric.key === 'avg_leak' ? leakToLpm(value) : value
+  if (displayValue == null) return '-'
   if (metric.unit === 'clock') return formatClockHour(value)
   const precision = metric.precision ?? 1
-  const formatted = value.toFixed(precision)
+  const formatted = displayValue.toFixed(precision)
   return metric.unit ? `${formatted} ${metric.unit}` : formatted
 }
 
@@ -604,9 +607,12 @@ function formatMetricRange(low: number, high: number, metric: TrendMetric) {
     return `${formatClockHour(low)} / ${formatClockHour(high)}`
   }
 
+  const displayLow = metric.key === 'avg_leak' ? leakToLpm(low) : low
+  const displayHigh = metric.key === 'avg_leak' ? leakToLpm(high) : high
+  if (displayLow == null || displayHigh == null) return '-'
   const precision = metric.precision ?? 1
-  const lowValue = low.toFixed(precision)
-  const highValue = high.toFixed(precision)
+  const lowValue = displayLow.toFixed(precision)
+  const highValue = displayHigh.toFixed(precision)
   return metric.unit ? `${lowValue} / ${highValue} ${metric.unit}` : `${lowValue} / ${highValue}`
 }
 
@@ -666,7 +672,10 @@ function metricNumber(value: OverviewDailyStat[MetricKey]) {
  */
 function calculateMetricSummary(nights: OverviewDailyStat[], metric: TrendMetric) {
   const points = nights
-    .map((night) => ({ night, value: metricNumber(night[metric.key]) }))
+    .map((night) => ({
+      night,
+      value: metricNumber(night[metric.key]),
+    }))
     .filter((point): point is { night: OverviewDailyStat; value: number } => point.value != null)
 
   if (points.length === 0) {
@@ -756,7 +765,9 @@ function OverviewChart({
   const data = nights.map((night) => ({
     ...night,
     date: night.folder_date,
-    primary: night[metric.key],
+    primary: metric.key === 'avg_leak'
+      ? leakToLpm(metricNumber(night[metric.key]))
+      : night[metric.key],
     secondary: metric.secondaryKey ? night[metric.secondaryKey] : null,
   }))
 
@@ -822,7 +833,11 @@ function OverviewChart({
               labelStyle={{ color: 'var(--foreground)' }}
               formatter={(value, name) => {
                 const label = name === 'secondary' ? (metric.secondaryLabel ?? 'End') : metric.shortLabel
-                return [formatMetricValue(typeof value === 'number' ? value : null, metric), label]
+                const numericValue = typeof value === 'number' ? value : null
+                const formattedValue = metric.key === 'avg_leak' && numericValue != null
+                  ? `${numericValue.toFixed(metric.precision ?? 1)} ${metric.unit}`
+                  : formatMetricValue(numericValue, metric)
+                return [formattedValue, label]
               }}
             />
             {metric.referenceLines?.map((line) => (

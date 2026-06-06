@@ -200,12 +200,13 @@ def get_overview(
         metric AS (
             SELECT
                 s.folder_date,
-                ROUND((COUNT(*) FILTER (WHERE sm.leak >= 24) * 2.0 / 60.0)::numeric, 1) AS large_leak_minutes
+                ROUND((SUM(COALESCE(se.duration_seconds, 0)) / 60.0)::numeric, 1) AS large_leak_minutes
             FROM sessions s
-            JOIN session_metrics sm ON sm.session_id = s.id
+            JOIN session_events se ON se.session_id = s.id
             WHERE s.user_id = CAST(:uid AS uuid)
               AND s.duration_seconds >= 600
               AND s.folder_date >= CURRENT_DATE - (:days * INTERVAL '1 day')
+              AND se.event_type = 'Large Leak'
             GROUP BY s.folder_date
         ),
         spo2 AS (

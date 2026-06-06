@@ -1,8 +1,8 @@
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceArea, Tooltip,
   ResponsiveContainer
 } from 'recharts'
-import type { MetricsResponse } from '../api/client'
+import type { EventRecord, MetricsResponse } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { addMetricGapBreaks, computeMetricsDomain, metricsToPoints, type MetricKey } from './metricsChartDomain'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
@@ -12,6 +12,8 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
  */
 interface Props {
   metrics: MetricsResponse
+  events?: EventRecord[]
+  leakKind?: 'total' | 'unintentional' | 'large_leak' | 'unknown' | null
 }
 
 type PanelDefinition = {
@@ -28,7 +30,7 @@ type PanelDefinition = {
  *
  * @returns The rendered React element.
  */
-export default function MetricsChartSplit({ metrics }: Props) {
+export default function MetricsChartSplit({ metrics, events = [], leakKind }: Props) {
   const rawData = metricsToPoints(metrics)
   const xDomain = computeMetricsDomain(rawData)
   const domainStart = xDomain?.[0] ?? 0
@@ -63,7 +65,13 @@ export default function MetricsChartSplit({ metrics }: Props) {
   const panels: PanelDefinition[] = [
     { title: 'Pressure', dataKey: 'pressure', stroke: '#38bdf8', unit: 'cmH₂O', ...makeTicks('pressure', 1) },
     { title: 'Resp Rate', dataKey: 'resp_rate', stroke: '#4ade80', unit: 'bpm', domain: [0, 40] as [number, number], ticks: [0, 10, 20, 30, 40] },
-    { title: 'Leak', dataKey: 'leak', stroke: '#fb923c', unit: 'mL/s', ...makeTicks('leak', 0) },
+    {
+      title: leakKind === 'total' ? 'Total Leak' : 'Leak',
+      dataKey: 'leak',
+      stroke: '#fb923c',
+      unit: 'L/min',
+      ...makeTicks('leak', 0),
+    },
     { title: 'Flow Limitation', dataKey: 'flow_lim', stroke: '#f472b6', unit: '', ...makeTicks('flow_lim', 0) },
     { title: 'Snore', dataKey: 'snore', stroke: '#a78bfa', unit: '', ...makeTicks('snore', 0) },
     { title: 'Min Ventilation', dataKey: 'min_vent', stroke: '#34d399', unit: 'L/min', ...makeTicks('min_vent', 1) },
@@ -83,6 +91,12 @@ export default function MetricsChartSplit({ metrics }: Props) {
   )
 
   const commonProps = { data: domainData, margin: { top: 4, right: 16, left: 0, bottom: 0 } }
+  const largeLeakSpans = events
+    .filter((event) => event.event_type === 'Large Leak' && event.duration_seconds)
+    .map((event) => {
+      const end = new Date(event.event_datetime).getTime()
+      return { id: event.id, start: end - (event.duration_seconds ?? 0) * 1000, end }
+    })
 
   return (
     <Card>
@@ -106,6 +120,16 @@ export default function MetricsChartSplit({ metrics }: Props) {
                     ticks={panel.ticks}
                     width={36}
                   />
+                  {largeLeakSpans.map((span) => (
+                    <ReferenceArea
+                      key={span.id}
+                      x1={span.start}
+                      x2={span.end}
+                      fill="#64748b"
+                      fillOpacity={0.14}
+                      strokeOpacity={0}
+                    />
+                  ))}
                   <Tooltip
                     contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 12 }}
                     labelStyle={{ color: '#f8fafc' }}

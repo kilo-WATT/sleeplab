@@ -53,4 +53,30 @@ describe('EventTimeline', () => {
     expect(Number.parseFloat(marker.style.left)).toBeGreaterThan(70)
     expect(Number.parseFloat(marker.style.left)).toBeLessThan(75)
   })
+
+  it('positions duration events from their start when the stored timestamp is the end', () => {
+    const domainStart = new Date('2026-06-02T04:00:00Z').getTime()
+    const domainEnd = new Date('2026-06-02T04:10:00Z').getTime()
+
+    render(
+      <EventTimeline
+        startDatetime="2026-06-02T04:00:00Z"
+        durationSeconds={600}
+        timeDomain={[domainStart, domainEnd]}
+        events={[
+          {
+            id: 1,
+            event_type: 'Large Leak',
+            onset_seconds: 300,
+            duration_seconds: 120,
+            event_datetime: '2026-06-02T04:05:00Z',
+          },
+        ]}
+      />,
+    )
+
+    const marker = screen.getByRole('button', { name: /large leak/i })
+    expect(Number.parseFloat(marker.style.left)).toBeCloseTo(30)
+    expect(Number.parseFloat(marker.style.width)).toBeCloseTo(20)
+  })
 })

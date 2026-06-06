@@ -12,6 +12,7 @@ import {
 
 import type { EventRecord, EventWindowResponse } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
+import { leakToLpm } from '../lib/units'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons/ChevronIcons'
 import { Card, CardContent, CardTitle } from './ui/card'
 import { Button } from './ui/button'
@@ -91,6 +92,7 @@ const EVENT_CODES: Record<string, string> = {
   'Hypopnea': 'H',
   'Apnea': 'A',
   'Arousal': 'RE',
+  'Large Leak': 'LL',
 }
 
 /**
@@ -104,6 +106,7 @@ const EVENT_COLORS: Record<string, string> = {
   'Hypopnea': '#E9784B',
   'Apnea': '#C9B715',
   'Arousal': '#6AA136',
+  'Large Leak': '#b8b8b8',
 }
 
 /**
@@ -244,7 +247,7 @@ export default function EventInspector({
   }))
   const metrics = data.metrics.timestamps.map((ts, i) => ({
     ts: new Date(ts).getTime(),
-    leak: data.metrics.leak[i] != null ? data.metrics.leak[i]! * 1000 : null,
+    leak: leakToLpm(data.metrics.leak[i], data.leak_unit),
     flowLim: data.metrics.flow_lim[i],
     respRate: data.metrics.resp_rate[i],
   }))
@@ -324,8 +327,10 @@ export default function EventInspector({
                 <p className="font-semibold">{pressureAvg?.toFixed(1) ?? '-'} cmH2O</p>
               </div>
               <div className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2">
-                <p className="text-[var(--muted-foreground)]">Max leak</p>
-                <p className="font-semibold">{leakMax?.toFixed(0) ?? '-'} mL/s</p>
+                <p className="text-[var(--muted-foreground)]">
+                  Max {data.leak_kind === 'total' ? 'total leak' : 'leak'}
+                </p>
+                <p className="font-semibold">{leakMax?.toFixed(1) ?? '-'} L/min</p>
               </div>
               <div className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2">
                 <p className="text-[var(--muted-foreground)]">Samples</p>
@@ -401,7 +406,14 @@ export default function EventInspector({
                 <YAxis tick={{ fill: '#64748b', fontSize: 11 }} width={42} />
                 <Tooltip labelFormatter={(v) => fmtTs(Number(v))} />
                 <EventBands data={data} />
-                <Line type="monotone" dataKey="leak" name="Leak mL/s" stroke="#E9784B" dot={false} strokeWidth={1.4} />
+                <Line
+                  type="monotone"
+                  dataKey="leak"
+                  name={`${data.leak_kind === 'total' ? 'Total leak' : 'Leak'} L/min`}
+                  stroke="#E9784B"
+                  dot={false}
+                  strokeWidth={1.4}
+                />
                 <Line type="monotone" dataKey="flowLim" name="Flow limitation" stroke="#6AA136" dot={false} strokeWidth={1.4} />
               </LineChart>
             </ResponsiveContainer>

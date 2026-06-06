@@ -137,6 +137,32 @@ def test_dedupe_events_preserves_zero_duration_arousal():
     ]
 
 
+def test_derive_large_leak_events_uses_end_time_and_duration():
+    csl_start = datetime(2026, 6, 1, 23, 50, tzinfo=UTC)
+    block_start = csl_start + timedelta(minutes=10)
+
+    events = import_sessions.derive_large_leak_events(
+        [0.1, 0.4, 0.5, 0.2, 0.4, 0.6],
+        csl_start,
+        block_start,
+    )
+
+    assert events == [
+        (606.0, 4.0, "Large Leak"),
+        (612.0, 4.0, "Large Leak"),
+    ]
+
+
+def test_derive_large_leak_events_ignores_values_below_threshold():
+    start = datetime(2026, 6, 1, 23, 50, tzinfo=UTC)
+
+    assert import_sessions.derive_large_leak_events(
+        [0.0, 0.1, 0.39],
+        start,
+        start,
+    ) == []
+
+
 def test_replace_session_events_dedupes_before_insert_and_keeps_zero_duration(monkeypatch):
     inserted = []
 
@@ -250,6 +276,8 @@ def test_resmed_import_folder_sets_manufacturer_and_scores_leak(monkeypatch, tmp
     assert import_sessions.import_folder(folder, date(2026, 6, 1), FakeConn(), "user-1") == 1
 
     assert upserts[0]["manufacturer"] == "ResMed"
+    assert upserts[0]["leak_kind"] == "unintentional"
+    assert upserts[0]["leak_unit"] == "L/s"
     assert upserts[0]["avg_leak"] == 0.1704
     score = compute_therapy_score({**upserts[0], "parser_validated": True})
     assert score.components.leak is not None

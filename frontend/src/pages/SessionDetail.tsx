@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
+import { leakToLpm } from '../lib/units'
 import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, EventWindowResponse, TherapyScoreComponent } from '../api/client'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
@@ -64,9 +65,9 @@ const EVENT_WINDOW_PRESETS: Record<number, { before: number; after: number }> = 
  * @returns The rendered React element.
  */
 const EVENT_WINDOW_DOWNSAMPLE: Record<number, number> = {
-  1: 1,
-  3: 2,
-  5: 3,
+  1: 2,
+  3: 4,
+  5: 6,
 }
 
 /**
@@ -80,6 +81,7 @@ const EVENT_CODES: Record<string, string> = {
   'Hypopnea': 'H',
   'Apnea': 'A',
   'Arousal': 'RE',
+  'Large Leak': 'LL',
 }
 
 /**
@@ -93,6 +95,7 @@ const EVENT_COLORS: Record<string, string> = {
   'Hypopnea': '#E9784B',
   'Apnea': '#C9B715',
   'Arousal': '#6AA136',
+  'Large Leak': '#b8b8b8',
 }
 
 const THERAPY_COMPONENTS: Array<{ key: keyof SessionDetailType['therapy_score']['components']; label: string }> = [
@@ -243,27 +246,6 @@ export default function SessionDetail() {
       inspectEvent(nextEvent)
     }
   }
-
-  useEffect(() => {
-    if (!session || selectedEventIndex < 0) return
-    const preset = EVENT_WINDOW_PRESETS[eventWindowMinutes] ?? EVENT_WINDOW_PRESETS[3]
-    const waveformDownsample = EVENT_WINDOW_DOWNSAMPLE[eventWindowMinutes] ?? 2
-    for (const neighborIndex of [selectedEventIndex - 1, selectedEventIndex + 1]) {
-      const neighbor = events[neighborIndex]
-      if (!neighbor) continue
-      const cacheKey = `${neighbor.id}:${eventWindowMinutes}`
-      if (eventWindowCacheRef.current.has(cacheKey)) continue
-      api.getEventWindow(session.id, neighbor.id, {
-        before_seconds: preset.before,
-        after_seconds: preset.after,
-        waveform_downsample: waveformDownsample,
-      }).then((data) => {
-        eventWindowCacheRef.current.set(cacheKey, data)
-      }).catch(() => {
-        // Prefetch is opportunistic; normal selection will retry if needed.
-      })
-    }
-  }, [eventWindowMinutes, events, selectedEventIndex, session])
 
   async function handleTimezoneSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -501,11 +483,11 @@ export default function SessionDetail() {
             <p className={secondaryStatLabelClass}>Avg leak</p>
             <div className="mt-2 flex items-end gap-2">
               <span className={secondaryStatValueClass}>
-                {session.avg_leak != null ? (session.avg_leak * 1000).toFixed(1) : '—'}
+                {leakToLpm(session.avg_leak, session.leak_unit)?.toFixed(1) ?? '—'}
               </span>
               <InfoPopover title="Average leak">{statHelp.leak}</InfoPopover>
             </div>
-            <p className={secondaryStatNoteClass}>mL/s · P95 {session.p95_pressure?.toFixed(1) ?? '—'} cmH₂O</p>
+            <p className={secondaryStatNoteClass}>L/min · P95 {session.p95_pressure?.toFixed(1) ?? '—'} cmH₂O</p>
           </CardContent>
         </Card>
         <Card>
@@ -742,7 +724,7 @@ export default function SessionDetail() {
         </div>
       </div>
 
-      <MetricsChart metrics={metrics} />
+      <MetricsChart metrics={metrics} events={events} leakKind={session.leak_kind} />
 
       {spo2 && (
         <SpO2Chart spo2={spo2} wearable={wearableData} />
