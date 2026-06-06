@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 
 import { api } from '../api/client'
-import type { OximeterImportResponse } from '../api/client'
+import type { LoaderInspectionResponse, OximeterImportResponse } from '../api/client'
 import { CheckCircleIcon } from '../components/icons/ChevronIcons'
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { Button } from '../components/ui/button'
@@ -38,6 +38,8 @@ export default function Import() {
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle')
+  const [sourceUploadId, setSourceUploadId] = useState<string | null>(null)
+  const [inspection, setInspection] = useState<LoaderInspectionResponse | null>(null)
 
   // SleepHQ import state
   const [isSyncing, setIsSyncing] = useState(false)
@@ -70,11 +72,21 @@ export default function Import() {
     }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    return () => {
+      if (sourceUploadId) {
+        void api.discardSourceUpload(sourceUploadId).catch(() => {})
+      }
+    }
+  }, [sourceUploadId])
+
   async function handleSelectFolder() {
     setError(null)
     setUploadPhase('idle')
     setUploadedFiles(0)
     setTotalFiles(0)
+    setInspection(null)
+    setSourceUploadId(null)
 
     if (!supportsDirectorySelection()) {
       setError('This browser does not support folder import. Try Chrome or Edge, or use the desktop app.')
@@ -94,7 +106,7 @@ export default function Import() {
       }
 
       const directoryHandle = await showDirectoryPicker()
-      const files = await collectEdfFiles(directoryHandle)
+      const files = await collectSourceFiles(directoryHandle)
       applySelectedFiles(directoryHandle.name, files)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -116,21 +128,26 @@ export default function Import() {
     setTotalFiles(0)
 
     const root = getInputRootName(files)
-    const selected = collectEdfFilesFromInput(files, root)
+    const selected = collectSourceFilesFromInput(files, root)
     applySelectedFiles(root, selected)
     event.target.value = ''
   }
 
   function applySelectedFiles(root: string, files: SelectedImportFile[]) {
+    if (sourceUploadId) {
+      void api.discardSourceUpload(sourceUploadId).catch(() => {})
+    }
     setRootName(root)
     setSelectedFiles(files)
-    setFolderLabel(files.length > 0 ? `${root} (${files.length} EDF files)` : `${root} (no EDF files found)`)
+    setInspection(null)
+    setSourceUploadId(null)
+    setFolderLabel(files.length > 0 ? `${root} (${files.length} files)` : `${root} (no files found)`)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!rootName || selectedFiles.length === 0) {
-      setError('Select a DATALOG folder first')
+      setError('Select the SD card or extracted archive root first')
       return
     }
 
@@ -139,20 +156,27 @@ export default function Import() {
     setUploadedFiles(0)
     setTotalFiles(selectedFiles.length)
     setIsSubmitting(true)
+    let uploadId: string | null = null
     try {
-      const { upload_id } = await api.startImportUpload(rootName)
+      const { upload_id } = await api.startSourceUpload(rootName)
+      uploadId = upload_id
+      setSourceUploadId(upload_id)
       const batchSize = 200
 
       for (let index = 0; index < selectedFiles.length; index += batchSize) {
         const batch = selectedFiles.slice(index, index + batchSize)
-        await api.uploadImportBatch(upload_id, batch)
+        await api.uploadSourceBatch(upload_id, batch)
         setUploadedFiles(Math.min(index + batch.length, selectedFiles.length))
       }
 
-      await api.finishImportUpload(upload_id)
-      window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
+      const result = await api.inspectSourceUpload(upload_id)
+      setInspection(result)
       setUploadPhase('complete')
     } catch (err) {
+      if (uploadId) {
+        void api.discardSourceUpload(uploadId).catch(() => {})
+        setSourceUploadId(null)
+      }
       setUploadPhase('idle')
       setError(err instanceof Error ? err.message : 'Import failed')
     } finally {
@@ -161,6 +185,27 @@ export default function Import() {
   }
 
   const uploadPercent = totalFiles > 0 ? Math.round((uploadedFiles / totalFiles) * 100) : 0
+  const canImportDetectedSource = inspection?.matched
+    && !inspection.ambiguous
+    && inspection.devices.length > 0
+    && inspection.devices.every((device) => device.adapter_id === 'resmed-native-v2')
+
+  async function handleDetectedImport() {
+    if (!sourceUploadId || !canImportDetectedSource) {
+      return
+    }
+    setIsSubmitting(true)
+    setError(null)
+    try {
+      await api.finishSourceImport(sourceUploadId)
+      window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
+      setSourceUploadId(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   async function handleLocalImport() {
     setLocalError(null)
@@ -228,7 +273,7 @@ export default function Import() {
         <CardHeader>
           <CardTitle className="text-2xl">Import Sleep Data</CardTitle>
           <CardDescription>
-            Remove the SD card from your ResMed CPAP machine, insert it into your computer, open the card, and select the <span className="font-bold text-[var(--foreground)]">DATALOG</span> folder. SleepLab will read and process it directly in your browser.
+            Insert your CPAP SD card and select the <span className="font-bold text-[var(--foreground)]">SD card or root folder</span>. SleepLab will inspect its structure, identify the machine, and show what data the loader can read before importing anything.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -250,14 +295,14 @@ export default function Import() {
               <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
                 <p className="text-sm text-[var(--foreground)]">{folderLabel}</p>
                 <Button className="mt-4" type="button" variant="outline" onClick={handleSelectFolder} disabled={isSubmitting}>
-                  Select folder
+                  Select SD card / root folder
                 </Button>
               </div>
             </div>
             {uploadPhase === 'uploading' ? (
               <div className="space-y-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--surface-soft)] p-4">
                 <div className="flex items-center justify-between gap-4 text-sm">
-                  <p className="font-bold text-[var(--foreground)]">Uploading sleep data</p>
+                  <p className="font-bold text-[var(--foreground)]">Preparing source inspection</p>
                   <p className="font-bold text-[var(--accent)]">{uploadPercent}%</p>
                 </div>
                 <div
@@ -281,18 +326,26 @@ export default function Import() {
             {uploadPhase === 'complete' ? (
               <div className="flex items-start gap-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 text-[var(--accent)]">
                 <div className="space-y-1">
-                  <p className="text-sm font-bold">Upload received</p>
+                  <p className="text-sm font-bold">Source inspected</p>
                   <p className="text-sm font-medium text-[var(--muted-foreground)]">
-                    Your files were uploaded. Synchronization is continuing in the background.
+                    Detection is complete. Review the loader result below before importing.
                   </p>
                 </div>
               </div>
             ) : null}
             {error ? <p className="text-sm text-[var(--danger-text)]">{error}</p> : null}
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Uploading...' : 'Start import'}
+              {isSubmitting ? 'Inspecting...' : 'Inspect SD card'}
             </Button>
           </form>
+          {inspection ? (
+            <LoaderInspectionPanel
+              inspection={inspection}
+              canImport={Boolean(canImportDetectedSource)}
+              isImporting={isSubmitting}
+              onImport={handleDetectedImport}
+            />
+          ) : null}
         </CardContent>
       </Card>
       <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
@@ -415,7 +468,7 @@ export default function Import() {
   )
 }
 
-async function collectEdfFiles(
+async function collectSourceFiles(
   directoryHandle: FileSystemDirectoryHandle,
   prefix = '',
 ): Promise<SelectedImportFile[]> {
@@ -423,10 +476,6 @@ async function collectEdfFiles(
 
   for await (const [name, handle] of directoryHandle.entries()) {
     if (handle.kind === 'file') {
-      if (!name.toLowerCase().endsWith('.edf')) {
-        continue
-      }
-
       const file = await handle.getFile()
       entries.push({
         file,
@@ -435,7 +484,7 @@ async function collectEdfFiles(
       continue
     }
 
-    const nested = await collectEdfFiles(handle, prefix ? `${prefix}/${name}` : name)
+    const nested = await collectSourceFiles(handle, prefix ? `${prefix}/${name}` : name)
     entries.push(...nested)
   }
 
@@ -445,9 +494,8 @@ async function collectEdfFiles(
 /**
  * Helper function for collect edf files from input.
  */
-function collectEdfFilesFromInput(files: File[], rootName: string): SelectedImportFile[] {
+function collectSourceFilesFromInput(files: File[], rootName: string): SelectedImportFile[] {
   return files
-    .filter((file) => file.name.toLowerCase().endsWith('.edf'))
     .map((file) => ({
       file,
       relativePath: getRelativePathFromInput(file, rootName),
@@ -462,7 +510,96 @@ function getInputRootName(files: File[]) {
     return getRelativePathFromInput(firstWithPath).split('/')[0]
   }
 
-  return 'DATALOG'
+  return 'CPAP-SD'
+}
+
+export function LoaderInspectionPanel({
+  inspection,
+  canImport,
+  isImporting,
+  onImport,
+}: {
+  inspection: LoaderInspectionResponse
+  canImport: boolean
+  isImporting: boolean
+  onImport: () => void
+}) {
+  return (
+    <div className="mt-6 space-y-4 border-t border-[var(--border)] pt-6">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Loader result</p>
+        <h3 className="mt-1 text-lg font-bold text-[var(--foreground)]">
+          {inspection.matched ? `${inspection.devices.length} machine${inspection.devices.length === 1 ? '' : 's'} detected` : 'Source not recognized'}
+        </h3>
+      </div>
+      {inspection.devices.map((device, index) => (
+        <div key={`${device.adapter_id}-${device.device_path}-${index}`} className="space-y-4 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-bold text-[var(--foreground)]">
+                {device.identity.manufacturer || device.manufacturer_hint || 'Unknown manufacturer'}
+                {(device.identity.model || device.family_hint) ? ` ${device.identity.model || device.family_hint}` : ''}
+              </p>
+              <p className="text-sm text-[var(--muted-foreground)]">{device.adapter_id} · {device.confidence} confidence</p>
+            </div>
+            <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
+              {device.device_path === '.' ? 'Card root' : device.device_path}
+            </span>
+          </div>
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <InspectionValue label="Serial" value={device.identity.serial_number} />
+            <InspectionValue label="Model number" value={device.identity.model_number} />
+            <InspectionValue label="Firmware" value={device.identity.firmware_version} />
+            <InspectionValue label="Timezone basis" value={device.timezone_basis} />
+          </dl>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Detection evidence</p>
+            <ul className="mt-2 space-y-1 text-sm text-[var(--foreground)]">
+              {device.evidence.map((evidence) => (
+                <li key={`${evidence.kind}-${evidence.relative_path}`}>{evidence.relative_path}: {evidence.observed}</li>
+              ))}
+            </ul>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(device.capabilities).map(([name, capability]) => (
+              <span key={name} className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs text-[var(--foreground)]">
+                {name.replaceAll('_', ' ')}: {capability.available ? capability.validation : 'unavailable'}
+              </span>
+            ))}
+          </div>
+          {device.warnings.map((warning) => (
+            <p key={warning.code} className="text-sm text-[var(--orange-700)]">{warning.message}</p>
+          ))}
+        </div>
+      ))}
+      {inspection.warnings.map((warning) => (
+        <p key={warning.code} className="rounded-[16px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-4 py-3 text-sm text-[var(--orange-700)]">
+          {warning.message}
+        </p>
+      ))}
+      {inspection.matched ? (
+        <div className="space-y-2">
+          <Button onClick={onImport} disabled={!canImport || isImporting}>
+            {isImporting ? 'Starting import...' : 'Import detected data'}
+          </Button>
+          {!canImport ? (
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Detection works for this source, but its full importer is not connected to the 2.0 contract yet.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function InspectionValue({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div>
+      <dt className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</dt>
+      <dd className="mt-1 break-all text-[var(--foreground)]">{value || 'Not available'}</dd>
+    </div>
+  )
 }
 
 /**

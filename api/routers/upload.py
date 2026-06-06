@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from importer.loaders import inspect_source_root
+
 from ..auth import get_current_user
 from ..database import get_db
 from ..oximeter import OximeterParseError, OximeterRecording, parse_viatom_binary
@@ -27,15 +29,16 @@ IMPORTER_SCRIPT = Path(__file__).resolve().parent.parent.parent / "importer" / "
 
 @dataclass
 class UploadSession:
-    """Transient state for a multi-batch DATALOG upload.
+    """Transient state for a multi-batch CPAP source upload.
 
-    Created on POST /datalog/start and deleted once the import background task
-    is queued via POST /datalog/{upload_id}/finish.
+    The source root is exactly the SD-card or extracted-archive root selected
+    by the user. Manufacturer adapters may inspect paths below it, but never
+    broaden that root.
     """
 
     user_id: str
     temp_root: Path
-    datalog_path: Path
+    source_root: Path
     from_date: str | None
     file_count: int = 0
 
@@ -53,6 +56,12 @@ class StartUploadRequest(BaseModel):
 
     root_name: str
     from_date: str | None = None
+
+
+class StartSourceUploadRequest(BaseModel):
+    """Payload for a root-folder loader inspection session."""
+
+    root_name: str
 
 
 class OximeterImportResult(BaseModel):
@@ -225,7 +234,7 @@ def start_datalog_upload(
     UPLOAD_SESSIONS[upload_id] = UploadSession(
         user_id=current_user["id"],
         temp_root=temp_root,
-        datalog_path=datalog_path,
+        source_root=datalog_path,
         from_date=normalized_from_date,
     )
     return {
@@ -259,32 +268,7 @@ def upload_datalog_batch(
     if not files:
         raise HTTPException(status_code=400, detail="No files were uploaded")
 
-    saved = 0
-    for upload in files:
-        relative_name = (upload.filename or "").strip().lstrip("/").lstrip("\\")
-        if not relative_name:
-            continue
-
-        relative_path = Path(relative_name)
-        if any(part in {"", ".", ".."} for part in relative_path.parts):
-            raise HTTPException(status_code=400, detail="Invalid file path in upload")
-
-        destination = session.datalog_path / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-
-        with destination.open("wb") as output:
-            while chunk := upload.file.read(1024 * 1024):
-                output.write(chunk)
-
-        saved += 1
-        upload.file.close()
-
-    session.file_count += saved
-    return {
-        "status": "accepted",
-        "uploaded_files": saved,
-        "total_files": session.file_count,
-    }
+    return _save_upload_batch(session, files)
 
 
 @router.post("/datalog/{upload_id}/finish")
@@ -314,7 +298,7 @@ def finish_datalog_upload(
     _mark_import_running(session.user_id)
     background_tasks.add_task(
         _run_import,
-        str(session.datalog_path),
+        str(session.source_root),
         session.user_id,
         session.from_date,
         str(session.temp_root),
@@ -323,6 +307,98 @@ def finish_datalog_upload(
         "status": "accepted",
         "message": "Synchronization started.",
     }
+
+
+@router.post("/source/start")
+def start_source_upload(
+    body: StartSourceUploadRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a temporary upload rooted at the selected SD card."""
+
+    root_name = _validate_root_name(body.root_name)
+    temp_root = Path(tempfile.mkdtemp(prefix="cpap-source-"))
+    source_root = temp_root / root_name
+    source_root.mkdir(parents=True, exist_ok=True)
+    upload_id = str(uuid.uuid4())
+    UPLOAD_SESSIONS[upload_id] = UploadSession(
+        user_id=current_user["id"],
+        temp_root=temp_root,
+        source_root=source_root,
+        from_date=None,
+    )
+    return {"upload_id": upload_id, "message": "Source upload session created."}
+
+
+@router.post("/source/{upload_id}/batch")
+def upload_source_batch(
+    upload_id: str,
+    files: list[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Upload files relative to an explicit SD-card source root."""
+
+    return _save_upload_batch(_require_session(upload_id, current_user["id"]), files)
+
+
+@router.post("/source/{upload_id}/inspect")
+def inspect_uploaded_source(
+    upload_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Run every registered structural detector without importing data."""
+
+    session = _require_session(upload_id, current_user["id"])
+    if session.file_count == 0:
+        raise HTTPException(status_code=400, detail="No files uploaded for this source")
+    result = inspect_source_root(session.source_root)
+    result["source_root"] = session.source_root.name
+    return result
+
+
+@router.post("/source/{upload_id}/finish")
+def finish_source_import(
+    upload_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """Start the existing native importer for a detected ResMed source."""
+
+    session = _require_session(upload_id, current_user["id"])
+    report = inspect_source_root(session.source_root)
+    adapters = {device["adapter_id"] for device in report["devices"]}
+    if adapters != {"resmed-native-v2"} or report["ambiguous"]:
+        raise HTTPException(
+            status_code=409,
+            detail="This detected source can be inspected, but its full importer is not connected yet.",
+        )
+    datalog_path = session.source_root / "DATALOG"
+    if not datalog_path.is_dir():
+        raise HTTPException(status_code=400, detail="Detected ResMed source is missing DATALOG")
+
+    UPLOAD_SESSIONS.pop(upload_id, None)
+    _mark_import_running(session.user_id)
+    background_tasks.add_task(
+        _run_import,
+        str(datalog_path),
+        session.user_id,
+        session.from_date,
+        str(session.temp_root),
+    )
+    return {"status": "accepted", "message": "ResMed import started."}
+
+
+@router.delete("/source/{upload_id}")
+def discard_source_upload(
+    upload_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a staged source that will not be imported."""
+
+    session = _require_session(upload_id, current_user["id"])
+    UPLOAD_SESSIONS.pop(upload_id, None)
+    shutil.rmtree(session.temp_root, ignore_errors=True)
+    return {"status": "discarded"}
 
 
 def _require_session(upload_id: str, user_id: str) -> UploadSession:
@@ -342,6 +418,39 @@ def _require_session(upload_id: str, user_id: str) -> UploadSession:
     if session is None or session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Upload session not found")
     return session
+
+
+def _validate_root_name(raw_name: str) -> str:
+    root_name = raw_name.strip().strip("/\\")
+    parts = Path(root_name).parts
+    if not root_name or len(parts) != 1 or any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+    return root_name
+
+
+def _save_upload_batch(session: UploadSession, files: list[UploadFile]) -> dict:
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded")
+
+    saved = 0
+    for upload in files:
+        relative_name = (upload.filename or "").strip().lstrip("/").lstrip("\\")
+        if not relative_name:
+            continue
+        relative_path = Path(relative_name)
+        if relative_path.is_absolute() or any(part in {"", ".", ".."} for part in relative_path.parts):
+            raise HTTPException(status_code=400, detail="Invalid file path in upload")
+
+        destination = session.source_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("wb") as output:
+            while chunk := upload.file.read(1024 * 1024):
+                output.write(chunk)
+        saved += 1
+        upload.file.close()
+
+    session.file_count += saved
+    return {"status": "accepted", "uploaded_files": saved, "total_files": session.file_count}
 
 
 @router.get("/status")

@@ -97,6 +97,61 @@ export interface StartImportResponse {
   message: string
 }
 
+export interface LoaderCapability {
+  available: boolean
+  validation: 'unvalidated' | 'partial' | 'validated' | 'failed'
+  notes: string
+}
+
+export interface LoaderInspectionDevice {
+  adapter_id: string
+  adapter_version: string
+  device_path: string
+  device_key_hint: string | null
+  manufacturer_hint: string | null
+  family_hint: string | null
+  confidence: 'none' | 'weak' | 'probable' | 'strong' | 'exact'
+  requires_user_choice: boolean
+  competing_adapter_ids: string[]
+  evidence: Array<{
+    kind: string
+    relative_path: string
+    expected: string
+    observed: string
+    weight: number
+  }>
+  identity: {
+    manufacturer: string | null
+    family: string | null
+    model: string | null
+    model_number: string | null
+    serial_number: string | null
+    firmware_version: string | null
+    data_format_version: string | null
+    confidence: string
+  }
+  capabilities: Record<string, LoaderCapability>
+  timezone_basis: string
+  leak_kinds: string[]
+  warnings: LoaderInspectionWarning[]
+}
+
+export interface LoaderInspectionWarning {
+  code: string
+  severity: string
+  message: string
+  relative_path: string | null
+  affects: string[]
+}
+
+export interface LoaderInspectionResponse {
+  source_root: string
+  matched: boolean
+  ambiguous: boolean
+  devices: LoaderInspectionDevice[]
+  warnings: LoaderInspectionWarning[]
+}
+
 /**
  * Properties and structure for the import status response.
  */
@@ -687,6 +742,24 @@ export const api = {
     )
   },
   finishImportUpload: (uploadId: string) => post<ImportResponse>(`/upload/datalog/${uploadId}/finish`),
+  startSourceUpload: (rootName: string) =>
+    post<StartImportResponse>('/upload/source/start', { root_name: rootName }),
+  uploadSourceBatch: (uploadId: string, files: Array<{ file: File; relativePath: string }>) => {
+    const formData = new FormData()
+    for (const entry of files) {
+      formData.append('files', entry.file, entry.relativePath)
+    }
+    return postForm<{ status: string; uploaded_files: number; total_files: number }>(
+      `/upload/source/${uploadId}/batch`,
+      formData,
+    )
+  },
+  inspectSourceUpload: (uploadId: string) =>
+    post<LoaderInspectionResponse>(`/upload/source/${uploadId}/inspect`),
+  finishSourceImport: (uploadId: string) =>
+    post<ImportResponse>(`/upload/source/${uploadId}/finish`),
+  discardSourceUpload: (uploadId: string) =>
+    request<{ status: string }>(`/upload/source/${uploadId}`, { method: 'DELETE' }),
   getImportStatus: () => get<ImportStatusResponse>('/upload/status'),
   uploadOximeterFiles: (files: File[], options?: { machine_tz?: string; overwrite?: boolean }) => {
     const formData = new FormData()

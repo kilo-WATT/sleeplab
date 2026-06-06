@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
+import { LoaderInspectionPanel } from './Import'
 
 function file(name: string) {
   return new File(['data'], name, { type: 'application/octet-stream' })
@@ -56,5 +57,63 @@ describe('OximeterImportSummary', () => {
     expect(screen.getByText('skipped.bin')).toBeInTheDocument()
     expect(screen.getByText('unmatched.bin')).toBeInTheDocument()
     expect(screen.getByText('failed.bin')).toBeInTheDocument()
+  })
+})
+
+describe('LoaderInspectionPanel', () => {
+  it('shows a detected non-ResMed machine without enabling import', () => {
+    render(
+      <LoaderInspectionPanel
+        inspection={{
+          source_root: 'PHILIPS-SD',
+          matched: true,
+          ambiguous: false,
+          warnings: [],
+          devices: [{
+            adapter_id: 'philips-prs1-v2',
+            adapter_version: '0.1',
+            device_path: 'P-Series/P012345',
+            device_key_hint: 'P012345',
+            manufacturer_hint: 'Philips Respironics',
+            family_hint: 'PRS1',
+            confidence: 'strong',
+            requires_user_choice: false,
+            competing_adapter_ids: [],
+            evidence: [{
+              kind: 'required_path',
+              relative_path: 'P-Series/P012345/PROP.TXT',
+              expected: 'PRS1 machine properties',
+              observed: 'file',
+              weight: 80,
+            }],
+            identity: {
+              manufacturer: 'Philips Respironics',
+              family: 'PRS1',
+              model: null,
+              model_number: '560P',
+              serial_number: 'TEST-PRS1',
+              firmware_version: '1.2',
+              data_format_version: null,
+              confidence: 'exact',
+            },
+            capabilities: {
+              identity: { available: true, validation: 'partial', notes: 'Prototype' },
+              sessions: { available: false, validation: 'unvalidated', notes: 'Prototype' },
+            },
+            timezone_basis: 'machine_local',
+            leak_kinds: ['total'],
+            warnings: [],
+          }],
+        }}
+        canImport={false}
+        isImporting={false}
+        onImport={() => {}}
+      />,
+    )
+
+    expect(screen.getByText('Philips Respironics PRS1')).toBeInTheDocument()
+    expect(screen.getByText('P-Series/P012345/PROP.TXT: file')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Import detected data' })).toBeDisabled()
+    expect(screen.getByText(/full importer is not connected/i)).toBeInTheDocument()
   })
 })
