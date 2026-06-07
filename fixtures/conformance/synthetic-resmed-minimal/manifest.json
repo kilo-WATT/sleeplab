@@ -46,7 +46,7 @@
     "coverage": {
       "therapy_days": 1,
       "estimated_session_blocks": 1,
-      "event_files": 1,
+      "event_files": 2,
       "waveform_files": 0,
       "settings_files": 1
     }

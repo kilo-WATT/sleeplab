@@ -2,6 +2,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from api.therapy_score import compute_therapy_score
 
@@ -9,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "importer"))
 
 import db as importer_db
 import import_sessions
+from resmed_str import ResMedMaskInterval, ResMedSTRDay
 
 
 @dataclass
@@ -100,6 +102,28 @@ def _session_data(**overrides):
     return data
 
 
+def _str_day(day: date, intervals: list[tuple[datetime, datetime]], max_pressure: float = 14.0):
+    return ResMedSTRDay(
+        machine_local_date=day,
+        intervals=[
+            ResMedMaskInterval(index=index, start=start, end=end)
+            for index, (start, end) in enumerate(intervals)
+        ],
+        normalized_settings={
+            "therapy_mode": "apap",
+            "minimum_pressure_cm_h2o": 4.0,
+            "maximum_pressure_cm_h2o": max_pressure,
+            "ramp_mode": "auto",
+            "mask_type": "nasal",
+        },
+        vendor_settings={"Mode": {"raw": 1}, "Max Press": {"raw": max_pressure}},
+        source_names={"therapy_mode": "Mode", "maximum_pressure_cm_h2o": "Max Press"},
+        summary_usage_seconds=sum(int((end - start).total_seconds()) for start, end in intervals),
+        on_duration_seconds=int((intervals[-1][1] - intervals[0][0]).total_seconds()),
+        patient_hours=None,
+    )
+
+
 def test_upsert_session_persists_manufacturer_without_null_clobber():
     conn = FakeConn(rows=[("machine-1",), (123,)])
 
@@ -121,6 +145,138 @@ def test_upsert_session_defaults_unknown_manufacturer_to_null():
 
     _sql, params = conn.cursor_obj.statements[1]
     assert params["manufacturer"] is None
+
+
+def test_resmed_str_persistence_is_duplicate_safe_and_incremental(db, test_user):
+    raw_conn = db.connection().connection.driver_connection
+    machine_id = importer_db.reconcile_machine(
+        raw_conn,
+        user_id=test_user["id"],
+        adapter_id="resmed-native-v2",
+        manufacturer="ResMed",
+        serial_number="TEST-STR-IDEMPOTENCY",
+    )
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO import_runs (
+                user_id, machine_id, adapter_id, source_type, source_fingerprint,
+                status, validation_status, started_at
+            ) VALUES (%s, %s, 'resmed-native-v2', 'directory', %s, 'running', 'partial', NOW())
+            RETURNING id::text
+            """,
+            (test_user["id"], machine_id, f"fixture-{test_user['id']}"),
+        )
+        import_run_id = cur.fetchone()[0]
+
+    tz = ZoneInfo("America/New_York")
+    first_date = date(2026, 6, 1)
+    first_intervals = [
+        (
+            datetime(2026, 6, 1, 22, 0, tzinfo=tz),
+            datetime(2026, 6, 1, 23, 0, tzinfo=tz),
+        ),
+        (
+            datetime(2026, 6, 1, 23, 15, tzinfo=tz),
+            datetime(2026, 6, 2, 0, 15, tzinfo=tz),
+        ),
+    ]
+    session_id = importer_db.upsert_session(
+        raw_conn,
+        _session_data(
+            user_id=test_user["id"],
+            machine_id=machine_id,
+            import_run_id=import_run_id,
+            source_session_key="test:2026-06-01",
+            session_id="test_20260601",
+            folder_date=first_date,
+            start_datetime=first_intervals[0][0],
+            pld_start_datetime=first_intervals[0][0],
+            duration_seconds=8100,
+            machine_tz=tz.key,
+        ),
+    )
+    assert session_id
+
+    original = _str_day(first_date, first_intervals)
+    for _ in range(2):
+        importer_db.replace_resmed_str_day(
+            raw_conn,
+            user_id=test_user["id"],
+            machine_id=machine_id,
+            import_run_id=import_run_id,
+            adapter_id="resmed-native-v2",
+            folder_date=first_date,
+            str_day=original,
+            source_file_id_value=None,
+        )
+
+    corrected_intervals = [
+        first_intervals[0],
+        (first_intervals[1][0], datetime(2026, 6, 2, 0, 30, tzinfo=tz)),
+    ]
+    importer_db.replace_resmed_str_day(
+        raw_conn,
+        user_id=test_user["id"],
+        machine_id=machine_id,
+        import_run_id=import_run_id,
+        adapter_id="resmed-native-v2",
+        folder_date=first_date,
+        str_day=_str_day(first_date, corrected_intervals, max_pressure=15.0),
+        source_file_id_value=None,
+    )
+
+    second_date = date(2026, 6, 2)
+    second_intervals = [
+        (
+            datetime(2026, 6, 2, 21, 0, tzinfo=tz),
+            datetime(2026, 6, 2, 22, 0, tzinfo=tz),
+        )
+    ]
+    importer_db.replace_resmed_str_day(
+        raw_conn,
+        user_id=test_user["id"],
+        machine_id=machine_id,
+        import_run_id=import_run_id,
+        adapter_id="resmed-native-v2",
+        folder_date=second_date,
+        str_day=_str_day(second_date, second_intervals, max_pressure=15.0),
+        source_file_id_value=None,
+    )
+
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM session_blocks b
+            JOIN sessions s ON s.id = b.session_id
+            WHERE s.machine_id = %s AND b.source_kind = 'resmed_str_mask_interval'
+            """,
+            (machine_id,),
+        )
+        assert cur.fetchone()[0] == 3
+        cur.execute(
+            "SELECT COUNT(*) FROM settings_snapshots WHERE machine_id = %s",
+            (machine_id,),
+        )
+        assert cur.fetchone()[0] == 2
+        cur.execute(
+            """
+            SELECT usage_seconds, wall_clock_seconds, gap_seconds, block_count
+            FROM nightly_therapy_aggregates
+            WHERE machine_id = %s AND machine_local_date = %s
+            """,
+            (machine_id, first_date),
+        )
+        assert cur.fetchone() == (8100, 9000, 900, 2)
+        cur.execute(
+            """
+            SELECT normalized_settings->>'maximum_pressure_cm_h2o'
+            FROM settings_snapshots
+            WHERE machine_id = %s AND effective_at::date = %s
+            """,
+            (machine_id, first_date),
+        )
+        assert cur.fetchone()[0] == "15.0"
 
 
 def test_dedupe_events_preserves_zero_duration_arousal():
