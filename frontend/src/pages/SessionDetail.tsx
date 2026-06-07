@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, EventWindowResponse, TherapyScoreComponent } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, EventWindowResponse, TherapyScoreComponent, SessionTherapyContext, MachineSettingsSnapshot } from '../api/client'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
 import EventInspector from '../components/EventInspector'
@@ -120,6 +120,8 @@ export default function SessionDetail() {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [spo2, setSpo2] = useState<SpO2Response | null>(null)
   const [equipment, setEquipment] = useState<InferredEquipment | null>(null)
+  const [therapyContext, setTherapyContext] = useState<SessionTherapyContext | null>(null)
+  const [settingsHistory, setSettingsHistory] = useState<MachineSettingsSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [sessionNavigation, setSessionNavigation] = useState<SessionNavigation | null>(null)
   const [wearableData, setWearableData] = useState<WearableData | null>(null)
@@ -149,6 +151,8 @@ export default function SessionDetail() {
     setLoading(true)
     setSpo2(null)
     setEquipment(null)
+    setTherapyContext(null)
+    setSettingsHistory([])
     setWearableData(null)
     setTimezoneMessage(null)
     setTimezoneError(null)
@@ -180,6 +184,12 @@ export default function SessionDetail() {
           api.getSessionSpo2(s.id).then(setSpo2).catch(() => setSpo2(null))
         }
         api.getInferredEquipment(s.folder_date.toString()).then(setEquipment).catch(() => setEquipment(null))
+        api.getSessionTherapyContext(s.id).then((context) => {
+          setTherapyContext(context)
+          return api.getMachineSettings(context.machine.machine_id)
+            .then(setSettingsHistory)
+            .catch(() => setSettingsHistory([]))
+        }).catch(() => setTherapyContext(null))
         api.getWearableData(s.folder_date).then((data) => {
           if (!data.hr.length && !data.spo2.length && !data.stages.length) {
             setWearableData(null)
@@ -337,6 +347,7 @@ export default function SessionDetail() {
   const badge = ahiBadge(session.ahi)
   const tagsChanged = !sameTags(tagsDraft, session.tags ?? [])
   const hasDeviceSettings = Boolean(session.therapy_mode || session.mask_type || session.humidity_level != null || session.temperature_c != null)
+  const normalizedSettings = therapyContext?.settings?.normalized_settings
   const hasEquipment = Boolean(equipment && (equipment.cushion || equipment.headgear || equipment.tubing || equipment.humidifier_chamber || equipment.filter))
 
   const statHelp = {
@@ -449,7 +460,12 @@ export default function SessionDetail() {
               <p className="mt-1.5 text-3xl font-semibold text-[var(--green-700)]">
                 {hours}h {mins}m
               </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">of sleep</p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">therapy usage</p>
+              {session.wall_clock_seconds != null && session.gap_seconds != null && (
+                <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                  {(session.wall_clock_seconds / 3600).toFixed(1)}h span · {(session.gap_seconds / 60).toFixed(0)}m gaps
+                </p>
+              )}
             </div>
             <div className="rounded-[18px] bg-[var(--surface-soft)] px-3 py-4 text-center sm:px-4">
               <p className={secondaryStatLabelClass}>Pressure</p>
@@ -583,7 +599,92 @@ export default function SessionDetail() {
 
         <div className="flex flex-col gap-6 lg:col-start-2 lg:row-start-1">
           <TherapyScoreCard session={session} />
-          {hasDeviceSettings && (
+          {therapyContext && (
+            <Card>
+              <CardContent className={secondaryStatContentClass}>
+                <p className="mb-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Therapy and machine</p>
+                <p className="mb-3 text-xs text-[var(--muted-foreground)]">
+                  {[therapyContext.machine.manufacturer, therapyContext.machine.family, therapyContext.machine.model].filter(Boolean).join(' ') || 'Machine details unavailable'}
+                  {` · ${therapyContext.machine.validation_status}`}
+                </p>
+                <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
+                  {(normalizedSettings?.therapy_mode || session.therapy_mode) && (
+                    <span><span className="text-[var(--muted-foreground)]">Mode </span>{String(normalizedSettings?.therapy_mode || session.therapy_mode).toUpperCase()}</span>
+                  )}
+                  {normalizedSettings?.minimum_pressure_cmh2o != null && normalizedSettings?.maximum_pressure_cmh2o != null && (
+                    <span><span className="text-[var(--muted-foreground)]">Pressure </span>{String(normalizedSettings.minimum_pressure_cmh2o)}-{String(normalizedSettings.maximum_pressure_cmh2o)} cmH₂O</span>
+                  )}
+                  {normalizedSettings?.fixed_pressure_cmh2o != null && (
+                    <span><span className="text-[var(--muted-foreground)]">Pressure </span>{String(normalizedSettings.fixed_pressure_cmh2o)} cmH₂O</span>
+                  )}
+                  {(normalizedSettings?.epr_mode || normalizedSettings?.epr_level_cmh2o != null) && (
+                    <span><span className="text-[var(--muted-foreground)]">EPR </span>{String(normalizedSettings?.epr_mode ?? 'unknown')} {normalizedSettings?.epr_level_cmh2o != null ? String(normalizedSettings.epr_level_cmh2o) : ''}</span>
+                  )}
+                  {normalizedSettings?.ramp_mode && (
+                    <span><span className="text-[var(--muted-foreground)]">Ramp </span>{String(normalizedSettings.ramp_mode)}{normalizedSettings.ramp_start_pressure_cmh2o != null ? ` from ${String(normalizedSettings.ramp_start_pressure_cmh2o)} cmH₂O` : ''}</span>
+                  )}
+                  {(normalizedSettings?.mask_type || session.mask_type) && (
+                    <span><span className="text-[var(--muted-foreground)]">Mask </span>{String(normalizedSettings?.mask_type || session.mask_type)}</span>
+                  )}
+                  {(normalizedSettings?.humidifier_level != null || session.humidity_level != null) && (
+                    <span><span className="text-[var(--muted-foreground)]">Humidity </span>{String(normalizedSettings?.humidifier_level ?? session.humidity_level)}</span>
+                  )}
+                  {(normalizedSettings?.tube_temperature_c != null || session.temperature_c != null) && (
+                    <span><span className="text-[var(--muted-foreground)]">Tube </span>{String(normalizedSettings?.heated_tube_mode ?? 'temperature')} · {String(normalizedSettings?.tube_temperature_c ?? session.temperature_c)}°C</span>
+                  )}
+                </div>
+                {therapyContext.blocks.length ? (
+                  <div className="mt-4 border-t border-[var(--border)] pt-3">
+                    <p className="text-xs font-bold text-[var(--muted-foreground)]">
+                      {therapyContext.blocks.length} therapy block{therapyContext.blocks.length === 1 ? '' : 's'} · {session.duration_validation_status}
+                    </p>
+                    <div className="mt-2 space-y-1 text-xs">
+                      {therapyContext.blocks.map((block) => (
+                        <p key={block.id}>
+                          {fmtTime(block.start_datetime)}-{fmtTime(block.end_datetime)}
+                          <span className="text-[var(--muted-foreground)]"> · {Math.round(block.duration_seconds / 60)}m · {block.source_kind.replaceAll('_', ' ')}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-[var(--muted-foreground)]">Explicit therapy blocks are not available for this night.</p>
+                )}
+                {settingsHistory.length > 1 ? (
+                  <div className="mt-4 border-t border-[var(--border)] pt-3">
+                    <p className="text-xs font-bold text-[var(--muted-foreground)]">Recent settings history</p>
+                    <div className="mt-2 space-y-1 text-xs">
+                      {settingsHistory.slice(0, 4).map((snapshot, index) => {
+                        const settings = snapshot.normalized_settings
+                        const previous = settingsHistory[index + 1]
+                        const changed = previous
+                          ? JSON.stringify(settings) !== JSON.stringify(previous.normalized_settings)
+                          : false
+                        return (
+                          <p key={snapshot.id}>
+                            {new Date(snapshot.effective_at).toLocaleDateString()}
+                            <span className="text-[var(--muted-foreground)]">
+                              {` · ${String(settings.therapy_mode ?? 'mode unknown')}`}
+                              {settings.minimum_pressure_cmh2o != null && settings.maximum_pressure_cmh2o != null
+                                ? ` · ${String(settings.minimum_pressure_cmh2o)}-${String(settings.maximum_pressure_cmh2o)} cmH₂O`
+                                : ''}
+                              {` · ${snapshot.validation_status}${changed ? ' · changed' : ''}`}
+                            </span>
+                          </p>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                {therapyContext.settings?.diagnostics?.length ? (
+                  <p className="mt-3 text-xs text-[var(--muted-foreground)]">
+                    Some vendor settings were preserved without normalization. See import diagnostics for details.
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+          )}
+          {!therapyContext && hasDeviceSettings && (
             <Card>
               <CardContent className={secondaryStatContentClass}>
                 <p className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Device settings</p>

@@ -19,6 +19,26 @@ def list_import_runs(
     """Return recent imports with machine identity and structured diagnostics."""
 
     safe_limit = max(1, min(limit, 100))
+    db.execute(
+        text("""
+            UPDATE import_runs
+            SET status = 'failed',
+                validation_status = 'failed',
+                completed_at = NOW(),
+                errors = COALESCE(errors, '[]'::jsonb) || jsonb_build_array(
+                    jsonb_build_object(
+                        'code', 'IMPORT_PROCESS_INTERRUPTED',
+                        'message', 'The importer stopped without reporting completion.',
+                        'severity', 'error'
+                    )
+                )
+            WHERE user_id = CAST(:user_id AS uuid)
+              AND status = 'running'
+              AND started_at < NOW() - INTERVAL '2 hours'
+        """),
+        {"user_id": current_user["id"]},
+    )
+    db.commit()
     rows = db.execute(
         text("""
             SELECT
@@ -40,6 +60,9 @@ def list_import_runs(
                 r.imported_block_count,
                 r.imported_event_count,
                 r.imported_channel_count,
+                r.imported_settings_count,
+                r.summary_only_day_count,
+                r.capability_status,
                 r.started_at,
                 r.completed_at,
                 m.id::text AS machine_id,
@@ -143,7 +166,8 @@ def list_machine_settings(
             SELECT ss.id::text, ss.session_id::text, ss.import_run_id::text,
                    ss.effective_at, ss.normalized_settings, ss.vendor_settings,
                    ss.source_names, ss.adapter_id, ss.confidence,
-                   ss.validation_status
+                   ss.validation_status, ss.parser_id, ss.parser_version,
+                   ss.diagnostics
             FROM settings_snapshots ss
             JOIN cpap_machines m ON m.id = ss.machine_id
             WHERE ss.machine_id = CAST(:machine_id AS uuid)

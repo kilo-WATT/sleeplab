@@ -564,12 +564,26 @@ function ImportRunCard({ run }: { run: ImportRunSummary }) {
           {run.status}
         </span>
       </div>
-      <dl className="grid gap-3 text-sm sm:grid-cols-4">
+      <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
         <InspectionValue label="Validation" value={run.validation_status} />
         <InspectionValue label="Sessions" value={String(run.imported_session_count)} />
         <InspectionValue label="Blocks" value={String(run.imported_block_count)} />
         <InspectionValue label="Events" value={String(run.imported_event_count)} />
+        <InspectionValue label="Settings" value={String(run.imported_settings_count ?? 0)} />
+        <InspectionValue label="Summary-only" value={String(run.summary_only_day_count ?? 0)} />
       </dl>
+      {run.capability_status && Object.keys(run.capability_status).length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(run.capability_status).map(([name, status]) => (
+            <span
+              key={name}
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs"
+            >
+              {name.replaceAll('_', ' ')}: {String(status)}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <p className="truncate font-mono text-xs text-[var(--muted-foreground)]" title={run.source_fingerprint}>
         {run.source_fingerprint}
       </p>

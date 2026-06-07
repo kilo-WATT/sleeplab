@@ -27,8 +27,8 @@ def get_summary(
     range_row = (
         db.execute(
             text("""
-        SELECT MIN(folder_date) AS first_date, MAX(folder_date) AS last_date
-        FROM sessions
+        SELECT MIN(machine_local_date) AS first_date, MAX(machine_local_date) AS last_date
+        FROM nightly_therapy_aggregates
         WHERE user_id = CAST(:uid AS uuid)
     """),
             {"uid": current_user["id"]},
@@ -52,9 +52,10 @@ def get_summary(
     total_nights_row = (
         db.execute(
             text("""
-        SELECT (MAX(folder_date) - MIN(folder_date) + 1) AS total_nights,
-               COUNT(DISTINCT folder_date) AS nights_with_data
-        FROM sessions
+        SELECT (MAX(machine_local_date) - MIN(machine_local_date) + 1) AS total_nights,
+               COUNT(DISTINCT machine_local_date) FILTER (WHERE usage_seconds > 0) AS nights_with_data,
+               COUNT(DISTINCT machine_local_date) FILTER (WHERE usage_seconds >= 14400) AS compliant_nights
+        FROM nightly_therapy_aggregates
         WHERE user_id = CAST(:uid AS uuid)
     """),
             {"uid": current_user["id"]},
@@ -65,17 +66,28 @@ def get_summary(
 
     total_nights = int(total_nights_row["total_nights"])
     nights_with_data = int(total_nights_row["nights_with_data"])
-    compliance_pct = round(nights_with_data / total_nights * 100, 1) if total_nights > 0 else 0.0
+    compliant_nights = int(total_nights_row["compliant_nights"])
+    compliance_pct = round(compliant_nights / total_nights * 100, 1) if total_nights > 0 else 0.0
 
     # Per-night primary block: longest duration per folder_date
     primary_blocks = (
         db.execute(
             text("""
-        SELECT DISTINCT ON (folder_date)
-            id::text AS id, folder_date, ahi, duration_seconds, avg_pressure
-        FROM sessions
-        WHERE user_id = CAST(:uid AS uuid)
-        ORDER BY folder_date, duration_seconds DESC
+        SELECT
+            (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS id,
+            s.folder_date,
+            CASE WHEN nta.usage_seconds > 0
+                 THEN SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0)
+                 ELSE NULL END AS ahi,
+            nta.usage_seconds AS duration_seconds,
+            AVG(s.avg_pressure) AS avg_pressure
+        FROM sessions s
+        JOIN nightly_therapy_aggregates nta
+          ON nta.user_id = s.user_id
+         AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+         AND nta.machine_local_date = s.folder_date
+        WHERE s.user_id = CAST(:uid AS uuid)
+        GROUP BY s.folder_date, s.machine_id, nta.usage_seconds
     """),
             {"uid": current_user["id"]},
         )
@@ -93,11 +105,21 @@ def get_summary(
     ahi_trend_rows = (
         db.execute(
             text("""
-        SELECT DISTINCT ON (folder_date)
-            id::text AS id, folder_date, ahi, duration_seconds
-        FROM sessions
-        WHERE user_id = CAST(:uid AS uuid)
-        ORDER BY folder_date DESC, duration_seconds DESC
+        SELECT
+            (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS id,
+            s.folder_date,
+            CASE WHEN nta.usage_seconds > 0
+                 THEN SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0)
+                 ELSE NULL END AS ahi,
+            nta.usage_seconds AS duration_seconds
+        FROM sessions s
+        JOIN nightly_therapy_aggregates nta
+          ON nta.user_id = s.user_id
+         AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+         AND nta.machine_local_date = s.folder_date
+        WHERE s.user_id = CAST(:uid AS uuid)
+        GROUP BY s.folder_date, s.machine_id, nta.usage_seconds
+        ORDER BY s.folder_date DESC
         LIMIT 90
     """),
             {"uid": current_user["id"]},
@@ -171,31 +193,35 @@ def get_overview(
             text("""
         WITH night AS (
             SELECT
-                folder_date,
-                (array_agg(id::text ORDER BY duration_seconds DESC))[1] AS session_id,
-                MIN(start_datetime) AS start_datetime,
-                MIN(start_datetime) + (SUM(duration_seconds) * INTERVAL '1 second') AS end_datetime,
-                SUM(duration_seconds) AS duration_seconds,
-                SUM(total_ahi_events) AS total_ahi_events,
-                SUM(central_apnea_count) AS central_apnea_count,
-                SUM(obstructive_apnea_count) AS obstructive_apnea_count,
-                SUM(hypopnea_count) AS hypopnea_count,
-                SUM(apnea_count) AS apnea_count,
-                SUM(COALESCE(arousal_count, 0)) AS arousal_count,
-                AVG(avg_pressure) AS avg_pressure,
-                MAX(p95_pressure) AS p95_pressure,
-                AVG(avg_leak) AS avg_leak,
-                AVG(avg_flow_lim) AS avg_flow_lim,
-                AVG(avg_tidal_vol) AS avg_tidal_vol,
-                AVG(avg_min_vent) AS avg_min_vent,
-                AVG(avg_resp_rate) AS avg_resp_rate,
-                AVG(avg_spo2) AS avg_spo2,
-                MIN(min_spo2) AS min_spo2
-            FROM sessions
-            WHERE user_id = CAST(:uid AS uuid)
-              AND duration_seconds >= 600
-              AND folder_date >= CURRENT_DATE - (:days * INTERVAL '1 day')
-            GROUP BY folder_date
+                s.folder_date,
+                (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS session_id,
+                nta.start_datetime,
+                nta.end_datetime,
+                nta.usage_seconds AS duration_seconds,
+                SUM(s.total_ahi_events) AS total_ahi_events,
+                SUM(s.central_apnea_count) AS central_apnea_count,
+                SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
+                SUM(s.hypopnea_count) AS hypopnea_count,
+                SUM(s.apnea_count) AS apnea_count,
+                SUM(COALESCE(s.arousal_count, 0)) AS arousal_count,
+                AVG(s.avg_pressure) AS avg_pressure,
+                MAX(s.p95_pressure) AS p95_pressure,
+                AVG(s.avg_leak) AS avg_leak,
+                AVG(s.avg_flow_lim) AS avg_flow_lim,
+                AVG(s.avg_tidal_vol) AS avg_tidal_vol,
+                AVG(s.avg_min_vent) AS avg_min_vent,
+                AVG(s.avg_resp_rate) AS avg_resp_rate,
+                AVG(s.avg_spo2) AS avg_spo2,
+                MIN(s.min_spo2) AS min_spo2
+            FROM sessions s
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
+            WHERE s.user_id = CAST(:uid AS uuid)
+              AND s.folder_date >= CURRENT_DATE - (:days * INTERVAL '1 day')
+            GROUP BY s.folder_date, s.machine_id, nta.start_datetime,
+                     nta.end_datetime, nta.usage_seconds
         ),
         metric AS (
             SELECT
@@ -204,7 +230,6 @@ def get_overview(
             FROM sessions s
             JOIN session_events se ON se.session_id = s.id
             WHERE s.user_id = CAST(:uid AS uuid)
-              AND s.duration_seconds >= 600
               AND s.folder_date >= CURRENT_DATE - (:days * INTERVAL '1 day')
               AND se.event_type = 'Large Leak'
             GROUP BY s.folder_date
@@ -218,7 +243,6 @@ def get_overview(
             FROM sessions s
             JOIN session_spo2 ss ON ss.session_id = s.id
             WHERE s.user_id = CAST(:uid AS uuid)
-              AND s.duration_seconds >= 600
               AND s.folder_date >= CURRENT_DATE - (:days * INTERVAL '1 day')
             GROUP BY s.folder_date
         ),

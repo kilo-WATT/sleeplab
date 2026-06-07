@@ -258,7 +258,10 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
 
     total_nights = (end - start).days + 1
     nights_used = len(nights)
-    compliance_pct = round((nights_used / total_nights) * 100, 1) if total_nights > 0 else 0.0
+    compliant_nights = sum(
+        1 for night in nights if int(night.get("duration_seconds") or 0) >= 4 * 3600
+    )
+    compliance_pct = round((compliant_nights / total_nights) * 100, 1) if total_nights > 0 else 0.0
 
     avg_pressures = [float(night["avg_pressure"]) for night in nights if night["avg_pressure"] is not None]
     p95_pressures = [float(night["p95_pressure"]) for night in nights if night["p95_pressure"] is not None]
@@ -306,7 +309,7 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
     missing_equipment_details = missing_equipment_count > 1
 
     summary_rows = [
-        ["Compliance", f"{compliance_pct:.1f}% ({nights_used}/{total_nights} nights)"],
+        ["Compliance", f"{compliance_pct:.1f}% ({compliant_nights}/{total_nights} nights at least 4h)"],
         ["Total nights recorded", str(nights_used)],
         ["Average pressure", _format_metric(avg_pressure, " cmH2O")],
         ["P95 pressure", _format_metric(p95_pressure, " cmH2O")],
@@ -394,7 +397,7 @@ def export_sessions_pdf(
             WITH night AS (
                 SELECT
                     s.folder_date,
-                    SUM(s.duration_seconds) AS duration_seconds,
+                    nta.usage_seconds AS duration_seconds,
                     SUM(s.total_ahi_events) AS total_ahi_events,
                     AVG(s.avg_pressure) AS avg_pressure,
                     MAX(s.p95_pressure) AS p95_pressure,
@@ -404,11 +407,14 @@ def export_sessions_pdf(
                     (array_agg(s.mask_type ORDER BY s.duration_seconds DESC) FILTER (WHERE s.mask_type IS NOT NULL))[1] AS mask_type,
                     {manufacturer_select}
                 FROM sessions s
+                JOIN nightly_therapy_aggregates nta
+                  ON nta.user_id = s.user_id
+                 AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+                 AND nta.machine_local_date = s.folder_date
                 WHERE s.user_id = CAST(:uid AS uuid)
                   AND s.folder_date >= :start
                   AND s.folder_date <= :end
-                  AND s.duration_seconds >= 600
-                GROUP BY s.folder_date
+                GROUP BY s.folder_date, s.machine_id, nta.usage_seconds
             )
             SELECT
                 folder_date,
@@ -469,14 +475,14 @@ def list_sessions(
     db: Session = Depends(get_db),
 ):
     """List sessions with summary stats, sorted by folder_date DESC."""
-    conditions = ["user_id = :uid"]
+    conditions = ["s.user_id = :uid"]
     params: dict = {"limit": per_page, "offset": (page - 1) * per_page, "uid": current_user["id"]}
 
     if date_from:
-        conditions.append("folder_date >= :date_from")
+        conditions.append("s.folder_date >= :date_from")
         params["date_from"] = date_from
     if date_to:
-        conditions.append("folder_date <= :date_to")
+        conditions.append("s.folder_date <= :date_to")
         params["date_to"] = date_to
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -484,13 +490,20 @@ def list_sessions(
     sql = text(f"""
         WITH night AS (
             SELECT
-                folder_date,
+                s.folder_date,
+                s.machine_id,
                 (array_agg(id::text ORDER BY duration_seconds DESC))[1] AS id,
                 (array_agg(session_id ORDER BY duration_seconds DESC))[1] AS session_id,
-                MIN(start_datetime) AS start_datetime,
-                MAX(start_datetime + (duration_seconds || ' seconds')::interval) AS end_datetime,
+                nta.start_datetime,
+                nta.end_datetime,
                 0 AS block_index,
-                SUM(duration_seconds) AS duration_seconds,
+                nta.usage_seconds AS duration_seconds,
+                nta.wall_clock_seconds,
+                nta.gap_seconds,
+                nta.block_count,
+                nta.usage_source,
+                nta.summary_reported_usage_seconds,
+                nta.validation_status AS duration_validation_status,
                 SUM(total_ahi_events) AS total_ahi_events,
                 SUM(central_apnea_count) AS central_apnea_count,
                 SUM(obstructive_apnea_count) AS obstructive_apnea_count,
@@ -506,16 +519,24 @@ def list_sessions(
                 BOOL_OR(has_spo2) AS has_spo2,
                 (array_agg(machine_tz ORDER BY duration_seconds DESC))[1] AS machine_tz,
                 CASE
-                    WHEN SUM(duration_seconds) > 0
-                    THEN ROUND((SUM(total_ahi_events) / (SUM(duration_seconds) / 3600.0))::numeric, 2)
+                    WHEN nta.usage_seconds > 0
+                    THEN ROUND((SUM(total_ahi_events) / (nta.usage_seconds / 3600.0))::numeric, 2)
                     ELSE 0
                 END AS ahi
-            FROM sessions
+            FROM sessions s
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
             {where}
-            {"AND" if where else "WHERE"} duration_seconds >= 600
-            GROUP BY folder_date
+            GROUP BY s.folder_date, s.machine_id, nta.start_datetime, nta.end_datetime,
+                     nta.usage_seconds, nta.wall_clock_seconds, nta.gap_seconds,
+                     nta.block_count, nta.usage_source, nta.summary_reported_usage_seconds,
+                     nta.validation_status
         )
         SELECT id, session_id, folder_date, block_index, start_datetime, end_datetime, duration_seconds,
+               wall_clock_seconds, gap_seconds, block_count, usage_source,
+               summary_reported_usage_seconds, duration_validation_status,
                ahi, central_apnea_count, obstructive_apnea_count, hypopnea_count,
                apnea_count, arousal_count, total_ahi_events,
                avg_pressure, p95_pressure, avg_leak, manufacturer, leak_kind, leak_unit,
@@ -538,18 +559,21 @@ def get_tag_insights(
         text("""
             WITH night_metric AS (
                 SELECT
-                    user_id,
-                    folder_date,
+                    s.user_id,
+                    s.folder_date,
                     CASE
-                        WHEN SUM(duration_seconds) > 0
-                        THEN ROUND((SUM(total_ahi_events) / (SUM(duration_seconds) / 3600.0))::numeric, 2)
+                        WHEN nta.usage_seconds > 0
+                        THEN ROUND((SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0))::numeric, 2)
                         ELSE NULL
                     END AS ahi
-                FROM sessions
-                WHERE user_id = CAST(:uid AS uuid)
-                  AND folder_date >= CURRENT_DATE - INTERVAL '90 days'
-                  AND duration_seconds >= 600
-                GROUP BY user_id, folder_date
+                FROM sessions s
+                JOIN nightly_therapy_aggregates nta
+                  ON nta.user_id = s.user_id
+                 AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+                 AND nta.machine_local_date = s.folder_date
+                WHERE s.user_id = CAST(:uid AS uuid)
+                  AND s.folder_date >= CURRENT_DATE - INTERVAL '90 days'
+                GROUP BY s.user_id, s.folder_date, s.machine_id, nta.usage_seconds
             ),
             night AS (
                 SELECT
@@ -612,7 +636,7 @@ def get_session(
     row = db.execute(
         text(f"""
             WITH night AS (
-                SELECT folder_date, user_id
+                SELECT folder_date, user_id, machine_id
                 FROM sessions
                 WHERE id = CAST(:id AS uuid) AND user_id = CAST(:uid AS uuid)
             )
@@ -621,10 +645,16 @@ def get_session(
                 (array_agg(s.session_id ORDER BY s.duration_seconds DESC))[1] AS session_id,
                 s.folder_date,
                 0 AS block_index,
-                MIN(s.start_datetime) AS start_datetime,
-                MAX(s.start_datetime + (s.duration_seconds || ' seconds')::interval) AS end_datetime,
+                nta.start_datetime,
+                nta.end_datetime,
                 MIN(s.start_datetime) AS pld_start_datetime,
-                SUM(s.duration_seconds) AS duration_seconds,
+                nta.usage_seconds AS duration_seconds,
+                nta.wall_clock_seconds,
+                nta.gap_seconds,
+                nta.block_count,
+                nta.usage_source,
+                nta.summary_reported_usage_seconds,
+                nta.validation_status AS duration_validation_status,
                 SUM(s.total_ahi_events) AS total_ahi_events,
                 SUM(s.central_apnea_count) AS central_apnea_count,
                 SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
@@ -637,8 +667,8 @@ def get_session(
                 (array_agg(s.leak_kind ORDER BY s.duration_seconds DESC))[1] AS leak_kind,
                 (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(s.has_spo2) AS has_spo2,
-                CASE WHEN SUM(s.duration_seconds) > 0
-                     THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
+                CASE WHEN nta.usage_seconds > 0
+                     THEN ROUND((SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0))::numeric, 2)
                      ELSE 0 END AS ahi,
                 AVG(s.avg_resp_rate) AS avg_resp_rate,
                 AVG(s.avg_tidal_vol) AS avg_tidal_vol,
@@ -653,6 +683,10 @@ def get_session(
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
                 (array_agg(s.machine_tz      ORDER BY s.duration_seconds DESC))[1] AS machine_tz,
+                s.machine_id::text AS machine_id,
+                m.family AS machine_family,
+                m.model AS machine_model,
+                m.validation_status AS machine_validation_status,
                 {manufacturer_select},
                 TRUE AS parser_validated,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
@@ -667,14 +701,94 @@ def get_session(
                 ), ARRAY[]::text[]) AS tags
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
-            WHERE s.duration_seconds >= 600
-            GROUP BY s.folder_date
+                        AND s.machine_id IS NOT DISTINCT FROM n.machine_id
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
+            LEFT JOIN cpap_machines m ON m.id = s.machine_id
+            GROUP BY s.folder_date, s.machine_id, m.family, m.model, m.validation_status,
+                     nta.start_datetime, nta.end_datetime, nta.usage_seconds,
+                     nta.wall_clock_seconds, nta.gap_seconds, nta.block_count,
+                     nta.usage_source, nta.summary_reported_usage_seconds,
+                     nta.validation_status
         """),
             {"id": session_id, "uid": current_user["id"]},
         ).mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     return _session_detail_response(row, current_user["id"], db)
+
+
+@router.get("/{session_id}/therapy-context")
+def get_session_therapy_context(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return authoritative blocks, machine identity, and effective settings."""
+    session = db.execute(
+        text("""
+            SELECT s.folder_date, s.machine_id::text, m.manufacturer, m.family, m.model,
+                   m.product_code, m.serial_number, m.identity_confidence,
+                   m.support_status, m.validation_status
+            FROM sessions s
+            JOIN cpap_machines m ON m.id = s.machine_id
+            WHERE s.id = CAST(:id AS uuid) AND s.user_id = CAST(:uid AS uuid)
+        """),
+        {"id": session_id, "uid": current_user["id"]},
+    ).mappings().first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    blocks = db.execute(
+        text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:id AS uuid) AND user_id = CAST(:uid AS uuid)
+            ),
+            candidates AS (
+                SELECT b.id::text, b.source_block_key, b.block_kind, b.start_datetime,
+                       b.end_datetime,
+                       ROUND(EXTRACT(EPOCH FROM b.end_datetime - b.start_datetime))::int
+                           AS duration_seconds,
+                       b.source_kind, b.confidence, b.validation_status, b.diagnostics,
+                       BOOL_OR(b.source_kind = 'resmed_str_mask_interval') OVER () AS has_explicit
+                FROM session_blocks b
+                JOIN sessions s ON s.id = b.session_id
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+            )
+            SELECT *
+            FROM candidates
+            WHERE (has_explicit AND source_kind = 'resmed_str_mask_interval')
+               OR (NOT has_explicit AND source_kind <> 'summary_reported')
+            ORDER BY start_datetime
+        """),
+        {"id": session_id, "uid": current_user["id"]},
+    ).mappings()
+    settings = db.execute(
+        text("""
+            SELECT ss.id::text, ss.effective_at, ss.normalized_settings,
+                   ss.vendor_settings, ss.source_names, ss.adapter_id,
+                   ss.parser_id, ss.parser_version, ss.confidence,
+                   ss.validation_status, ss.diagnostics
+            FROM settings_snapshots ss
+            JOIN sessions s ON s.machine_id = ss.machine_id
+            WHERE s.id = CAST(:id AS uuid)
+              AND s.user_id = CAST(:uid AS uuid)
+              AND ss.effective_at < (s.folder_date + INTERVAL '2 days')
+            ORDER BY ss.effective_at DESC
+            LIMIT 1
+        """),
+        {"id": session_id, "uid": current_user["id"]},
+    ).mappings().first()
+    return {
+        "machine": dict(session),
+        "blocks": [dict(block) for block in blocks],
+        "settings": dict(settings) if settings else None,
+    }
 
 
 @router.put("/{session_id}/note", response_model=SessionDetail)
@@ -1217,25 +1331,28 @@ def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: S
         text(f"""
             SELECT
                 s.folder_date,
-                SUM(s.duration_seconds) AS duration_seconds,
+                nta.usage_seconds AS duration_seconds,
                 SUM(s.total_ahi_events) AS total_ahi_events,
                 AVG(s.avg_leak) AS avg_leak,
                 (array_agg(s.leak_kind ORDER BY s.duration_seconds DESC))[1] AS leak_kind,
                 (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(s.has_spo2) AS has_spo2,
-                CASE WHEN SUM(s.duration_seconds) > 0
-                     THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
+                CASE WHEN nta.usage_seconds > 0
+                     THEN ROUND((SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0))::numeric, 2)
                      ELSE NULL END AS ahi,
                 AVG(s.avg_spo2) AS avg_spo2,
                 MIN(s.min_spo2) AS min_spo2,
                 {manufacturer_select},
                 TRUE AS parser_validated
             FROM sessions s
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
             WHERE s.user_id = CAST(:uid AS uuid)
-              AND s.duration_seconds >= 600
               AND s.folder_date >= CAST(:folder_date AS date) - INTERVAL '30 days'
               AND s.folder_date < CAST(:folder_date AS date)
-            GROUP BY s.folder_date
+            GROUP BY s.folder_date, s.machine_id, nta.usage_seconds
             ORDER BY s.folder_date
         """),
         {"uid": user_id, "folder_date": folder_date},
@@ -1275,9 +1392,10 @@ def get_session_by_date(
     row = db.execute(
         text(f"""
             WITH night AS (
-                SELECT folder_date, user_id
+                SELECT folder_date, user_id, machine_id
                 FROM sessions
                 WHERE folder_date = CAST(:date AS date) AND user_id = CAST(:uid AS uuid)
+                ORDER BY duration_seconds DESC
                 LIMIT 1
             )
             SELECT
@@ -1285,10 +1403,16 @@ def get_session_by_date(
                 (array_agg(s.session_id ORDER BY s.duration_seconds DESC))[1] AS session_id,
                 s.folder_date,
                 0 AS block_index,
-                MIN(s.start_datetime) AS start_datetime,
-                MAX(s.start_datetime + (s.duration_seconds || ' seconds')::interval) AS end_datetime,
+                nta.start_datetime,
+                nta.end_datetime,
                 MIN(s.start_datetime) AS pld_start_datetime,
-                SUM(s.duration_seconds) AS duration_seconds,
+                nta.usage_seconds AS duration_seconds,
+                nta.wall_clock_seconds,
+                nta.gap_seconds,
+                nta.block_count,
+                nta.usage_source,
+                nta.summary_reported_usage_seconds,
+                nta.validation_status AS duration_validation_status,
                 SUM(s.total_ahi_events) AS total_ahi_events,
                 SUM(s.central_apnea_count) AS central_apnea_count,
                 SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
@@ -1301,8 +1425,8 @@ def get_session_by_date(
                 (array_agg(s.leak_kind ORDER BY s.duration_seconds DESC))[1] AS leak_kind,
                 (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 BOOL_OR(s.has_spo2) AS has_spo2,
-                CASE WHEN SUM(s.duration_seconds) > 0
-                     THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
+                CASE WHEN nta.usage_seconds > 0
+                     THEN ROUND((SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0))::numeric, 2)
                      ELSE 0 END AS ahi,
                 AVG(s.avg_resp_rate) AS avg_resp_rate,
                 AVG(s.avg_tidal_vol) AS avg_tidal_vol,
@@ -1317,6 +1441,10 @@ def get_session_by_date(
                 (array_agg(s.humidity_level  ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c   ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
                 (array_agg(s.machine_tz      ORDER BY s.duration_seconds DESC))[1] AS machine_tz,
+                s.machine_id::text AS machine_id,
+                m.family AS machine_family,
+                m.model AS machine_model,
+                m.validation_status AS machine_validation_status,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
                 COALESCE((
                     SELECT s2.tags
@@ -1331,8 +1459,17 @@ def get_session_by_date(
                 TRUE AS parser_validated
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
-            WHERE s.duration_seconds >= 600
-            GROUP BY s.folder_date
+                        AND s.machine_id IS NOT DISTINCT FROM n.machine_id
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
+            LEFT JOIN cpap_machines m ON m.id = s.machine_id
+            GROUP BY s.folder_date, s.machine_id, m.family, m.model, m.validation_status,
+                     nta.start_datetime, nta.end_datetime, nta.usage_seconds,
+                     nta.wall_clock_seconds, nta.gap_seconds, nta.block_count,
+                     nta.usage_source, nta.summary_reported_usage_seconds,
+                     nta.validation_status
         """),
             {"date": folder_date, "uid": current_user["id"]},
         ).mappings().first()

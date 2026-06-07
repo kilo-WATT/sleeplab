@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
-from typing import Mapping
 
 from .models import TherapyScore, TherapyScoreComponent, TherapyScoreComponents
-
 
 BASE_WEIGHTS = {
     "ahi": 40,

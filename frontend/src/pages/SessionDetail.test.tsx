@@ -13,6 +13,7 @@ const apiMock = vi.hoisted(() => ({
   getInferredEquipment: vi.fn(),
   getWearableData: vi.fn(),
   getSessionSpo2: vi.fn(),
+  getSessionTherapyContext: vi.fn(),
   getEventWindow: vi.fn(),
   updateSessionTimezone: vi.fn(),
   getImportSettings: vi.fn(),
@@ -114,6 +115,7 @@ describe('SessionDetail timezone display', () => {
       filter: null,
     })
     apiMock.getWearableData.mockResolvedValue({ hr: [], spo2: [], stages: [] })
+    apiMock.getSessionTherapyContext.mockResolvedValue(null)
     apiMock.getImportSettings.mockResolvedValue({ llm_configured: false })
   })
 

@@ -236,16 +236,29 @@ def _build_general_context(db: Session, user_id: str, days: int) -> dict[str, An
         db.execute(
             text(
                 """
-            SELECT DISTINCT ON (folder_date)
-                id::text AS id, folder_date, duration_seconds, ahi, avg_pressure, p95_pressure,
-                avg_leak, avg_flow_lim, central_apnea_count, obstructive_apnea_count,
-                hypopnea_count, apnea_count, total_ahi_events, has_spo2, avg_spo2,
-                min_spo2, updated_at
-            FROM sessions
-            WHERE user_id = CAST(:uid AS uuid)
-              AND folder_date >= :start_date
-              AND duration_seconds >= 600
-            ORDER BY folder_date DESC, duration_seconds DESC
+            SELECT
+                (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS id,
+                s.folder_date, nta.usage_seconds AS duration_seconds,
+                CASE WHEN nta.usage_seconds > 0
+                     THEN SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0)
+                     ELSE NULL END AS ahi,
+                AVG(s.avg_pressure) AS avg_pressure, MAX(s.p95_pressure) AS p95_pressure,
+                AVG(s.avg_leak) AS avg_leak, AVG(s.avg_flow_lim) AS avg_flow_lim,
+                SUM(s.central_apnea_count) AS central_apnea_count,
+                SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
+                SUM(s.hypopnea_count) AS hypopnea_count, SUM(s.apnea_count) AS apnea_count,
+                SUM(s.total_ahi_events) AS total_ahi_events, BOOL_OR(s.has_spo2) AS has_spo2,
+                AVG(s.avg_spo2) AS avg_spo2, MIN(s.min_spo2) AS min_spo2,
+                MAX(s.updated_at) AS updated_at
+            FROM sessions s
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
+            WHERE s.user_id = CAST(:uid AS uuid)
+              AND s.folder_date >= :start_date
+            GROUP BY s.folder_date, s.machine_id, nta.usage_seconds
+            ORDER BY s.folder_date DESC
             """
             ),
             {"uid": user_id, "start_date": start_date},
@@ -255,6 +268,7 @@ def _build_general_context(db: Session, user_id: str, days: int) -> dict[str, An
     )
 
     nights = [_night_dict(r) for r in rows]
+    compliant_nights = sum(1 for night in nights if night["duration_hours"] >= 4)
     ahi_values = [n["ahi"] for n in nights if n["ahi"] is not None]
     pressure_values = [n["avg_pressure"] for n in nights if n["avg_pressure"] is not None]
     leak_values = [n["avg_leak_lpm"] for n in nights if n["avg_leak_lpm"] is not None]
@@ -263,7 +277,8 @@ def _build_general_context(db: Session, user_id: str, days: int) -> dict[str, An
         "analysis_window_days": days,
         "nights_with_data": len(nights),
         "possible_nights": days,
-        "compliance_pct": round((len(nights) / days) * 100, 1) if days else 0,
+        "compliance_pct": round((compliant_nights / days) * 100, 1) if days else 0,
+        "compliant_nights": compliant_nights,
         "latest_night": nights[0] if nights else None,
         "days_since_latest": (date.today() - rows[0]["folder_date"]).days if rows else None,
         "averages": {
@@ -289,15 +304,27 @@ def _build_trend_context(db: Session, user_id: str) -> dict[str, Any]:
         db.execute(
             text(
                 """
-            SELECT DISTINCT ON (folder_date)
-                id::text AS id, folder_date, duration_seconds, ahi, avg_pressure, p95_pressure,
-                avg_leak, avg_flow_lim, central_apnea_count, obstructive_apnea_count,
-                hypopnea_count, apnea_count, total_ahi_events, has_spo2, min_spo2,
-                updated_at
-            FROM sessions
-            WHERE user_id = CAST(:uid AS uuid)
-              AND duration_seconds >= 600
-            ORDER BY folder_date DESC, duration_seconds DESC
+            SELECT
+                (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS id,
+                s.folder_date, nta.usage_seconds AS duration_seconds,
+                CASE WHEN nta.usage_seconds > 0
+                     THEN SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0)
+                     ELSE NULL END AS ahi,
+                AVG(s.avg_pressure) AS avg_pressure, MAX(s.p95_pressure) AS p95_pressure,
+                AVG(s.avg_leak) AS avg_leak, AVG(s.avg_flow_lim) AS avg_flow_lim,
+                SUM(s.central_apnea_count) AS central_apnea_count,
+                SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
+                SUM(s.hypopnea_count) AS hypopnea_count, SUM(s.apnea_count) AS apnea_count,
+                SUM(s.total_ahi_events) AS total_ahi_events, BOOL_OR(s.has_spo2) AS has_spo2,
+                MIN(s.min_spo2) AS min_spo2, MAX(s.updated_at) AS updated_at
+            FROM sessions s
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
+            WHERE s.user_id = CAST(:uid AS uuid)
+            GROUP BY s.folder_date, s.machine_id, nta.usage_seconds
+            ORDER BY s.folder_date DESC
             LIMIT 30
             """
             ),
@@ -333,15 +360,15 @@ def _build_session_context(db: Session, user_id: str, session_id: str) -> dict[s
             text(
                 """
             WITH night AS (
-                SELECT folder_date, user_id
+                SELECT folder_date, user_id, machine_id
                 FROM sessions
                 WHERE id = CAST(:id AS uuid) AND user_id = CAST(:uid AS uuid)
             )
             SELECT
                 (array_agg(s.id::text ORDER BY s.duration_seconds DESC))[1] AS id,
                 s.folder_date,
-                MIN(s.start_datetime) AS start_datetime,
-                SUM(s.duration_seconds) AS duration_seconds,
+                nta.start_datetime,
+                nta.usage_seconds AS duration_seconds,
                 SUM(s.total_ahi_events) AS total_ahi_events,
                 SUM(s.central_apnea_count) AS central_apnea_count,
                 SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
@@ -360,13 +387,17 @@ def _build_session_context(db: Session, user_id: str, session_id: str) -> dict[s
                 (array_agg(s.humidity_level ORDER BY s.duration_seconds DESC))[1] AS humidity_level,
                 (array_agg(s.temperature_c ORDER BY s.duration_seconds DESC))[1] AS temperature_c,
                 MAX(s.updated_at) AS updated_at,
-                CASE WHEN SUM(s.duration_seconds) > 0
-                     THEN ROUND((SUM(s.total_ahi_events) / (SUM(s.duration_seconds) / 3600.0))::numeric, 2)
+                CASE WHEN nta.usage_seconds > 0
+                     THEN ROUND((SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0))::numeric, 2)
                      ELSE 0 END AS ahi
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
-            WHERE s.duration_seconds >= 600
-            GROUP BY s.folder_date
+                        AND s.machine_id IS NOT DISTINCT FROM n.machine_id
+            JOIN nightly_therapy_aggregates nta
+              ON nta.user_id = s.user_id
+             AND nta.machine_id IS NOT DISTINCT FROM s.machine_id
+             AND nta.machine_local_date = s.folder_date
+            GROUP BY s.folder_date, s.machine_id, nta.start_datetime, nta.usage_seconds
             """
             ),
             {"id": session_id, "uid": user_id},

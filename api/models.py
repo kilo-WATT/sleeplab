@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -35,6 +35,12 @@ class SessionSummary(BaseModel):
     start_datetime: datetime
     end_datetime: datetime | None = None
     duration_seconds: int
+    wall_clock_seconds: int | None = None
+    gap_seconds: int | None = None
+    block_count: int = 1
+    usage_source: str = "legacy_session_duration"
+    summary_reported_usage_seconds: int | None = None
+    duration_validation_status: str = "unvalidated"
     ahi: float | None
     central_apnea_count: int
     obstructive_apnea_count: int
@@ -79,9 +85,9 @@ class TherapyScoreComponent(BaseModel):
     score: int
     max_score: int
     label: str
-    value: Optional[float] = None
-    unit: Optional[str] = None
-    unavailable_reason: Optional[str] = None
+    value: float | None = None
+    unit: str | None = None
+    unavailable_reason: str | None = None
 
 
 class TherapyScoreComponents(BaseModel):
@@ -94,10 +100,10 @@ class TherapyScoreComponents(BaseModel):
         spo2: SpO2 component score, or None if oximetry data was unavailable.
     """
 
-    ahi: Optional[TherapyScoreComponent] = None
-    leak: Optional[TherapyScoreComponent] = None
-    duration: Optional[TherapyScoreComponent] = None
-    spo2: Optional[TherapyScoreComponent] = None
+    ahi: TherapyScoreComponent | None = None
+    leak: TherapyScoreComponent | None = None
+    duration: TherapyScoreComponent | None = None
+    spo2: TherapyScoreComponent | None = None
 
 
 class TherapyScore(BaseModel):
@@ -142,22 +148,26 @@ class SessionDetail(SessionSummary):
     """
 
     pld_start_datetime: datetime
-    device_serial: Optional[str]
+    device_serial: str | None
     therapy_score: TherapyScore
-    score_vs_30d_avg: Optional[float] = None
+    score_vs_30d_avg: float | None = None
     note: str | None = None
     tags: list[str] = Field(default_factory=list)
-    avg_resp_rate: Optional[float]
-    avg_tidal_vol: Optional[float]
-    avg_min_vent: Optional[float]
-    avg_snore: Optional[float]
-    avg_flow_lim: Optional[float]
-    avg_spo2: Optional[float]
-    min_spo2: Optional[float]
-    therapy_mode: Optional[str]
-    mask_type: Optional[str]
-    humidity_level: Optional[int]
-    temperature_c: Optional[float]
+    avg_resp_rate: float | None
+    avg_tidal_vol: float | None
+    avg_min_vent: float | None
+    avg_snore: float | None
+    avg_flow_lim: float | None
+    avg_spo2: float | None
+    min_spo2: float | None
+    therapy_mode: str | None
+    mask_type: str | None
+    humidity_level: int | None
+    temperature_c: float | None
+    machine_id: str | None = None
+    machine_family: str | None = None
+    machine_model: str | None = None
+    machine_validation_status: str | None = None
 
 
 class TagInsight(BaseModel):
@@ -174,9 +184,9 @@ class TagInsight(BaseModel):
 
     tag: str
     night_count: int
-    avg_ahi: Optional[float]
-    baseline_avg_ahi: Optional[float]
-    delta_ahi: Optional[float]
+    avg_ahi: float | None
+    baseline_avg_ahi: float | None
+    delta_ahi: float | None
 
 
 class EventRecord(BaseModel):

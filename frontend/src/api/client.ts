@@ -121,6 +121,9 @@ export interface ImportRunSummary {
   imported_block_count: number
   imported_event_count: number
   imported_channel_count: number
+  imported_settings_count?: number
+  summary_only_day_count?: number
+  capability_status?: Record<string, string>
   started_at: string | null
   completed_at: string | null
   machine_id: string | null
@@ -341,6 +344,12 @@ export interface SessionSummary {
   end_datetime: string | null
   duration_seconds: number
   duration_hours: number
+  wall_clock_seconds?: number | null
+  gap_seconds?: number | null
+  block_count?: number
+  usage_source?: string
+  summary_reported_usage_seconds?: number | null
+  duration_validation_status?: string
   ahi: number | null
   central_apnea_count: number
   obstructive_apnea_count: number
@@ -401,6 +410,65 @@ export interface SessionDetail extends SessionSummary {
   mask_type: string | null
   humidity_level: number | null
   temperature_c: number | null
+  machine_id?: string | null
+  machine_family?: string | null
+  machine_model?: string | null
+  machine_validation_status?: string | null
+}
+
+export interface SessionTherapyContext {
+  machine: {
+    machine_id: string
+    manufacturer: string | null
+    family: string | null
+    model: string | null
+    product_code: string | null
+    serial_number: string | null
+    identity_confidence: string
+    support_status: string
+    validation_status: string
+  }
+  blocks: Array<{
+    id: string
+    source_block_key: string
+    block_kind: string
+    start_datetime: string
+    end_datetime: string
+    duration_seconds: number
+    source_kind: string
+    confidence: string
+    validation_status: string
+    diagnostics: Array<{ code: string; severity: string; message: string }>
+  }>
+  settings: {
+    id: string
+    effective_at: string
+    normalized_settings: Record<string, string | number | boolean | null>
+    vendor_settings: Record<string, unknown>
+    source_names: Record<string, string>
+    adapter_id: string
+    parser_id: string | null
+    parser_version: string | null
+    confidence: string
+    validation_status: string
+    diagnostics: Array<{ code: string; severity: string; message: string }>
+  } | null
+}
+
+export interface MachineSettingsSnapshot {
+  id: string
+  session_id: string | null
+  import_run_id: string | null
+  effective_at: string
+  normalized_settings: Record<string, string | number | boolean | null>
+  vendor_settings: Record<string, unknown>
+  source_names: Record<string, string>
+  adapter_id: string
+  parser_id: string | null
+  parser_version: string | null
+  confidence: string
+  validation_status: string
+  diagnostics: Array<{ code: string; severity: string; message: string }>
 }
 
 /** Aggregated AHI comparison for nights carrying a specific user-applied tag vs. untagged baseline. */
@@ -796,6 +864,8 @@ export const api = {
   downloadSessionReportPdf: (from: string, to: string) => requestBlob('/sessions/export/pdf', { from, to }),
   getSession: (id: string) => get<SessionDetail>(`/sessions/${id}`),
   getSessionByDate: (date: string) => get<SessionDetail>(`/sessions/by-date/${date}`),
+  getSessionTherapyContext: (id: string) =>
+    get<SessionTherapyContext>(`/sessions/${id}/therapy-context`),
   getTagInsights: () => get<TagInsight[]>('/sessions/tag-insights'),
   updateSessionNote: (id: string, note: string) => put<SessionDetail>(`/sessions/${id}/note`, { note }),
   updateSessionTags: (id: string, tags: string[]) => put<SessionDetail>(`/sessions/${id}/tags`, { tags }),
@@ -867,6 +937,8 @@ export const api = {
   getImportStatus: () => get<ImportStatusResponse>('/upload/status'),
   getImportRuns: (limit = 25) => get<ImportRunSummary[]>('/imports/runs', { limit }),
   getCpapMachines: () => get<CpapMachineSummary[]>('/imports/machines'),
+  getMachineSettings: (machineId: string) =>
+    get<MachineSettingsSnapshot[]>(`/imports/machines/${machineId}/settings`),
   uploadOximeterFiles: (files: File[], options?: { machine_tz?: string; overwrite?: boolean }) => {
     const formData = new FormData()
     for (const file of files) {
