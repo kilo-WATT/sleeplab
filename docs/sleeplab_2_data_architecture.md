@@ -7,9 +7,10 @@ card into machine-scoped therapy data. The legacy `sessions` table remains the
 read path for existing charts, reports, notes, tags, oximetry, and AI features,
 but it is no longer the owner of machine identity or provenance.
 
-Migration `023_add_cpap_data_foundation.sql` is additive and backfills existing
-data. It does not delete sessions, events, metrics, waveforms, oximetry, notes,
-tags, equipment, or AI cache rows.
+Migrations `023_add_cpap_data_foundation.sql` and
+`024_add_authoritative_therapy_semantics.sql` are additive and backfill
+existing data. They do not delete sessions, events, metrics, waveforms,
+oximetry, notes, tags, equipment, or AI cache rows.
 
 ## Durable models
 
@@ -57,14 +58,40 @@ machines can legitimately emit the same local source key.
 one legacy block. Negative legacy durations are retained as zero-length blocks
 with failed validation and `legacy_invalid_duration` provenance.
 
+For native ResMed imports, PLD files remain durable source sessions and
+recording-span blocks. STR mask-on/mask-off intervals are stored separately as
+`resmed_str_mask_interval` blocks. Re-imports upsert stable source keys and
+remove only stale STR intervals for the same machine-local date.
+
+`nightly_therapy_aggregates` derives a machine/night read model:
+
+- **source session**: one durable source recording, currently keyed from PLD;
+- **therapy block**: a source-defined mask-on/mask-off interval;
+- **machine-local date**: the therapy date emitted in the machine timezone;
+- **usage duration**: sum of validated STR intervals, falling back to
+  recording spans only when explicit intervals are unavailable;
+- **wall-clock span**: first therapy-on to last therapy-off;
+- **gap duration**: wall-clock span minus usage;
+- **summary-reported usage**: STR `Duration`, retained separately.
+
+Session headers, Therapy Score, adherence, dashboard/overview, calendar,
+trends, reports, AI summaries, and PDF exports use authoritative nightly
+usage. Legacy sessions without a machine or explicit blocks remain visible
+through a conservative recording-span fallback.
+
 ### Settings
 
-`settings_snapshots` supports versioned normalized and vendor-specific JSON,
-source names, source files, adapter identity, confidence, and validation.
+`settings_snapshots` stores versioned normalized and vendor-specific JSON,
+source names/files, adapter and parser identity/version, effective timestamp,
+confidence, validation, and diagnostics.
 
-The table and query API are live. Native ResMed STR/CSL extraction is not yet
-connected, so the UI/API correctly return no settings rather than inventing
-values from flattened session columns.
+Native ResMed reads settings and mask intervals from `STR.edf`. CSL is an EDF
+annotation/event source, not a settings source. Confident mappings include
+therapy mode, pressure ranges, bilevel fields when present, EPR, ramp,
+humidification/climate, heated-tube temperature, and mask type. Unknown fields
+and enum codes remain in vendor JSON and produce diagnostics; they are never
+guessed. Selected values are projected to legacy session columns only for
+compatibility.
 
 ### Signals and events
 
@@ -83,8 +110,27 @@ and replace-on-import behavior prevent duplicate events.
 machine/session/import ownership, adapter, and validation. Native ResMed
 summary values are tagged as produced by `sleeplab.native_resmed.summary`.
 
-Therapy score, reports, trends, and AI inputs still read legacy summary
-columns. Moving each consumer to explicit derived inputs is a later milestone.
+Therapy score, reports, trends, adherence, and AI duration inputs now use
+authoritative nightly usage. Other clinical values still use existing summary
+columns while their provenance is retained in `derived_values`.
+
+## ResMed AirSense 10 audit
+
+A restricted real AirSense 10 card was audited locally on June 6, 2026. No
+private card files are committed. June 5, 2026 established:
+
+| Value | Meaning | Result |
+| --- | --- | ---: |
+| STR mask intervals | Computed therapy usage | 21,840 s (6h04m) |
+| STR first on to last off | Wall-clock span | 22,740 s (6h19m) |
+| Derived gaps | Span minus usage | 900 s (15m) |
+| PLD headers | Recording coverage | 21,660 s (6h01m) |
+| STR `Duration` | Summary-reported usage | 21,840 s |
+| STR `OnDuration` | Summary-reported on-span | 22,740 s |
+
+The previous 5h57m header excluded short PLD recordings, while the previous
+Therapy Score used another duration path. Consumers now share the aggregate
+instead of being patched independently.
 
 ## Import lifecycle
 
@@ -103,6 +149,13 @@ The uploaded-root flow is:
 
 Only `resmed-native-v2` executes in production in this milestone. Other
 families may be detected, but remain blocked and do not create import runs.
+
+Runs record settings counts, source-defined block counts, summary-only days,
+capability validation, missing optional sources, unknown STR fields, duration
+disagreements, and timestamp uncertainty. Material per-recording failures make
+the run `partial`. A run still marked `running` after two hours is finalized
+as failed when import history is inspected, preventing permanent stale runs
+after a worker crash.
 
 ## Support claims
 
@@ -141,22 +194,36 @@ committed without documented consent and anonymization review. Restricted
 fixtures should keep only the manifest in Git and be retrieved by immutable
 hash in an authorized job.
 
+For a local restricted AirSense card, keep the card outside the repository,
+point `--source-root` at its root and `--datalog` at `DATALOG`, and use a
+dedicated development database/import run. Record only anonymized expected
+counts and hashes. Duplicate verification compares stable persisted UUID sets;
+incremental verification adds an authorized or synthetic newer night and
+checks that existing identities remain unchanged.
+
 ## Known alpha limitations
 
-- ResMed STR settings and summary-only days are not normalized yet.
-- Native ResMed session grouping still creates one session row per PLD block;
-  the explicit block model now exists, but nightly aggregation is unchanged.
+- STR parsing has evidence from one AirSense 10 card and synthetic fixtures;
+  this is not full ResMed-family validation.
+- Some STR fields remain vendor-only and diagnostic because their meaning is
+  not confidently established.
+- Three malformed PLD headers on the restricted card report `num_records=-1`;
+  valid data imports and the run is correctly marked partial.
 - BRP waveform samples remain event-window-focused rather than full-night.
 - Non-ResMed adapters are detection/planning only.
-- Import cancellation and crash recovery are not implemented.
+- Import cancellation and proactive worker heartbeats are not implemented;
+  stale-run recovery prevents permanent `running` state.
 - Legacy local-path and SleepHQ imports reconcile machines but do not yet
   create full `import_runs` manifests.
-- Existing score/report/AI consumers have not migrated to `derived_values`.
+- AI cache invalidation remains timestamp/input-fingerprint based rather than
+  a general dependency graph over derived values.
 - The source manifest records filenames; deployments must treat import
   diagnostics as private health data.
 
 ## Next milestone
 
-Parse ResMed `STR.edf`/CSL settings and source-defined mask-on/off intervals
-into `settings_snapshots` and `session_blocks`, then add BRP/SA2 channel
-metadata and fixture-backed duplicate import tests against persisted rows.
+Validate ResMed waveform/full-night storage and BRP/SA2 channel inventory,
+sample rates, retention, and query performance. This should precede
+Lowenstein persistence because the current ResMed path deliberately stores
+event-window waveform samples. Lowenstein read-only conformance through the
+same normalized model follows.

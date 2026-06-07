@@ -866,6 +866,25 @@ consent. Pseudonymize consistently so identity matching can still be tested.
 
 ## Recommended implementation sequence
 
+### June 2026 ResMed milestone status
+
+Native ResMed now parses production `STR.edf` settings and source-defined mask
+intervals into `settings_snapshots` and `session_blocks`. CSL remains an event
+annotation source. Nightly aggregation distinguishes computed therapy usage,
+wall-clock span, gaps, PLD recording coverage, and STR summary-reported usage.
+
+A restricted AirSense 10 repeat import retained stable machine, session,
+block, settings, event, and channel identities. The final inventory was 67
+source/summary sessions, 65 recording-span blocks, 64 STR mask intervals, 38
+settings snapshots, 344 events, and 585 channel records. Three malformed PLD
+headers remain visible and make the run `partial`. June 5, 2026 resolves to
+21,840 seconds usage, 22,740 seconds span, and 900 seconds of gaps.
+
+This is evidence for the AirSense 10 path, not a manufacturer-wide validation
+claim. The next priority is deeper ResMed waveform/full-night storage
+validation; Lowenstein read-only conformance follows through the same
+normalized contract.
+
 Each item is intended to be a small PR.
 
 1. **Contract package and synthetic detector tests.** Add typed normalized
