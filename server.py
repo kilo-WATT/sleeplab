@@ -47,7 +47,7 @@ def run_migrations() -> None:
                 continue
 
             print(f"[migrations] applying {filename}")
-            conn.execute(text(path.read_text()))
+            conn.exec_driver_sql(path.read_text())
             conn.execute(
                 text("INSERT INTO schema_migrations (filename) VALUES (:f)"),
                 {"f": filename},

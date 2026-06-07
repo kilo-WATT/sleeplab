@@ -4,7 +4,7 @@ PostgreSQL connection and upsert helpers for the CPAP importer.
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -88,9 +88,14 @@ def finish_import_run(
     imported_events: int,
     imported_channels: int,
     errors: list[str],
+    imported_settings: int = 0,
+    summary_only_days: int = 0,
+    warnings: list[dict] | None = None,
+    capability_status: dict | None = None,
 ) -> None:
     """Finalize a durable import run after native importer execution."""
 
+    warnings = _dedupe_diagnostics(warnings or [])
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -109,6 +114,10 @@ def finish_import_run(
                 imported_block_count = %s,
                 imported_event_count = %s,
                 imported_channel_count = %s,
+                imported_settings_count = %s,
+                summary_only_day_count = %s,
+                warnings = %s::jsonb,
+                capability_status = %s::jsonb,
                 errors = %s::jsonb,
                 skipped_files = (
                     SELECT COALESCE(
@@ -132,12 +141,35 @@ def finish_import_run(
                 imported_blocks,
                 imported_events,
                 imported_channels,
+                imported_settings,
+                summary_only_days,
+                json.dumps(warnings),
+                json.dumps(capability_status or {}),
                 json.dumps([{"code": "native_import_error", "message": error} for error in errors]),
                 import_run_id,
                 import_run_id,
             ),
         )
     conn.commit()
+
+
+def _dedupe_diagnostics(diagnostics: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for diagnostic in diagnostics:
+        key = json.dumps(
+            {
+                "code": diagnostic.get("code"),
+                "message": diagnostic.get("message"),
+                "source_value": diagnostic.get("source_value"),
+                "relative_path": diagnostic.get("relative_path"),
+            },
+            sort_keys=True,
+        )
+        if key not in seen:
+            seen.add(key)
+            deduped.append(diagnostic)
+    return deduped
 
 
 def source_file_id(conn: Any, import_run_id: str | None, relative_path: str | None) -> str | None:
@@ -352,6 +384,13 @@ def upsert_session_block(
     start_datetime: datetime,
     end_datetime: datetime,
     source_file_ids: list[str],
+    source_kind: str = "recording_span",
+    therapy_duration_seconds: int | None = None,
+    source_reported_duration_seconds: int | None = None,
+    recording_duration_seconds: int | None = None,
+    diagnostics: list[dict] | None = None,
+    confidence: str = "strong",
+    validation_status: str = "partial",
 ) -> None:
     """Persist one explicit therapy block."""
 
@@ -361,8 +400,12 @@ def upsert_session_block(
             INSERT INTO session_blocks (
                 session_id, import_run_id, source_block_key, block_kind,
                 start_datetime, end_datetime, source_file_ids, confidence,
-                validation_status, updated_at
-            ) VALUES (%s, %s, %s, 'therapy', %s, %s, %s::uuid[], 'strong', 'partial', NOW())
+                validation_status, source_kind, source_reported_duration_seconds,
+                recording_duration_seconds, therapy_duration_seconds, diagnostics, updated_at
+            ) VALUES (
+                %s, %s, %s, 'therapy', %s, %s, %s::uuid[], %s, %s, %s, %s, %s,
+                %s, %s::jsonb, NOW()
+            )
             ON CONFLICT (session_id, source_block_key) DO UPDATE SET
                 import_run_id = EXCLUDED.import_run_id,
                 start_datetime = EXCLUDED.start_datetime,
@@ -370,6 +413,11 @@ def upsert_session_block(
                 source_file_ids = EXCLUDED.source_file_ids,
                 confidence = EXCLUDED.confidence,
                 validation_status = EXCLUDED.validation_status,
+                source_kind = EXCLUDED.source_kind,
+                source_reported_duration_seconds = EXCLUDED.source_reported_duration_seconds,
+                recording_duration_seconds = EXCLUDED.recording_duration_seconds,
+                therapy_duration_seconds = EXCLUDED.therapy_duration_seconds,
+                diagnostics = EXCLUDED.diagnostics,
                 updated_at = NOW()
             """,
             (
@@ -379,6 +427,296 @@ def upsert_session_block(
                 start_datetime,
                 end_datetime,
                 source_file_ids,
+                confidence,
+                validation_status,
+                source_kind,
+                source_reported_duration_seconds,
+                recording_duration_seconds,
+                therapy_duration_seconds,
+                json.dumps(diagnostics or []),
+            ),
+        )
+
+
+def replace_resmed_str_day(
+    conn: Any,
+    *,
+    user_id: str,
+    machine_id: str,
+    import_run_id: str,
+    adapter_id: str,
+    folder_date,
+    str_day: Any,
+    source_file_id_value: str | None,
+) -> tuple[int, int, bool]:
+    """Replace STR-derived blocks/settings for one machine-local therapy day."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text, start_datetime,
+                   start_datetime + duration_seconds * INTERVAL '1 second' AS end_datetime
+            FROM sessions
+            WHERE user_id = %s AND machine_id = %s AND folder_date = %s
+            ORDER BY start_datetime
+            """,
+            (user_id, machine_id, folder_date),
+        )
+        sessions = cur.fetchall()
+
+    summary_only = not sessions
+    if summary_only:
+        session_id = _upsert_summary_session(
+            conn,
+            user_id=user_id,
+            machine_id=machine_id,
+            import_run_id=import_run_id,
+            adapter_id=adapter_id,
+            folder_date=folder_date,
+            str_day=str_day,
+        )
+        sessions = [(session_id, str_day.intervals[0].start, str_day.intervals[-1].end)]
+
+    source_ids = [source_file_id_value] if source_file_id_value else []
+    duration_diagnostics = [
+        item for item in str_day.diagnostics if "duration" in item.get("affects", [])
+    ]
+    block_validation = (
+        "partial"
+        if any(item.get("severity") in {"warning", "error"} for item in duration_diagnostics)
+        else "validated"
+    )
+    current_keys: list[str] = []
+    for interval in str_day.intervals:
+        session_id = _closest_session(interval.start, interval.end, sessions)
+        source_key = f"str:{folder_date.isoformat()}:{interval.index}"
+        current_keys.append(source_key)
+        upsert_session_block(
+            conn,
+            session_db_id=session_id,
+            import_run_id=import_run_id,
+            source_block_key=source_key,
+            start_datetime=interval.start,
+            end_datetime=interval.end,
+            source_file_ids=source_ids,
+            source_kind="resmed_str_mask_interval",
+            therapy_duration_seconds=interval.duration_seconds,
+            source_reported_duration_seconds=str_day.summary_usage_seconds,
+            diagnostics=duration_diagnostics,
+            confidence="exact",
+            validation_status=block_validation,
+        )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM session_blocks b
+            USING sessions s
+            WHERE b.session_id = s.id
+              AND s.user_id = %s
+              AND s.machine_id = %s
+              AND s.folder_date = %s
+              AND b.source_kind = 'resmed_str_mask_interval'
+              AND NOT (b.source_block_key = ANY(%s))
+            """,
+            (user_id, machine_id, folder_date, current_keys),
+        )
+
+    representative_session_id = _closest_session(
+        str_day.intervals[0].start, str_day.intervals[-1].end, sessions
+    )
+    effective_at = datetime.combine(
+        folder_date,
+        time(12),
+        tzinfo=str_day.intervals[0].start.tzinfo,
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM settings_snapshots
+            WHERE machine_id = %s AND adapter_id = %s
+              AND effective_at >= %s AND effective_at < %s
+              AND effective_at <> %s
+            """,
+            (
+                machine_id,
+                adapter_id,
+                effective_at,
+                effective_at + timedelta(days=1),
+                effective_at,
+            ),
+        )
+    settings_count = upsert_settings_snapshot(
+        conn,
+        user_id=user_id,
+        machine_id=machine_id,
+        session_id=representative_session_id,
+        import_run_id=import_run_id,
+        effective_at=effective_at,
+        normalized_settings=str_day.normalized_settings,
+        vendor_settings=str_day.vendor_settings,
+        source_names=str_day.source_names,
+        source_file_ids=source_ids,
+        adapter_id=adapter_id,
+        parser_id="sleeplab.resmed_str",
+        parser_version="1",
+        diagnostics=str_day.diagnostics,
+    )
+    _project_settings_to_sessions(
+        conn, user_id, machine_id, folder_date, str_day.normalized_settings
+    )
+    return len(str_day.intervals), settings_count, summary_only
+
+
+def upsert_settings_snapshot(
+    conn: Any,
+    *,
+    user_id: str,
+    machine_id: str,
+    session_id: str | None,
+    import_run_id: str,
+    effective_at: datetime,
+    normalized_settings: dict,
+    vendor_settings: dict,
+    source_names: dict,
+    source_file_ids: list[str],
+    adapter_id: str,
+    parser_id: str,
+    parser_version: str,
+    diagnostics: list[dict],
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO settings_snapshots (
+                user_id, machine_id, session_id, import_run_id, effective_at,
+                normalized_settings, vendor_settings, source_names, source_file_ids,
+                adapter_id, confidence, validation_status, parser_id, parser_version,
+                diagnostics, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::uuid[],
+                %s, 'strong', %s, %s, %s, %s::jsonb, NOW()
+            )
+            ON CONFLICT (machine_id, effective_at, adapter_id) DO UPDATE SET
+                session_id = EXCLUDED.session_id,
+                import_run_id = EXCLUDED.import_run_id,
+                normalized_settings = EXCLUDED.normalized_settings,
+                vendor_settings = EXCLUDED.vendor_settings,
+                source_names = EXCLUDED.source_names,
+                source_file_ids = EXCLUDED.source_file_ids,
+                confidence = EXCLUDED.confidence,
+                validation_status = EXCLUDED.validation_status,
+                parser_id = EXCLUDED.parser_id,
+                parser_version = EXCLUDED.parser_version,
+                diagnostics = EXCLUDED.diagnostics,
+                updated_at = NOW()
+            """,
+            (
+                user_id,
+                machine_id,
+                session_id,
+                import_run_id,
+                effective_at,
+                json.dumps(normalized_settings),
+                json.dumps(vendor_settings),
+                json.dumps(source_names),
+                source_file_ids,
+                adapter_id,
+                (
+                    "partial"
+                    if any(item.get("severity") in {"warning", "error"} for item in diagnostics)
+                    else "validated"
+                ),
+                parser_id,
+                parser_version,
+                json.dumps(diagnostics),
+            ),
+        )
+    return 1
+
+
+def _closest_session(start: datetime, end: datetime, sessions: list[tuple]) -> str:
+    def distance(item: tuple) -> tuple[float, float]:
+        _, session_start, session_end = item
+        overlap = max(0.0, (min(end, session_end) - max(start, session_start)).total_seconds())
+        return (-overlap, abs((session_start - start).total_seconds()))
+
+    return str(min(sessions, key=distance)[0])
+
+
+def _upsert_summary_session(
+    conn: Any,
+    *,
+    user_id: str,
+    machine_id: str,
+    import_run_id: str,
+    adapter_id: str,
+    folder_date,
+    str_day: Any,
+) -> str:
+    start = str_day.intervals[0].start
+    data = {
+        "session_id": f"str_{folder_date:%Y%m%d}",
+        "folder_date": folder_date,
+        "block_index": 0,
+        "start_datetime": start,
+        "pld_start_datetime": start,
+        "duration_seconds": str_day.usage_seconds,
+        "device_serial": None,
+        "manufacturer": "ResMed",
+        "leak_kind": "unintentional",
+        "leak_unit": "L/s",
+        "ahi": None,
+        "central_apnea_count": 0,
+        "obstructive_apnea_count": 0,
+        "hypopnea_count": 0,
+        "apnea_count": 0,
+        "arousal_count": None,
+        "total_ahi_events": 0,
+        "avg_pressure": None,
+        "p95_pressure": None,
+        "avg_leak": None,
+        "avg_resp_rate": None,
+        "avg_tidal_vol": None,
+        "avg_min_vent": None,
+        "avg_snore": None,
+        "avg_flow_lim": None,
+        "has_spo2": False,
+        "therapy_mode": str_day.normalized_settings.get("therapy_mode"),
+        "mask_type": str_day.normalized_settings.get("mask_type"),
+        "humidity_level": str_day.normalized_settings.get("humidifier_level"),
+        "temperature_c": str_day.normalized_settings.get("tube_temperature_c"),
+        "machine_tz": start.tzinfo.key if hasattr(start.tzinfo, "key") else "UTC",
+        "user_id": user_id,
+        "machine_id": machine_id,
+        "import_run_id": import_run_id,
+        "source_session_key": f"str:{folder_date.isoformat()}:summary",
+        "provenance_status": "native_resmed_summary_only",
+        "adapter_id": adapter_id,
+    }
+    return str(upsert_session(conn, data))
+
+
+def _project_settings_to_sessions(
+    conn: Any, user_id: str, machine_id: str, folder_date, settings: dict
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE sessions
+            SET therapy_mode = COALESCE(%s, therapy_mode),
+                mask_type = COALESCE(%s, mask_type),
+                humidity_level = COALESCE(%s, humidity_level),
+                temperature_c = COALESCE(%s, temperature_c),
+                updated_at = NOW()
+            WHERE user_id = %s AND machine_id = %s AND folder_date = %s
+            """,
+            (
+                settings.get("therapy_mode"),
+                settings.get("mask_type"),
+                settings.get("humidifier_level"),
+                settings.get("tube_temperature_c"),
+                user_id,
+                machine_id,
+                folder_date,
             ),
         )
 

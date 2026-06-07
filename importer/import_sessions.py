@@ -22,6 +22,7 @@ from db import (
     get_conn,
     reconcile_machine,
     replace_derived_values,
+    replace_resmed_str_day,
     replace_session_events,
     replace_session_metrics,
     replace_session_spo2,
@@ -32,6 +33,7 @@ from db import (
     upsert_session_block,
 )
 from edf_parser import parse_brp, parse_eve, parse_pld, parse_sa2, read_header
+from resmed_str import ResMedSTRDay, parse_resmed_str
 
 AHI_EVENT_TYPES = {"Central Apnea", "Obstructive Apnea", "Hypopnea", "Apnea"}
 
@@ -231,9 +233,10 @@ def import_folder(
     adapter_id: str = "resmed-native-v2",
     source_root: Path | None = None,
     run_stats: dict | None = None,
+    str_day: ResMedSTRDay | None = None,
 ):
     blocks = discover_session_blocks(folder)
-    if not blocks:
+    if not blocks and str_day is None:
         return 0
 
     imported = 0
@@ -262,6 +265,11 @@ def import_folder(
 
             pld_start = _localize(pld_header.start_datetime, machine_tz)
             duration_s = int(pld_header.num_records * pld_header.duration_per_record)
+            if duration_s <= 0:
+                raise ValueError(
+                    f"PLD recording duration is invalid ({duration_s}s; "
+                    f"records={pld_header.num_records}, record_duration={pld_header.duration_per_record})"
+                )
             events = events_for_block(events, csl_start, pld_start, duration_s)
             events.extend(
                 derive_large_leak_events(
@@ -335,7 +343,30 @@ def import_folder(
                     import_run_id,
                     _relative_source_path(block["csl_path"], source_root),
                 )
-                source_ids = [value for value in (pld_source_id, event_source_id, csl_source_id) if value]
+                brp_source_ids = [
+                    source_file_id(
+                        conn,
+                        import_run_id,
+                        _relative_source_path(path, source_root),
+                    )
+                    for path in block.get("brp_paths", [])
+                ]
+                spo2_source_id = source_file_id(
+                    conn,
+                    import_run_id,
+                    _relative_source_path(block["spo2_path"], source_root),
+                )
+                source_ids = [
+                    value
+                    for value in (
+                        pld_source_id,
+                        event_source_id,
+                        csl_source_id,
+                        spo2_source_id,
+                        *brp_source_ids,
+                    )
+                    if value
+                ]
                 replace_session_events(
                     conn,
                     session_db_id,
@@ -372,7 +403,7 @@ def import_folder(
                     summary=summary,
                 )
                 if run_stats is not None:
-                    run_stats["blocks"] = run_stats.get("blocks", 0) + 1
+                    run_stats["recording_blocks"] = run_stats.get("recording_blocks", 0) + 1
                     run_stats["events"] = run_stats.get("events", 0) + len(events)
                     run_stats["channels"] = run_stats.get("channels", 0) + channel_count
                     run_stats["derived_values"] = run_stats.get("derived_values", 0) + derived_count
@@ -392,6 +423,27 @@ def import_folder(
             print(f"    ERROR block {block_idx} ({session_id}): {e}")
             if run_stats is not None:
                 run_stats.setdefault("errors", []).append(f"{session_id}: {e}")
+
+    if import_run_id and machine_id and str_day is not None:
+        str_source_id = source_file_id(conn, import_run_id, "STR.edf")
+        explicit_blocks, settings_count, summary_only = replace_resmed_str_day(
+            conn,
+            user_id=user_id,
+            machine_id=machine_id,
+            import_run_id=import_run_id,
+            adapter_id=adapter_id,
+            folder_date=folder_date,
+            str_day=str_day,
+            source_file_id_value=str_source_id,
+        )
+        conn.commit()
+        if run_stats is not None:
+            run_stats["blocks"] = run_stats.get("blocks", 0) + explicit_blocks
+            run_stats["settings"] = run_stats.get("settings", 0) + settings_count
+            run_stats["summary_only_days"] = run_stats.get("summary_only_days", 0) + int(summary_only)
+            run_stats.setdefault("warnings", []).extend(str_day.diagnostics)
+        if summary_only:
+            imported += 1
 
     return imported
 
@@ -483,14 +535,53 @@ def parse_args():
     return parser.parse_args()
 
 
+def _capability_status(run_stats: dict, has_str: bool) -> dict:
+    return {
+        "settings": "validated" if run_stats.get("settings") else ("failed" if has_str else "unavailable"),
+        "session_blocks": "validated" if run_stats.get("blocks") else "partial",
+        "recording_spans": "partial" if run_stats.get("recording_blocks") else "unavailable",
+        "events": "partial" if run_stats.get("events") else "unavailable",
+        "low_rate_signals": "partial" if run_stats.get("channels") else "unavailable",
+        "waveforms": "partial",
+        "oximetry": "partial",
+    }
+
+
 def main():
     args = parse_args()
     datalog = Path(args.datalog)
     user_id = args.user_id
     conn = get_conn()
-    run_stats = {"blocks": 0, "events": 0, "channels": 0, "derived_values": 0}
+    run_stats = {
+        "blocks": 0,
+        "recording_blocks": 0,
+        "events": 0,
+        "channels": 0,
+        "derived_values": 0,
+        "settings": 0,
+        "summary_only_days": 0,
+        "warnings": [],
+    }
     errors: list[str] = run_stats.setdefault("errors", [])
     source_root = Path(args.source_root) if args.source_root else None
+    str_days: dict[date, ResMedSTRDay] = {}
+    if source_root:
+        str_path = source_root / "STR.edf"
+        if str_path.exists():
+            _, machine_tz = _machine_tz_for_user(conn, user_id)
+            try:
+                str_days = parse_resmed_str(str_path, machine_tz)
+            except Exception as exc:
+                errors.append(f"STR.edf: {exc}")
+                run_stats["warnings"].append(
+                    {
+                        "code": "resmed_str_parse_failed",
+                        "severity": "error",
+                        "message": f"Could not parse STR.edf: {exc}",
+                        "relative_path": "STR.edf",
+                        "affects": ["settings", "session_blocks", "duration"],
+                    }
+                )
 
     if args.folder:
         folder = datalog / args.folder
@@ -508,24 +599,36 @@ def main():
             adapter_id=args.adapter_id,
             source_root=source_root,
             run_stats=run_stats,
+            str_day=str_days.get(folder_date),
         )
         print(f"{args.folder}: {n} session block(s) imported")
         if args.import_run_id:
+            material_errors = run_stats.get("errors", [])
             finish_import_run(
                 conn,
                 args.import_run_id,
-                status="success" if n else "partial",
+                status="partial" if material_errors and n else ("success" if n else "failed"),
                 imported_sessions=n,
                 imported_blocks=run_stats["blocks"],
                 imported_events=run_stats["events"],
                 imported_channels=run_stats["channels"],
-                errors=[] if n else ["No importable session blocks were found."],
+                imported_settings=run_stats["settings"],
+                summary_only_days=run_stats["summary_only_days"],
+                warnings=run_stats["warnings"],
+                capability_status=_capability_status(run_stats, bool(str_days)),
+                errors=material_errors or ([] if n else ["No importable session blocks were found."]),
             )
         conn.close()
         return
 
-    folders = sorted([f for f in datalog.iterdir() if f.is_dir() and f.name.isdigit() and len(f.name) == 8])
-
+    folder_by_date = {
+        f.name: f
+        for f in datalog.iterdir()
+        if f.is_dir() and f.name.isdigit() and len(f.name) == 8
+    }
+    for str_date in str_days:
+        folder_by_date.setdefault(str_date.strftime("%Y%m%d"), datalog / str_date.strftime("%Y%m%d"))
+    folders = [folder_by_date[key] for key in sorted(folder_by_date)]
     if args.from_date:
         folders = [f for f in folders if f.name >= args.from_date]
 
@@ -549,6 +652,7 @@ def main():
                 adapter_id=args.adapter_id,
                 source_root=source_root,
                 run_stats=run_stats,
+                str_day=str_days.get(folder_date),
             )
         except Exception as exc:
             errors.append(f"{folder.name}: {exc}")
@@ -562,10 +666,11 @@ def main():
             print("(empty)")
 
     if args.import_run_id:
+        material_errors = list(run_stats.get("errors", []))
         status = "success"
-        if errors and total_sessions:
+        if material_errors and total_sessions:
             status = "partial"
-        elif errors or not total_sessions:
+        elif material_errors or not total_sessions:
             status = "failed"
         finish_import_run(
             conn,
@@ -575,10 +680,16 @@ def main():
             imported_blocks=run_stats["blocks"],
             imported_events=run_stats["events"],
             imported_channels=run_stats["channels"],
-            errors=errors or ([] if total_sessions else ["No importable session blocks were found."]),
+            imported_settings=run_stats["settings"],
+            summary_only_days=run_stats["summary_only_days"],
+            warnings=run_stats["warnings"],
+            capability_status=_capability_status(run_stats, bool(str_days)),
+            errors=material_errors or (
+                [] if total_sessions else ["No importable session blocks were found."]
+            ),
         )
     conn.close()
-    print(f"\nDone. {total_sessions} session blocks imported across {total_folders} nights.")
+    print(f"\nDone. {total_sessions} source sessions imported across {total_folders} nights.")
 
 
 if __name__ == "__main__":

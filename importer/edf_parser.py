@@ -81,8 +81,8 @@ def _parse_header(data: bytes) -> EDFHeader:
 
     signals = []
     for i in range(ns):
-        label = sig_raw[i * 16 : (i + 1) * 16].decode("ascii").strip()
-        dim = sig_raw[ns * 96 + i * 8 : ns * 96 + (i + 1) * 8].decode("ascii").strip()
+        label = sig_raw[i * 16 : (i + 1) * 16].decode("latin-1").strip()
+        dim = sig_raw[ns * 96 + i * 8 : ns * 96 + (i + 1) * 8].decode("latin-1").strip()
         pmin = float(sig_raw[ns * 104 + i * 8 : ns * 104 + (i + 1) * 8].strip())
         pmax = float(sig_raw[ns * 112 + i * 8 : ns * 112 + (i + 1) * 8].strip())
         dmin = float(sig_raw[ns * 120 + i * 8 : ns * 120 + (i + 1) * 8].strip())
@@ -147,6 +147,39 @@ def parse_pld(path: str) -> tuple:
             channels[sig.label].extend(sig.scale(v) for v in raw_vals)
 
     return header, channels
+
+
+def parse_edf_channels(path: str) -> tuple[EDFHeader, dict[str, list[float]], dict[str, list[int]]]:
+    """Parse every numeric EDF channel, returning scaled and raw values.
+
+    STR.edf needs raw enum/sentinel values as well as physical values. Keeping
+    both avoids losing vendor semantics while still exposing normalized units.
+    """
+    with open(path, "rb") as f:
+        raw = f.read(256)
+        ns = int(raw[252:256].strip())
+        sig_bytes = f.read(ns * 256)
+        data_bytes = f.read()
+
+    header = _parse_header(raw + sig_bytes)
+    samples_per_record = sum(s.num_samples_per_record for s in header.signals)
+    scaled = {s.label: [] for s in header.signals}
+    raw_channels = {s.label: [] for s in header.signals}
+
+    for rec in range(header.num_records):
+        start = rec * samples_per_record * 2
+        record_bytes = data_bytes[start : start + samples_per_record * 2]
+        if len(record_bytes) < samples_per_record * 2:
+            break
+        all_samples = struct.unpack(f"<{samples_per_record}h", record_bytes)
+        idx = 0
+        for sig in header.signals:
+            raw_values = list(all_samples[idx : idx + sig.num_samples_per_record])
+            idx += sig.num_samples_per_record
+            raw_channels[sig.label].extend(raw_values)
+            scaled[sig.label].extend(sig.scale(value) for value in raw_values)
+
+    return header, scaled, raw_channels
 
 
 def parse_brp(path: str) -> tuple:

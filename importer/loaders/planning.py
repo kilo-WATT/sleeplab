@@ -185,6 +185,8 @@ def _source_role(path: Path) -> str:
     if "_SA2." in name or "_SAD." in name:
         return "oximetry"
     if "_CSL." in name:
+        return "events"
+    if name == "STR.EDF":
         return "settings"
     return "other"
 
@@ -214,11 +216,19 @@ def _resmed_coverage(root: Path) -> CoverageSummary:
         first_date=_display_date(date_dirs[0].name) if date_dirs else None,
         last_date=_display_date(date_dirs[-1].name) if date_dirs else None,
         therapy_days=len(date_dirs),
-        estimated_session_blocks=sum(1 for path in files if "_PLD." in path.name.upper()),
-        waveform_files=sum(1 for path in files if "_BRP." in path.name.upper()),
-        event_files=sum(1 for path in files if "_EVE." in path.name.upper()),
-        oximetry_files=sum(1 for path in files if "_SA2." in path.name.upper() or "_SAD." in path.name.upper()),
-        settings_files=sum(1 for path in files if "_CSL." in path.name.upper()),
+        estimated_session_blocks=sum(1 for path in files if path.name.upper().endswith("_PLD.EDF")),
+        waveform_files=sum(1 for path in files if path.name.upper().endswith("_BRP.EDF")),
+        event_files=sum(
+            1
+            for path in files
+            if path.name.upper().endswith("_EVE.EDF") or path.name.upper().endswith("_CSL.EDF")
+        ),
+        oximetry_files=sum(
+            1
+            for path in files
+            if path.name.upper().endswith("_SA2.EDF") or path.name.upper().endswith("_SAD.EDF")
+        ),
+        settings_files=int((root / "STR.edf").is_file()),
     )
 
 
