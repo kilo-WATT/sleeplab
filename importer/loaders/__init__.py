@@ -15,6 +15,7 @@ from .models import (
 )
 from .planning import ImportPlan, create_import_plan, import_plan_dict
 from .registry import LoaderRegistry, create_default_registry
+from .resmed_native import ResMedNativeLoader
 
 __all__ = [
     "Capabilities",
@@ -30,6 +31,7 @@ __all__ = [
     "ImportWarning",
     "LoaderRegistry",
     "MachineIdentity",
+    "ResMedNativeLoader",
     "create_default_registry",
     "create_import_plan",
     "import_plan_dict",
