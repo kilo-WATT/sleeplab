@@ -11,4 +11,4 @@ matplotlib==3.10.9
 reportlab==4.5.1
 sleephq-client @ git+https://github.com/frohoff/sleephq-client.git
 # Pinned to kilo-WATT/cpap-parser fix/resmed-four-bugs (GitHub mirror) — awaiting upstream MR !12
-cpap-parser @ git+https://github.com/kilo-WATT/cpap-parser.git@9a6e19fddc9e080891bc376c3b53a81d6a3462aa
+cpap-parser @ git+https://github.com/kilo-WATT/cpap-parser.git@52f08fb4c265f04c4edbfe6e30001be68158dcc4
