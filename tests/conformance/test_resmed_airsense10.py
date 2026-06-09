@@ -22,7 +22,10 @@ with small synthetic inputs (fake EDF signal objects and hand-built schema
 models), so they run anywhere the dependency is installed.
 """
 
+import csv
+import json
 from datetime import date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -191,3 +194,157 @@ def test_brp_pld_no_double_counting():
     # 8h counted once — not 16h (BRP + PLD summed).
     assert summary.computed_usage == pytest.approx(8.0)
     assert summary.computed_usage != pytest.approx(16.0)
+
+
+# ---------------------------------------------------------------------------
+# Fixture-backed conformance against the anonymized AirSense 10 SD card.
+#
+# Unlike the synthetic tests above, these drive the parser against the real
+# (anonymized) fixture in ``fixtures/resmed_airsense10_001/`` and assert against
+# OSCAR's own export of the same card (``oscar_reference/summary.csv``). See
+# ``fixtures/README.md`` for provenance and the ground-truth values.
+#
+# Two tiers:
+#   * Identity (serial) is parsed via the pure-Python ``.tgt`` fallback, so it
+#     runs wherever ``cpap-parser`` is installed.
+#   * The OSCAR numeric comparisons need ``ResMedAdapter.extract_and_map``, which
+#     decodes EDF via the ``cpap-py`` backend; they ``importorskip("cpap_py")``
+#     and skip with a visible reason when that backend is absent.
+# ---------------------------------------------------------------------------
+
+_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "resmed_airsense10_001"
+
+
+def _manifest() -> dict:
+    return json.loads((_FIXTURE_DIR / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _oscar_summary_by_date() -> dict[date, dict[str, str]]:
+    """Map each OSCAR ``summary.csv`` row to its calendar date."""
+    rows: dict[date, dict[str, str]] = {}
+    with (_FIXTURE_DIR / "oscar_reference" / "summary.csv").open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            rows[date.fromisoformat(row["Date"])] = row
+    return rows
+
+
+def _detailed_night_dates() -> set[date]:
+    """Night dates that ship detailed DATALOG therapy data (BRP/PLD present).
+
+    ResMed names each ``DATALOG/<YYYYMMDD>`` directory by the night date, so the
+    directory name is the night the summary is keyed on. We treat the on-disk
+    DATALOG layout — not ``manifest.json`` — as authoritative for which nights
+    have detailed data (see the "Known discrepancy" note in fixtures/README.md).
+    """
+    nights: set[date] = set()
+    for day_dir in (_FIXTURE_DIR / "DATALOG").iterdir():
+        if not day_dir.is_dir():
+            continue
+        has_therapy = any(
+            "BRP" in f.name or "PLD" in f.name for f in day_dir.iterdir()
+        )
+        if has_therapy:
+            nights.add(date(int(day_dir.name[0:4]), int(day_dir.name[4:6]), int(day_dir.name[6:8])))
+    return nights
+
+
+def _oscar_total_time_hours(value: str) -> float:
+    """Parse an OSCAR ``HH:MM:SS`` total-time string into hours."""
+    hours, minutes, seconds = (int(part) for part in value.split(":"))
+    return hours + minutes / 60.0 + seconds / 3600.0
+
+
+def _parsed_directory():
+    """Parse the fixture card, skipping if the ``cpap-py`` EDF backend is absent."""
+    pytest.importorskip(
+        "cpap_py",
+        reason="cpap-py EDF backend not installed; STR.edf/DATALOG cannot be decoded",
+    )
+    return ResMedAdapter().extract_and_map(_FIXTURE_DIR, include_timeseries=False)
+
+
+def test_fixture_serial_parsed_from_identity_tgt():
+    """Fix #3 on real data: the scrubbed serial is extracted, never ``"Unknown"``.
+
+    Exercises the pure-Python ``.tgt`` identity fallback against the fixture's
+    real (anonymized) ``Identification.tgt``, so it runs without ``cpap-py``.
+    """
+    expected_serial = _manifest()["expected_serial"]
+
+    machine = ResMedAdapter()._load_machine_info(_FIXTURE_DIR)
+
+    assert machine.serial_number == expected_serial
+    assert machine.serial_number is not None
+    assert machine.serial_number != "Unknown"
+
+
+def test_fixture_ahi_matches_oscar_summary():
+    """Per-night AHI from STR.edf matches OSCAR's export of the same card."""
+    directory = _parsed_directory()
+    oscar = _oscar_summary_by_date()
+
+    parsed = {s.date: s for s in directory.daily_summaries}
+    common = sorted(parsed.keys() & oscar.keys())
+    # The parser and OSCAR both derive nightly summaries from STR.edf, so they
+    # should agree on (nearly) all 40 calendar nights.
+    assert len(common) >= len(oscar) - 1, (
+        f"only {len(common)} of {len(oscar)} OSCAR nights matched parsed summaries"
+    )
+
+    mismatches = []
+    for day in common:
+        expected_ahi = float(oscar[day]["AHI"])
+        actual_ahi = parsed[day].ahi
+        if actual_ahi != pytest.approx(expected_ahi, abs=0.05):
+            mismatches.append(f"{day}: parser AHI={actual_ahi!r} vs OSCAR={expected_ahi!r}")
+    assert not mismatches, "AHI disagreements with OSCAR:\n" + "\n".join(mismatches)
+
+
+def test_fixture_ghost_nights_flagged_not_deleted():
+    """Fix #4 on real data: STR-only nights survive and are flagged.
+
+    The card carries 40 nights of STR summary history but detailed DATALOG data
+    for only a few; the summary-only nights must be kept and flagged
+    ``has_detailed_data is False`` rather than dropped.
+    """
+    directory = _parsed_directory()
+    oscar_dates = set(_oscar_summary_by_date())
+    detailed_nights = _detailed_night_dates()
+
+    parsed_dates = {s.date for s in directory.daily_summaries}
+    # No STR night is dropped: every OSCAR night is still present.
+    assert oscar_dates <= parsed_dates, (
+        f"missing nights dropped by parser: {sorted(oscar_dates - parsed_dates)}"
+    )
+
+    by_date = {s.date: s for s in directory.daily_summaries}
+    # Nights with on-disk DATALOG therapy data are flagged detailed.
+    for night in detailed_nights:
+        assert by_date[night].has_detailed_data is True, f"{night} should have detailed data"
+    # And the STR-only majority are flagged ghost (kept, not deleted).
+    ghosts = [d for d in oscar_dates - detailed_nights if by_date[d].has_detailed_data is False]
+    assert ghosts, "expected STR-only ghost nights flagged has_detailed_data is False"
+
+
+def test_fixture_computed_usage_matches_oscar_for_detailed_nights():
+    """Fix #5 on real data: detailed-night therapy time matches OSCAR (counted once).
+
+    For nights with DATALOG data, ``computed_usage`` (BRP/PLD de-duplicated) should
+    track OSCAR's total mask time, not double it.
+    """
+    directory = _parsed_directory()
+    oscar = _oscar_summary_by_date()
+    detailed_nights = _detailed_night_dates()
+    by_date = {s.date: s for s in directory.daily_summaries}
+
+    mismatches = []
+    for night in sorted(detailed_nights):
+        expected_hours = _oscar_total_time_hours(oscar[night]["Total Time"])
+        actual_hours = by_date[night].computed_usage
+        # Tolerate a few minutes of session-boundary rounding, but not a 2x
+        # BRP+PLD double-count.
+        if actual_hours != pytest.approx(expected_hours, abs=0.1):
+            mismatches.append(
+                f"{night}: computed_usage={actual_hours!r}h vs OSCAR total={expected_hours:.4f}h"
+            )
+    assert not mismatches, "usage disagreements with OSCAR:\n" + "\n".join(mismatches)
