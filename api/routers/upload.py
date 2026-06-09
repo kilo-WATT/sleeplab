@@ -439,6 +439,12 @@ def finish_source_import(
     )
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)
+    # NOTE: the registry is used for detection/planning only; execution is
+    # delegated to the legacy native importer subprocess below, never to a
+    # LoaderAdapter.import_data. ResMedNativeLoader stays out of the default
+    # registry until it clears the conformance acceptance gates.
+    # TODO(2.0): route through loader registry (ResMedNativeLoader)
+    # see codex/2.0.0-alpha.2 importer/loaders/resmed_native.py
     background_tasks.add_task(
         _run_import,
         str(execution.import_root),
