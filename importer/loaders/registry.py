@@ -132,7 +132,19 @@ class LoaderRegistry:
 
 
 def create_default_registry() -> LoaderRegistry:
-    """Create the initial SleepLab 2.0 structural loader registry."""
+    """Create the initial SleepLab 2.0 structural loader registry.
+
+    ``ResMedNativeLoader`` is intentionally **not** registered here. Its
+    ``detect()`` delegates to :class:`ResMedStructuralAdapter` and re-stamps the
+    same candidate with its own adapter id at the same confidence, so adding it
+    would make every ResMed card detect ambiguously (``requires_user_choice``) and
+    leave the import plan non-executable. Detection/planning therefore stay keyed
+    on the single ``resmed-native-v2`` structural detector. The cpap-parser
+    execution path instantiates ``ResMedNativeLoader`` directly
+    (see :func:`importer.loaders.execution.run_cpap_parser_import`); use
+    :func:`create_execution_registry` if a flag-gated, id-addressable registry is
+    needed.
+    """
 
     return LoaderRegistry(
         [
@@ -143,3 +155,27 @@ def create_default_registry() -> LoaderRegistry:
             BmcStructuralAdapter(),
         ]
     )
+
+
+def create_execution_registry() -> LoaderRegistry:
+    """Registry for the opt-in execution path, flag-gated by env var.
+
+    When ``SLEEPLAB_USE_CPAP_PARSER=1`` this additionally registers
+    :class:`~importer.loaders.resmed_native.ResMedNativeLoader` (priority 20, so it
+    sorts *after* the structural ``resmed-native-v2`` detector) so it is
+    resolvable by id via :meth:`LoaderRegistry.get_adapter`. It is **not** used for
+    source detection — doing so would reintroduce the ResMed ambiguity described in
+    :func:`create_default_registry` — only as an id-addressable lookup for code
+    that already knows it wants the cpap-parser adapter. With the flag unset this
+    returns exactly the same set as :func:`create_default_registry`, so default
+    behavior and all detection tests are unchanged.
+    """
+
+    registry = create_default_registry()
+    from .execution import use_cpap_parser
+
+    if use_cpap_parser():
+        from .resmed_native import ResMedNativeLoader
+
+        registry.register(ResMedNativeLoader())
+    return registry

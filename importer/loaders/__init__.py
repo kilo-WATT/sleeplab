@@ -1,6 +1,12 @@
 """SleepLab 2.0 CPAP loader contracts and structural detection registry."""
 
-from .execution import ExecutionRequest, ImportPlanError, prepare_execution
+from .execution import (
+    ExecutionRequest,
+    ImportPlanError,
+    prepare_execution,
+    run_cpap_parser_import,
+    use_cpap_parser,
+)
 from .inspection import inspect_source_root
 from .models import (
     Capabilities,
@@ -37,4 +43,6 @@ __all__ = [
     "import_plan_dict",
     "inspect_source_root",
     "prepare_execution",
+    "run_cpap_parser_import",
+    "use_cpap_parser",
 ]

@@ -14,7 +14,14 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from importer.loaders import ImportPlanError, create_import_plan, import_plan_dict, prepare_execution
+from importer.loaders import (
+    ImportPlanError,
+    create_import_plan,
+    import_plan_dict,
+    prepare_execution,
+    run_cpap_parser_import,
+    use_cpap_parser,
+)
 
 from ..auth import get_current_user
 from ..database import SessionLocal, get_db
@@ -208,6 +215,43 @@ def _run_import(
             _mark_import_finished(user_id, "failed", "Import failed. Check the uploaded files and try again.")
     except Exception as exc:
         logger.exception("DATALOG import failed for user %s", user_id)
+        _fail_durable_import_run(import_run_id, str(exc))
+        _mark_import_finished(user_id, "failed", "Import failed. Check the uploaded files and try again.")
+    finally:
+        if cleanup_dir:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+def _run_cpap_parser_import(
+    source_root: str,
+    user_id: str,
+    import_run_id: str,
+    machine_id: str,
+    cleanup_dir: str | None = None,
+) -> None:
+    """Run the opt-in cpap-parser execution path in the background.
+
+    Mirrors :func:`_run_import`'s status/cleanup contract but drives
+    ``ResMedNativeLoader`` in-process (via the loader registry execution path)
+    instead of spawning the legacy importer subprocess. Used only when
+    ``SLEEPLAB_USE_CPAP_PARSER=1``.
+    """
+    try:
+        counts = run_cpap_parser_import(
+            source_root=source_root,
+            user_id=user_id,
+            import_run_id=import_run_id,
+            machine_id=machine_id,
+        )
+        logger.info(
+            "cpap-parser import completed for user %s (run %s): %s",
+            user_id,
+            import_run_id,
+            counts,
+        )
+        _mark_import_finished(user_id, "completed", "Import completed.")
+    except Exception as exc:
+        logger.exception("cpap-parser import failed for user %s", user_id)
         _fail_durable_import_run(import_run_id, str(exc))
         _mark_import_finished(user_id, "failed", "Import failed. Check the uploaded files and try again.")
     finally:
@@ -439,23 +483,36 @@ def finish_source_import(
     )
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)
-    # NOTE: the registry is used for detection/planning only; execution is
-    # delegated to the legacy native importer subprocess below, never to a
-    # LoaderAdapter.import_data. ResMedNativeLoader stays out of the default
-    # registry until it clears the conformance acceptance gates.
-    # TODO(2.0): route through loader registry (ResMedNativeLoader)
-    # see codex/2.0.0-alpha.2 importer/loaders/resmed_native.py
-    background_tasks.add_task(
-        _run_import,
-        str(execution.import_root),
-        session.user_id,
-        session.from_date,
-        str(session.temp_root),
-        run_id,
-        machine_id,
-        execution.adapter_id,
-        str(execution.source_root),
-    )
+    # Detection/planning always run through the registry; only execution differs.
+    # When SLEEPLAB_USE_CPAP_PARSER=1, route through the in-process cpap-parser
+    # loader (ResMedNativeLoader.import_data -> persist_import_run). Otherwise keep
+    # the legacy native importer subprocess as the default fallback.
+    if use_cpap_parser():
+        logger.info(
+            "Routing import run %s through the cpap-parser loader (SLEEPLAB_USE_CPAP_PARSER=1).",
+            run_id,
+        )
+        background_tasks.add_task(
+            _run_cpap_parser_import,
+            str(execution.source_root),
+            session.user_id,
+            run_id,
+            machine_id,
+            str(session.temp_root),
+        )
+    else:
+        logger.info("Routing import run %s through the legacy native importer subprocess.", run_id)
+        background_tasks.add_task(
+            _run_import,
+            str(execution.import_root),
+            session.user_id,
+            session.from_date,
+            str(session.temp_root),
+            run_id,
+            machine_id,
+            execution.adapter_id,
+            str(execution.source_root),
+        )
     return {
         "status": "accepted",
         "message": "ResMed import started.",
