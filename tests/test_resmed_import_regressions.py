@@ -279,6 +279,71 @@ def test_resmed_str_persistence_is_duplicate_safe_and_incremental(db, test_user)
         assert cur.fetchone()[0] == "15.0"
 
 
+def test_upsert_session_reimport_is_idempotent(db, test_user):
+    """Re-importing the same night must update the row in place, not duplicate it.
+
+    The dedup key is the partial unique index uq_sessions_machine_source_key on
+    (machine_id, source_session_key). This locks in that re-running an import for
+    the same SD card produces no new session rows and overwrites stale summary
+    values with the freshly parsed ones.
+    """
+    raw_conn = db.connection().connection.driver_connection
+    machine_id = importer_db.reconcile_machine(
+        raw_conn,
+        user_id=test_user["id"],
+        adapter_id="resmed-native-v2",
+        manufacturer="ResMed",
+        serial_number="TEST-REIMPORT-IDEMPOTENCY",
+    )
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO import_runs (
+                user_id, machine_id, adapter_id, source_type, source_fingerprint,
+                status, validation_status, started_at
+            ) VALUES (%s, %s, 'resmed-native-v2', 'directory', %s, 'running', 'partial', NOW())
+            RETURNING id::text
+            """,
+            (test_user["id"], machine_id, f"reimport-{test_user['id']}"),
+        )
+        import_run_id = cur.fetchone()[0]
+
+    base = _session_data(
+        user_id=test_user["id"],
+        machine_id=machine_id,
+        import_run_id=import_run_id,
+        source_session_key="resmed:2026-06-01:0",
+        session_id="20260601_235949",
+        ahi=4.2,
+        duration_seconds=8100,
+    )
+
+    first_id = importer_db.upsert_session(raw_conn, dict(base))
+
+    # Second import of the same night with corrected summary values.
+    second_id = importer_db.upsert_session(
+        raw_conn,
+        dict(base, ahi=5.7, duration_seconds=8400, total_ahi_events=13),
+    )
+
+    assert first_id == second_id, "re-import must reuse the existing session row"
+
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM sessions WHERE machine_id = %s AND source_session_key = %s",
+            (machine_id, "resmed:2026-06-01:0"),
+        )
+        assert cur.fetchone()[0] == 1, "re-import must not create a duplicate session"
+        cur.execute(
+            "SELECT ahi, duration_seconds, total_ahi_events FROM sessions WHERE id = %s",
+            (first_id,),
+        )
+        ahi, duration_seconds, total_ahi_events = cur.fetchone()
+        assert float(ahi) == 5.7
+        assert duration_seconds == 8400
+        assert total_ahi_events == 13
+
+
 def test_dedupe_events_preserves_zero_duration_arousal():
     events = [
         (10.0, 0.0, "Arousal"),
