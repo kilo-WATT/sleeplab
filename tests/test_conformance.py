@@ -151,3 +151,59 @@ def test_conformance_coverage_cannot_observe_therapy_aggregates():
         "oximetry_files",
         "settings_files",
     }
+
+
+def test_unknown_coverage_field_reports_failure_not_crash(tmp_path):
+    """A misspelled/unobservable coverage key fails cleanly, never AttributeError.
+
+    The coverage checker iterates manifest-provided keys; a typo like
+    ``waveform_file`` (missing the ``s``) must surface as an explicit
+    ``coverage.<field>: unknown coverage field`` failure instead of raising and
+    aborting the whole run.
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["coverage"]["waveform_file"] = 0  # typo: should be waveform_files
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = validate_fixture(fixture)  # must not raise
+
+    assert not result.passed
+    assert any(
+        failure.startswith("coverage.waveform_file:") and "unknown coverage field" in failure
+        for failure in result.failures
+    ), f"expected an unknown-coverage-field failure, got {result.failures}"
+
+
+def test_oximetry_files_coverage_is_observable_and_checked(tmp_path):
+    """Alpha 6 §1/§5: SA2/SAD oximetry file coverage is an observable manifest field.
+
+    The synthetic fixture ships zero oximetry (SA2/SAD) files. Asserting the
+    correct count passes; asserting a wrong count fails — proving oximetry file
+    coverage is a real, file-derived field the harness can check (complementing
+    the SA2 channel-metadata mapping work).
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # Correct value (zero oximetry files) passes.
+    manifest["expected"]["coverage"]["oximetry_files"] = 0
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    assert validate_fixture(fixture).passed
+
+    # Wrong value is caught.
+    manifest["expected"]["coverage"]["oximetry_files"] = 2
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    result = validate_fixture(fixture)
+    assert not result.passed
+    assert any("coverage.oximetry_files" in failure for failure in result.failures), (
+        f"expected an oximetry-coverage failure, got {result.failures}"
+    )

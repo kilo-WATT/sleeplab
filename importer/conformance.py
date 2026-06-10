@@ -62,7 +62,18 @@ def validate_fixture(fixture_dir: str | Path) -> ConformanceResult:
     expected_coverage = expected.get("coverage", {})
     if plan.devices:
         coverage = plan.devices[0].coverage
+        known_fields = set(type(coverage).__dataclass_fields__)
         for field, expected_value in expected_coverage.items():
+            # Guard against a misspelled/unobservable coverage key: report it as
+            # a clear failure instead of raising AttributeError and aborting the
+            # whole run. Only file/directory-derived coverage is observable here
+            # (parsed aggregates are not — see checklist §5 boundary).
+            if field not in known_fields:
+                failures.append(
+                    f"coverage.{field}: unknown coverage field "
+                    f"(observable: {sorted(known_fields)})"
+                )
+                continue
             _expect(failures, f"coverage.{field}", getattr(coverage, field), expected_value)
 
     # Optional, backward-compatible diagnostics expectations. A manifest may
