@@ -1,9 +1,11 @@
 # SleepLab 2.0 Import-Level Conformance Plan
 
-Status: **Step 1 (scaffold) implemented; full checks still design-only.**
-The `validate_import` entry point and `ImportConformanceResult` exist and are
-dependency-safe (Step 1 below). The actual payload/DB comparisons (Steps 2–6)
-are not built yet.
+Status: **Steps 1–2 implemented (parse-observable checks); DB/OSCAR checks
+still design-only.** The `validate_import` entry point, `ImportConformanceResult`,
+and the parse-observable comparators for `warnings`, `session_blocks`,
+`therapy_aggregates`, and `settings` (count/presence) are built and unit-tested
+against an injected `ImportRun`. The DB (`identity_hashes`) and `oscar_reference`
+comparisons (Steps 3–6) are not built yet and skip cleanly.
 
 This document expands the design note in
 `docs/sleeplab_2_alpha_6_checklist.md` §6 ("Import-level conformance path") into
@@ -73,10 +75,12 @@ It is **separate** from `validate_fixture` on purpose:
    with `skipped=("no expected.import block",)` and `passed=True` — fully
    backward compatible (the same pattern as the optional `expected.diagnostics`
    block in `validate_fixture`).
-2. Run the loader's `import_data_with_directory(detected, options)` on the
-   fixture source to obtain the normalized `ImportRun` (and the raw
-   `CPAPDirectory`). This needs `cpap-parser` / `cpap-py`; absent → skip the
-   parse-dependent sub-checks.
+2. Acquire the normalized `ImportRun`. An explicitly injected `run=` is used
+   as-is (this is how tests exercise the comparison logic with no parser/DB);
+   otherwise the loader's `import_data_with_directory(detected, options)` is run
+   on the fixture source. Parsing needs `cpap-parser` / `cpap-py`; when absent
+   (or a parse raises) the parse-dependent sub-checks skip with the acquisition
+   reason rather than crashing.
 3. Compare the **pre-persistence** `ImportRun` against the parse-only blocks
    (`settings`, `blocks`, `aggregates`, `warnings`). No database needed.
 4. If `conn` is provided, persist via `persist_import_run` into a throwaway
@@ -184,6 +188,24 @@ Every sub-block is independently optional. A manifest may assert only
 checks it can (gating in §4–§8). Naming follows the brief's
 `expected.import.{settings,session_blocks,therapy_aggregates,warnings,identity_hashes,oscar_reference}`.
 
+#### Implemented vs deferred sub-keys (current state)
+
+The shape above is the full target. What `validate_import` actually checks today
+(Steps 1–2) is a subset; everything else is surfaced as a *skip*, never a silent
+pass:
+
+| Sub-block | Checked now | Deferred (→ skip) |
+|---|---|---|
+| `warnings` | `codes` (present), `absent` (forbidden) | any other key |
+| `session_blocks` | `block_count` per date | `intervals` / boundary start-end |
+| `therapy_aggregates` | `usage_seconds`, `wall_clock_seconds`, `gap_seconds` (= wall-clock − usage), `block_count` | any non-observable field, or a field whose source `DerivedValue` is absent |
+| `settings` | `snapshot_count`, `present` | per-setting *value* keys (loader maps no settings snapshots yet) |
+| `identity_hashes` | — | all (needs `conn`; Step 4) |
+| `oscar_reference` | — | all (Step 3) |
+
+A requested date absent from the normalized run is a **failure** (not a skip):
+the run claims data the manifest expects and none was produced.
+
 ### Tolerances
 
 Boundaries (`session_blocks.intervals`) compare to within **one source sample
@@ -197,29 +219,37 @@ fabricated `0`/`off`**.
 
 ## 5. Which checks run without Postgres
 
-Parse-only, no database — these compare the **pre-persistence** `ImportRun`:
+Parse-only, no database — these compare the **pre-persistence** `ImportRun`
+(implemented in Step 2 unless noted):
 
-- `settings` — `Session.settings` / `SettingsSnapshot.settings` values, with
-  missing-≠-off.
-- `session_blocks` — `Session.blocks` start/end and block count
-  (`SessionBlock.start_time` / `end_time`).
-- `therapy_aggregates` — usage / span / gap, recomputed from the normalized
-  `Session.blocks` and the loader's three usage `DerivedValue`s
-  (`summary_reported_usage_hours`, `computed_usage_hours`,
-  `recording_span_hours`). The semantics already exist in the loader and in
-  `persist._session_duration_seconds`; the import-level check recomputes the
-  triple from normalized output rather than reading
-  `nightly_therapy_aggregates`.
-- `warnings.codes` — run-level `ImportRun.warnings` codes (this is where the
-  *import-time* codes `resmed_summary_only_day` / `resmed_waveform_absent` become
-  observable — they are invisible to the planning-only harness, which is why
-  `validate_fixture` can only see *detection/planning* diagnostics).
-- `oscar_reference` — comparison against checked-in CSVs and the manifest
-  hash assertion. No DB; needs only the reference files (and a parse to produce
-  the normalized side).
+- `settings` — **[implemented: count/presence]** `snapshot_count` and `present`
+  from `Session.settings`. Per-setting *value* comparison (with missing-≠-off) is
+  deferred because the ResMed cpap-parser loader maps no `SettingsSnapshot`s yet;
+  a value key is skipped, not faked.
+- `session_blocks` — **[implemented: block_count]** summed `len(Session.blocks)`
+  per machine-local date. `intervals` start/end comparison
+  (`SessionBlock.start_time`/`end_time`, with the one-sample tolerance below) is
+  deferred and skipped.
+- `therapy_aggregates` — **[implemented]** `usage_seconds`
+  (`computed_usage_hours`×3600), `wall_clock_seconds` (`recording_span_hours`×
+  3600), `gap_seconds` (= wall-clock − usage), and `block_count`, all derived
+  from the normalized `Session` (the loader's usage `DerivedValue`s and block
+  list) rather than from `nightly_therapy_aggregates`. A field whose source
+  derived value is absent is skipped, never defaulted to zero.
+- `warnings` — **[implemented]** `codes` (each must be surfaced) and `absent`
+  (each must not be). Codes are read from run-level **and** session-level
+  `ImportWarning`s, so the *import-time* codes `resmed_summary_only_day` /
+  `resmed_waveform_absent` become observable here — they are invisible to the
+  planning-only harness, which is why `validate_fixture` sees only
+  *detection/planning* diagnostics.
+- `oscar_reference` — **[deferred, Step 3]** comparison against checked-in CSVs
+  and the manifest hash assertion. No DB; needs only the reference files (and a
+  normalized side).
 
-These still require `cpap-parser`/`cpap-py` to do the parse (§6); they just do
-not require Postgres.
+These comparators are exercised today by **injecting a normalized `ImportRun`**
+(`validate_import(fixture, run=...)`), so the comparison logic is unit-tested
+with no parser and no Postgres. The auto-parse acquisition path additionally
+needs `cpap-parser`/`cpap-py` (§6); both forms are Postgres-free.
 
 ## 6. Which checks require cpap-py / cpap-parser
 
@@ -359,13 +389,14 @@ reasons for every requested sub-block, so it is inert for existing fixtures and
 cannot crash where `cpap-parser`/Postgres are absent. Tests pin: the entry point
 is importable; an absent `expected.import` block passes-and-skips; a present
 block skips with clear reasons; an unknown sub-block is surfaced; and
-`validate_fixture` is unchanged. The next step (step 2) adds the parse-only
-comparisons behind `importorskip("cpap_parser")`.
+`validate_fixture` is unchanged. Step 2 (now landed) added the parse-observable
+comparators, exercised by injecting a normalized `ImportRun`; the next step
+(step 3) adds the OSCAR-reference comparison.
 
-## Implementation sequence (proposed — do not build beyond step 1 yet)
+## Implementation sequence
 
-Each step is a small PR. **Steps 0 and 1 are landed**; step 2 is the next
-in-scope work.
+Each step is a small PR. **Steps 0–2 are landed**; step 3 (OSCAR reference) is
+the next in-scope work, then the DB-gated steps 4–5.
 
 0. **[DONE] Design.** This document; checklist §6 points here. (The original
    boundary test asserting `validate_import` did not exist was replaced when
@@ -380,10 +411,16 @@ in-scope work.
    Covered by `tests/test_conformance.py` (importable, absent-block pass/skip,
    present-block clear skips, unknown-block visibility, and `validate_fixture`
    backward-compat).
-2. **Parse-only checks.** `settings`, `session_blocks`, `therapy_aggregates`,
-   `warnings.codes` against the normalized `ImportRun`. Gated on
-   `importorskip("cpap_parser")`. Add a minimal `expected.import` block to the
-   synthetic fixture (or a copy) and one positive + one negative test.
+2. **[DONE] Parse-observable checks.** `warnings` (codes/absent),
+   `session_blocks` (block_count), `therapy_aggregates`
+   (usage/wall-clock/gap/block_count), and `settings` (snapshot_count/present)
+   against the normalized `ImportRun`. Implemented as pure comparators dispatched
+   from `_IMPORT_BLOCK_COMPARATORS`; each returns `(failures, skips)`. Unit-tested
+   in `tests/test_conformance.py` by **injecting** an `ImportRun` (`run=`), so the
+   logic runs with no parser and no DB; deferred sub-keys (interval boundaries,
+   settings values) and unobservable/absent fields are skipped, not faked, and a
+   missing requested date is a real failure. The auto-parse acquisition path is
+   `cpap-parser`/`cpap-py`-gated.
 3. **OSCAR reference check.** `oscar_reference` hash + CSV comparison, backed by
    the committed anonymized AirSense 10 fixture's existing `oscar_reference/`.
 4. **Identity-hash checks (DB).** `identity_hashes` for a single import, gated on

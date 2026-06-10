@@ -179,32 +179,47 @@ Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:
       `tests/test_resmed_import_regressions.py` instead — extending the manifest
       to cover those is a later subtask once an import-run conformance path
       exists.
-- [ ] **(import-level)** persisted settings snapshots (mode, pressures, EPR,
-      ramp, humidification, mask) — compared, with "missing ≠ off";
-- [ ] **(import-level)** interval boundaries (session-block start/end,
-      mask-on/off);
-- [ ] **(import-level)** usage / wall-clock span / gap (the nightly aggregate
-      semantics);
-- [ ] **(import-level)** duplicate-import stable hashes (persisted UUID sets
-      unchanged on re-import);
-- [ ] **(import-level)** incremental nights (adding a newer night leaves
-      existing identities unchanged);
-- [ ] OSCAR references (version/commit + export hashes) as first-class manifest
-      fields, required before a capability may claim `validated`.
+- [~] **(import-level, partial)** settings snapshots (mode, pressures, EPR,
+      ramp, humidification, mask). `validate_import` checks
+      `expected.import.settings` *count/presence* (`snapshot_count`/`present`)
+      against the normalized run; per-setting *value* comparison (with
+      "missing ≠ off") is deferred and skipped because the ResMed cpap-parser
+      loader maps no `SettingsSnapshot`s yet.
+- [~] **(import-level, partial)** interval boundaries (session-block start/end,
+      mask-on/off). `validate_import` checks `expected.import.session_blocks`
+      *block_count* per date; interval start/end (one-sample tolerance) is
+      deferred and skipped.
+- [x] **(import-level)** usage / wall-clock span / gap. `validate_import`
+      compares `expected.import.therapy_aggregates`
+      (`usage_seconds`/`wall_clock_seconds`/`gap_seconds`/`block_count`) derived
+      from the normalized run's usage `DerivedValue`s + block list; an absent
+      source value is skipped, never faked. (Commit `8d8ac6e`.)
+- [ ] **(import-level, DB)** duplicate-import stable hashes (persisted UUID sets
+      unchanged on re-import) — `expected.import.identity_hashes`, Step 4; skips
+      cleanly without `conn`.
+- [ ] **(import-level, DB)** incremental nights (adding a newer night leaves
+      existing identities unchanged) — Step 5.
+- [ ] **(import-level)** OSCAR references (version/commit + export hashes) as
+      first-class manifest fields, required before a capability may claim
+      `validated` — Step 3.
 
-**Observability boundary.** The current `importer.conformance` harness is
-*planning-only*: it runs `create_import_plan`, whose `CoverageSummary` is
-derived from file inventory and directory structure, and it never decodes
-EDF payloads or runs nightly aggregation. So the items marked **(import-level)**
-above (settings *values*, interval *boundaries*, usage/span/gap, duplicate and
-incremental persisted-identity hashes) **cannot** be observed by the present
-checker and must not be faked with file-count proxies. They require the
-import-level conformance path described in §6. What *is* observable today:
-detection/identity, capabilities, file-count coverage (therapy_days,
-session-block/waveform/event/oximetry/settings file counts, first/last date),
-and detection/planning diagnostics. Pinned by
-`test_conformance_coverage_cannot_observe_therapy_aggregates`
-(`tests/test_conformance.py`).
+**Observability boundary.** Two distinct entry points now exist (see §6 and
+`docs/sleeplab_2_import_level_conformance_plan.md`):
+
+- `validate_fixture` is *planning-only*: it runs `create_import_plan`, whose
+  `CoverageSummary` is derived from file inventory and directory structure, and
+  it never decodes EDF payloads or runs nightly aggregation. It must not fake
+  settings values, interval boundaries, usage/span/gap, or persisted-identity
+  hashes with file-count proxies. Pinned by
+  `test_conformance_coverage_cannot_observe_therapy_aggregates`
+  (`tests/test_conformance.py`). What it observes: detection/identity,
+  capabilities, file-count coverage, and detection/planning diagnostics.
+- `validate_import` is the *import-level* path. It compares the parse-observable
+  subset (warnings, session-block counts, usage/span/gap, settings
+  count/presence) against a normalized `ImportRun`, and gates DB/OSCAR checks as
+  skips. It never reads payloads through the planning harness; it consumes a
+  normalized run (injected in tests, or parsed when `cpap-parser`/`cpap-py` are
+  installed) and never faked file-count proxies.
 
 Keep manifest additions **backward compatible**: existing synthetic and
 AirSense 10 fixtures must continue to pass while new optional fields are
