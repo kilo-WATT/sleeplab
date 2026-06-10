@@ -24,6 +24,10 @@ RUN apt-get update \
 
 COPY api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# Root requirements.txt carries the importer's git-sourced deps (cpap-parser[resmed],
+# sleephq-client) that the API base set omits but the upload/import path needs.
+COPY requirements.txt /tmp/requirements-root.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-root.txt
 
 COPY api ./api
 COPY importer ./importer

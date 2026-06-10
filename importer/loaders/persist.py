@@ -154,7 +154,7 @@ def persist_import_run(
                 # yet map block files to persisted import_source_files rows, so
                 # we pass an empty array rather than non-UUID strings.
                 source_file_ids=[],
-                source_kind="resmed_cpap_parser_block",
+                source_kind="resmed_str_mask_interval",
                 therapy_duration_seconds=int((block.end_time - block.start_time).total_seconds()),
             )
             counts["blocks"] += 1
@@ -287,8 +287,22 @@ def _replace_signal_channel_metadata(
     if not signals:
         return 0
 
-    rows = []
+    # A session aggregates several recording intervals (one ``cpap_session`` per
+    # EDF file), each emitting the *same* channels (e.g. flow/pressure/leak). The
+    # ``signal_channels`` table holds one metadata row per channel per session
+    # (unique on ``session_id, normalized_name, source_name``), so collapse the
+    # repeats to one row per ``(channel_key, source_label)`` rather than letting
+    # in-batch duplicates trip the ON CONFLICT. Prefer the highest sample rate so
+    # a waveform-rate interval wins the channel_kind classification.
+    by_channel: dict[tuple[str, str], Any] = {}
     for signal in signals:
+        key = (signal.channel_key, signal.source_label)
+        existing = by_channel.get(key)
+        if existing is None or (signal.sample_rate_hz or 0) > (existing.sample_rate_hz or 0):
+            by_channel[key] = signal
+
+    rows = []
+    for signal in by_channel.values():
         sample_rate = signal.sample_rate_hz
         channel_kind = "waveform" if sample_rate and sample_rate >= 5 else "low_rate"
         rows.append(
