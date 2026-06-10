@@ -193,6 +193,49 @@ Keep manifest additions **backward compatible**: existing synthetic and
 AirSense 10 fixtures must continue to pass while new optional fields are
 introduced.
 
+### 6. Import-level conformance path (design note — not yet built)
+
+The §5 items marked **(import-level)** need a conformance layer that does not
+exist yet. The current `importer.conformance` harness validates a *plan*
+(`create_import_plan`, file-derived) and never decodes payloads or writes the
+database. Settings *values*, interval *boundaries*, usage/span/gap, and
+duplicate/incremental persisted-identity hashes can only be compared after a
+real parse and (for hashes) a real persist. This is a larger architecture step;
+it is **scoped here, not implemented**, and building it is an explicit
+"stop-and-ask" change because it touches parsing and (for identity hashes) the
+database.
+
+Proposed shape, when approved:
+
+- A second entry point, e.g. `validate_import(fixture, *, conn=None)`, that runs
+  the loader's `import_data` (or `import_data_with_directory`) on the fixture
+  source and compares the normalized `ImportRun` against
+  `manifest["expected"]["import"]`. It is **separate** from `validate_fixture`
+  so the planning harness stays dependency-free and CI-green without cpap-parser.
+- Manifest growth under a new optional `expected.import` block (kept backward
+  compatible, same pattern as `expected.diagnostics`):
+  - `settings`: normalized snapshot keys/values per night, with **missing ≠ off**
+    (assert `None`/absent, never a fabricated `0`/`off`).
+  - `blocks`: per-night session-block start/end and mask-on/off interval count.
+  - `aggregates`: usage / wall-clock span / gap seconds per machine-local date
+    (the `nightly_therapy_aggregates` semantics).
+  - `identity_hashes`: stable persisted-UUID sets for duplicate-import
+    idempotency, and an incremental-night check that existing identities are
+    unchanged when a newer night is added. (Requires a DB; gate behind Postgres
+    like the existing `db`-fixture tests.)
+  - `oscar_reference`: version/commit + export hashes, required before a
+    capability may be asserted `validated`.
+- Dependency gating: import-time codes
+  (`resmed_summary_only_day`/`resmed_waveform_absent`) and parsed values need
+  cpap-parser/cpap-py; identity-hash checks need Postgres. Each sub-check must
+  `importorskip` / skip cleanly so the default suite stays green, mirroring
+  `tests/conformance/test_resmed_airsense10.py` and the `db`-gated tests in
+  `tests/test_resmed_import_regressions.py`.
+
+Until that path exists, import-level expectations live as targeted tests
+(`tests/test_resmed_import_regressions.py`, `tests/conformance/`), not as
+`importer.conformance` manifest fields.
+
 ## Later alpha (after Alpha 6, still pre-beta)
 
 Per roadmap "Immediate implementation order" 3–9 and loader-plan sequence:
