@@ -128,13 +128,24 @@ Items:
       collapsed to a string — and `finish_import_run` dedupes identical entries
       so repeated ghost/waveform-absent nights collapse to one. Tested in
       `tests/test_resmed_import_regressions.py`.
-- [ ] **(open gap)** `signal_channels.validation_status` is not yet downgraded
-      from these absence warnings (e.g. a waveform-absent night still leaves
-      channel validation at `partial`). Wiring warning severity into per-channel
-      validation is the smallest sensible next diagnostics step. (Note: this
-      persistence path is the cpap-parser execution route, which stays opt-in
-      behind `SLEEPLAB_USE_CPAP_PARSER`; the legacy native subprocess persists
-      its own `run_stats["warnings"]` separately.)
+- [x] **(decided — Option B)** Waveform absence is **not** represented in
+      `signal_channels`. That table is a *presence* inventory: both writers
+      (`persist._write_signal_channels`, `db.replace_signal_channels`) emit a row
+      only for a channel that actually carries data, each stamping a fixed
+      `validation_status='partial'`. A missing BRP waveform is therefore the
+      *absence of the `flow_rate`/`pressure` rows*, not a downgraded row —
+      marking it on `signal_channels` would require fabricating a channel with no
+      samples, violating the loader-plan invariant "absence is `None`/empty,
+      never a plausible zero" and the "do not fabricate channels" rule. Waveform
+      absence is correctly owned by import-run diagnostics
+      (`resmed_waveform_absent`, persisted to `import_runs.warnings`) and
+      capability coverage (`Capabilities.waveforms` /
+      `import_runs.capability_status`). Pinned by
+      `test_missing_brp_waveform_does_not_fabricate_signal_channels`
+      (`tests/test_resmed_import_regressions.py`). No schema change.
+      (Persistence here is the opt-in cpap-parser execution route behind
+      `SLEEPLAB_USE_CPAP_PARSER`; the legacy native subprocess persists its own
+      `run_stats["warnings"]` separately.)
 
 ### 5. Conformance manifest expansion
 Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:

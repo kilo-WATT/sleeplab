@@ -637,6 +637,39 @@ def test_detailed_night_with_brp_waveform_has_no_absence_diagnostic():
     assert ResMedNativeLoader._has_high_rate_waveform(session.waveforms)
 
 
+def test_missing_brp_waveform_does_not_fabricate_signal_channels():
+    """Alpha 6 decision: waveform absence is row-absence, not a fake channel.
+
+    ``signal_channels`` is a *presence* table — both writers
+    (``persist._write_signal_channels`` and ``db.replace_signal_channels``) only
+    emit a row for a channel that actually carries data, and stamp a fixed
+    ``validation_status='partial'``. A detailed night missing its BRP waveform
+    therefore must NOT gain a fabricated high-rate ``flow_rate``/``pressure``
+    channel just to mark it absent; the low-rate PLD channels that *are* present
+    still appear, and the absence is recorded at the run level via
+    ``resmed_waveform_absent`` (and capability coverage), not by inventing a
+    channel row. This pins Option B from the Alpha 6 checklist (§4).
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    session = ResMedNativeLoader()._build_session(
+        _waveform_summary(),
+        detailed=[_detailed_session(flow_rate=[], set_pressure=[10.0, 11.0])],
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=[],
+    )
+
+    channel_keys = {signal.channel_key for signal in session.signals}
+    # Present low-rate PLD channel is inventoried.
+    assert "set_pressure" in channel_keys
+    # Missing high-rate BRP channels are NOT fabricated as signal_channels rows.
+    assert "flow_rate" not in channel_keys
+    assert "pressure" not in channel_keys
+    # Absence is surfaced as a run-level diagnostic instead.
+    assert "resmed_waveform_absent" in {w.code for w in session.warnings}
+
+
 def test_build_session_flushes_absence_warnings_to_run_level():
     """Alpha 6: session absence warnings reach the run-level list for persistence.
 
