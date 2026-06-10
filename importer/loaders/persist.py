@@ -36,11 +36,14 @@ than silently dropping or inventing data we record the gaps here:
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .models import DerivedValue, ImportRun, Session
+
+logger = logging.getLogger(__name__)
 
 #: Event types that count toward the apnea/hypopnea indices, mirroring the
 #: legacy importer's ``derive_summary``.
@@ -143,6 +146,21 @@ def persist_import_run(
 
         # -- Blocks -------------------------------------------------------
         for block in session.blocks:
+            duration_seconds = int((block.end_time - block.start_time).total_seconds())
+            # Invalid PLD recordings can yield a non-positive interval (e.g. an
+            # end before the start). The ``ck_session_blocks_interval`` check
+            # constraint rejects those, so skip and surface the offending block
+            # rather than aborting the whole import.
+            if block.end_time <= block.start_time:
+                logger.warning(
+                    "Skipping session block %s with non-positive duration (%ds): "
+                    "end %s <= start %s",
+                    block.source_block_key,
+                    duration_seconds,
+                    block.end_time,
+                    block.start_time,
+                )
+                continue
             upsert_session_block(
                 db_conn,
                 session_db_id=str(session_db_id),
@@ -155,7 +173,7 @@ def persist_import_run(
                 # we pass an empty array rather than non-UUID strings.
                 source_file_ids=[],
                 source_kind="resmed_str_mask_interval",
-                therapy_duration_seconds=int((block.end_time - block.start_time).total_seconds()),
+                therapy_duration_seconds=duration_seconds,
             )
             counts["blocks"] += 1
 
