@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from importer.conformance import validate_fixture, validate_manifest_metadata
+from importer.loaders.planning import CoverageSummary
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "conformance"
 
@@ -112,3 +113,41 @@ def test_manifest_expected_diagnostics_passes_when_warning_code_present(tmp_path
     assert not any(
         failure.startswith("diagnostics.warning_codes") for failure in result.failures
     ), f"diagnostics check should pass when the code is present, got {result.failures}"
+
+
+def test_conformance_coverage_cannot_observe_therapy_aggregates():
+    """Alpha 6 §5 boundary: the planning-only harness cannot observe usage/span/gap.
+
+    ``CoverageSummary`` is derived from file inventory and directory structure,
+    not parsed payloads — the conformance harness never decodes STR.edf or runs
+    nightly aggregation. Usage, wall-clock span, and gap therefore cannot be
+    asserted in a manifest here; doing so would require an import-level
+    conformance path (checklist §5/§6). Pin the observable field set so that
+    adding a parsed-aggregate field to ``CoverageSummary`` forces a conscious
+    decision rather than silently implying the harness can check it.
+    """
+    fields = set(CoverageSummary.__dataclass_fields__)
+
+    # Aggregate/parsed semantics are NOT observable without parsing payloads.
+    for parsed_only in (
+        "usage_seconds",
+        "wall_clock_seconds",
+        "gap_seconds",
+        "usage_hours",
+        "span_hours",
+        "mask_on_intervals",
+        "therapy_mode",
+    ):
+        assert parsed_only not in fields, f"{parsed_only} is not planning-observable"
+
+    # The harness observes only file/directory-derived coverage.
+    assert fields == {
+        "first_date",
+        "last_date",
+        "therapy_days",
+        "estimated_session_blocks",
+        "waveform_files",
+        "event_files",
+        "oximetry_files",
+        "settings_files",
+    }

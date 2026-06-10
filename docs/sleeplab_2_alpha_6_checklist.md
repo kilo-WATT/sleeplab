@@ -162,15 +162,32 @@ Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:
       `tests/test_resmed_import_regressions.py` instead — extending the manifest
       to cover those is a later subtask once an import-run conformance path
       exists.
-- [ ] persisted settings snapshots (mode, pressures, EPR, ramp, humidification,
-      mask) — compared, with "missing ≠ off";
-- [ ] interval boundaries (session-block start/end, mask-on/off);
-- [ ] usage / wall-clock span / gap (the nightly aggregate semantics);
-- [ ] duplicate-import stable hashes (persisted UUID sets unchanged on re-import);
-- [ ] incremental nights (adding a newer night leaves existing identities
-      unchanged);
+- [ ] **(import-level)** persisted settings snapshots (mode, pressures, EPR,
+      ramp, humidification, mask) — compared, with "missing ≠ off";
+- [ ] **(import-level)** interval boundaries (session-block start/end,
+      mask-on/off);
+- [ ] **(import-level)** usage / wall-clock span / gap (the nightly aggregate
+      semantics);
+- [ ] **(import-level)** duplicate-import stable hashes (persisted UUID sets
+      unchanged on re-import);
+- [ ] **(import-level)** incremental nights (adding a newer night leaves
+      existing identities unchanged);
 - [ ] OSCAR references (version/commit + export hashes) as first-class manifest
       fields, required before a capability may claim `validated`.
+
+**Observability boundary.** The current `importer.conformance` harness is
+*planning-only*: it runs `create_import_plan`, whose `CoverageSummary` is
+derived from file inventory and directory structure, and it never decodes
+EDF payloads or runs nightly aggregation. So the items marked **(import-level)**
+above (settings *values*, interval *boundaries*, usage/span/gap, duplicate and
+incremental persisted-identity hashes) **cannot** be observed by the present
+checker and must not be faked with file-count proxies. They require the
+import-level conformance path described in §6. What *is* observable today:
+detection/identity, capabilities, file-count coverage (therapy_days,
+session-block/waveform/event/oximetry/settings file counts, first/last date),
+and detection/planning diagnostics. Pinned by
+`test_conformance_coverage_cannot_observe_therapy_aggregates`
+(`tests/test_conformance.py`).
 
 Keep manifest additions **backward compatible**: existing synthetic and
 AirSense 10 fixtures must continue to pass while new optional fields are
