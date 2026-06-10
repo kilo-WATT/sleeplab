@@ -11,7 +11,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "importer"))
 
 import db as importer_db
 import import_sessions
+from edf_parser import read_header
 from resmed_str import ResMedMaskInterval, ResMedSTRDay
+
+#: Committed, anonymized AirSense 10 fixture (serial replaced, timestamps shifted).
+_AIRSENSE10_DATALOG = (
+    Path(__file__).resolve().parents[1]
+    / "tests"
+    / "conformance"
+    / "fixtures"
+    / "resmed_airsense10_001"
+    / "DATALOG"
+)
 
 
 @dataclass
@@ -408,6 +419,133 @@ def test_normalized_signal_unknown_channel_is_flagged_not_silently_mapped():
     novel = importer_db._normalized_signal("Totally.Novel", 12.0)
     assert novel == ("unknown:Totally.Novel", "waveform", None)
     assert novel[0].startswith("unknown:")
+
+
+#: Expected BRP/PLD/SAD channel inventory for the committed AirSense 10 fixture,
+#: keyed by EDF source label -> (normalized_name, channel_kind, leak_kind, dim).
+#: Sourced by decoding the fixture with the pure-Python ``edf_parser`` (no
+#: cpap-py), so this pins what the native path actually ingests. ``Crc16`` is a
+#: per-record checksum, not a signal, and is intentionally absent (skipped by
+#: ``replace_signal_channels``).
+_AIRSENSE10_EXPECTED_CHANNELS = {
+    # BRP: high-rate waveform at 25 Hz.
+    "Flow.40ms": ("flow", "waveform", None, "L/s"),
+    "Press.40ms": ("pressure", "waveform", None, "cmH2O"),
+    # PLD: low-rate metrics at 0.5 Hz (2 s epoch).
+    "MaskPress.2s": ("mask_pressure", "low_rate", None, "cmH2O"),
+    "Press.2s": ("pressure", "low_rate", None, "cmH2O"),
+    "EprPress.2s": ("epr_pressure", "low_rate", None, "cmH2O"),
+    "Leak.2s": ("leak", "low_rate", "unintentional", "L/s"),
+    "RespRate.2s": ("respiratory_rate", "low_rate", None, "bpm"),
+    "TidVol.2s": ("tidal_volume", "low_rate", None, "L"),
+    "MinVent.2s": ("minute_ventilation", "low_rate", None, "L/min"),
+    "Snore.2s": ("snore", "low_rate", None, ""),
+    "FlowLim.2s": ("flow_limitation", "low_rate", None, ""),
+    # SAD/SA2: oximetry at 1 Hz (low-rate).
+    "SpO2.1s": ("spo2", "low_rate", None, "%"),
+    "Pulse.1s": ("pulse", "low_rate", None, "bpm"),
+}
+
+
+def _fixture_channels_by_suffix(suffix: str) -> dict[str, tuple[str, float | None]]:
+    """Decode the first fixture EDF of ``suffix`` (BRP/PLD/SAD) via the native reader.
+
+    Returns ``{label: (dim, sample_rate_hz)}`` for non-``Crc16`` signals. Pure
+    Python — no cpap-py — so it runs in the normal suite. Skips the test if the
+    committed fixture is absent (e.g. a sparse checkout).
+    """
+    import pytest
+
+    matches = sorted(_AIRSENSE10_DATALOG.glob(f"**/*_{suffix}.edf"))
+    if not matches:
+        pytest.skip(f"AirSense 10 fixture {suffix} EDF not present")
+    header = read_header(str(matches[0]))
+    duration = header.duration_per_record or 0.0
+    channels: dict[str, tuple[str, float | None]] = {}
+    for signal in header.signals:
+        if signal.label == "Crc16":
+            continue
+        rate = signal.num_samples_per_record / duration if duration > 0 else None
+        channels[signal.label] = (signal.dim, rate)
+    return channels
+
+
+def test_airsense10_fixture_channel_inventory_matches_classification():
+    """Alpha 6 §1: enumerate the fixture's real BRP/SA2 channels and pin classification.
+
+    Decodes the committed (anonymized) AirSense 10 fixture with the pure-Python
+    ``edf_parser`` — no cpap-py, so this is real decoded evidence that runs in the
+    normal suite — and asserts every BRP/PLD/SAD channel maps through
+    ``db._normalized_signal`` to the expected normalized name, channel kind
+    (waveform vs low_rate), and leak semantics at its *real* sample rate. This
+    closes §1's "enumerate every channel the fixture carries" and "verify the
+    >=5 Hz classification matches the real rates; capture any misclassification".
+    """
+    observed: dict[str, tuple[str, float | None]] = {}
+    for suffix in ("BRP", "PLD", "SAD"):
+        observed.update(_fixture_channels_by_suffix(suffix))
+
+    # Every decoded channel is a known, correctly-classified channel — no
+    # ``unknown:`` sentinel, i.e. no misclassification on the real fixture.
+    for label, (dim, rate) in observed.items():
+        assert label in _AIRSENSE10_EXPECTED_CHANNELS, f"unexpected fixture channel {label!r}"
+        exp_name, exp_kind, exp_leak, exp_dim = _AIRSENSE10_EXPECTED_CHANNELS[label]
+        normalized, kind, leak = importer_db._normalized_signal(label, rate)
+        assert normalized == exp_name, f"{label}: normalized {normalized!r} != {exp_name!r}"
+        assert kind == exp_kind, f"{label}: kind {kind!r} != {exp_kind!r} (rate={rate})"
+        assert leak == exp_leak, f"{label}: leak {leak!r} != {exp_leak!r}"
+        assert not normalized.startswith("unknown:"), f"{label} misclassified as unknown"
+        assert dim == exp_dim, f"{label}: dim {dim!r} != {exp_dim!r}"
+
+    # The full expected inventory is present (nothing silently dropped).
+    assert set(observed) == set(_AIRSENSE10_EXPECTED_CHANNELS), (
+        f"fixture channels {sorted(observed)} != expected {sorted(_AIRSENSE10_EXPECTED_CHANNELS)}"
+    )
+
+    # The >=5 Hz waveform rule holds on the real rates: only BRP is waveform.
+    waveform = {label for label, (_dim, rate) in observed.items() if rate and rate >= 5}
+    assert waveform == {"Flow.40ms", "Press.40ms"}
+
+
+def test_persist_signal_channel_metadata_classifies_by_5hz_rule(monkeypatch):
+    """Alpha 6 §1: the cpap-parser persist path classifies by the same >=5 Hz rule.
+
+    ``persist._replace_signal_channel_metadata`` is the second classification site
+    (the cpap-parser execution path). Pin that a high-rate BRP channel persists as
+    ``waveform`` and a low-rate PLD channel as ``low_rate``, so the rule cannot
+    drift away from ``db._normalized_signal``.
+    """
+    import psycopg2.extras
+
+    from importer.loaders import persist
+    from importer.loaders.models import SignalChannel
+
+    inserted = []
+
+    def fake_execute_values(_cur, _sql, rows, **_kwargs):
+        inserted.extend(rows)
+
+    monkeypatch.setattr(psycopg2.extras, "execute_values", fake_execute_values)
+
+    signals = [
+        SignalChannel(
+            channel_key="flow_rate", source_label="Flow.40ms", unit="L/s",
+            sample_rate_hz=25.0, value_kind="sample", leak_kind=None, source_file_ids=(),
+        ),
+        SignalChannel(
+            channel_key="set_pressure", source_label="Press.2s", unit="cmH2O",
+            sample_rate_hz=0.5, value_kind="sample", leak_kind=None, source_file_ids=(),
+        ),
+    ]
+
+    persist._replace_signal_channel_metadata(
+        FakeConn(), session_db_id="sess-1", import_run_id=None, signals=signals
+    )
+
+    # Row layout index 3 = normalized_name, index 6 = sample_rate, index 7 = channel_kind.
+    kind_by_name = {row[3]: row[7] for row in inserted}
+    assert kind_by_name["flow_rate"] == "waveform"
+    assert kind_by_name["set_pressure"] == "low_rate"
 
 
 def test_replace_signal_channels_persists_sa2_units_and_low_rate(monkeypatch):

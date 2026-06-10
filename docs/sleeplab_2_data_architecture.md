@@ -132,6 +132,59 @@ The previous 5h57m header excluded short PLD recordings, while the previous
 Therapy Score used another duration path. Consumers now share the aggregate
 instead of being patched independently.
 
+### ResMed BRP/SA2 channel inventory (Alpha 6)
+
+The channels below are the full BRP/PLD/SAD inventory carried by the committed,
+anonymized AirSense 10 fixture (`tests/conformance/fixtures/resmed_airsense10_001/`).
+This is **decoded evidence**, not assumption: the fixture is read with the
+pure-Python `importer/edf_parser.py:read_header` (no `cpap-py`), and every
+channel is run through `importer/db.py:_normalized_signal` at its real sample
+rate. Pinned by `test_airsense10_fixture_channel_inventory_matches_classification`
+(`tests/test_resmed_import_regressions.py`), which runs in the normal suite.
+
+`unit` is the EDF `dim` field as the fixture carries it. `kind` follows the
+single rule `sample_rate_hz >= 5 → waveform`, else `low_rate`. `value_kind` is
+`sample` for all of these. `Crc16` is a per-record checksum, not a signal, and is
+skipped (never inventoried). CSL/EVE are annotation files and carry no signal
+channels.
+
+| Source label | Normalized | Unit | Rate (Hz) | Kind | Leak kind | Support |
+| --- | --- | --- | ---: | --- | --- | --- |
+| `Flow.40ms` | `flow` | L/s | 25 | waveform | — | supported (event-window storage) |
+| `Press.40ms` | `pressure` | cmH2O | 25 | waveform | — | supported (event-window storage) |
+| `MaskPress.2s` | `mask_pressure` | cmH2O | 0.5 | low_rate | — | supported (full-resolution) |
+| `Press.2s` | `pressure` | cmH2O | 0.5 | low_rate | — | supported (full-resolution) |
+| `EprPress.2s` | `epr_pressure` | cmH2O | 0.5 | low_rate | — | supported (full-resolution) |
+| `Leak.2s` | `leak` | L/s | 0.5 | low_rate | unintentional | supported (full-resolution) |
+| `RespRate.2s` | `respiratory_rate` | bpm | 0.5 | low_rate | — | supported (full-resolution) |
+| `TidVol.2s` | `tidal_volume` | L | 0.5 | low_rate | — | supported (full-resolution) |
+| `MinVent.2s` | `minute_ventilation` | L/min | 0.5 | low_rate | — | supported (full-resolution) |
+| `Snore.2s` | `snore` | (none) | 0.5 | low_rate | — | supported (full-resolution) |
+| `FlowLim.2s` | `flow_limitation` | (none) | 0.5 | low_rate | — | supported (full-resolution) |
+| `SpO2.1s` | `spo2` | % | 1 | low_rate | — | metadata inventoried; native path persists `session_spo2`, cpap-parser path sample persistence deferred (`persist.has_spo2: False`) |
+| `Pulse.1s` | `pulse` | bpm | 1 | low_rate | — | metadata inventoried; sample persistence as above |
+
+Notes and known divergences (documented, not silent):
+
+- **Storage tiers** (see "Waveform storage scope" below): the 25 Hz BRP waveform
+  channels are persisted to `session_waveform` only within event windows; the
+  0.5 Hz PLD channels are persisted full-resolution to `session_metrics`; channel
+  metadata for all of the above is persisted to `signal_channels`.
+- **No misclassification** was found on the fixture: only the two 25 Hz BRP
+  channels classify as `waveform`; everything else is `low_rate`. The
+  `>= 5 Hz → waveform` rule is applied identically by the native path
+  (`db._normalized_signal`) and the cpap-parser path
+  (`persist._replace_signal_channel_metadata`), both pinned by tests.
+- **Unit-label divergence (follow-up, not a bug):** the native path stores the
+  EDF `dim` verbatim (so `flow`/`leak` are `L/s`), while the cpap-parser loader's
+  `resmed_native._HIGH_RATE_CHANNELS`/`_LOW_RATE_CHANNELS` currently label
+  `flow`/`leak` as `L/min`. The cpap-parser path is not the production route this
+  milestone; reconciling these unit labels is tracked for the parser-parity work,
+  not relied upon by production.
+- **Deeper parser-path verification** (decoding via `cpap-py` and the
+  cpap-parser normalized output) lives in the `cpap-py`-gated
+  `tests/conformance/` suite and skips cleanly when that backend is absent.
+
 ## Import lifecycle
 
 The uploaded-root flow is:
