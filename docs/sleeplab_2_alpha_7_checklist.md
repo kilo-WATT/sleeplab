@@ -35,11 +35,15 @@ begin beta.
   segment metadata + a nullable `storage_ref` — i.e., it is segment-ready for a
   future OSCAR-like compressed-segment design.
 - Import-level conformance (`validate_import`, `importer/conformance.py`) today
-  checks: warnings, session-block **count**, therapy aggregates
-  (usage/span/gap), settings **count/presence**, identity hashes (DB-gated), and
-  the OSCAR reference **export hash**. Deferred from Alpha 6: settings **values**,
-  block interval **boundaries**, event count/type/timestamp parity, OSCAR
-  numeric parity, and weighted/time-based summaries.
+  checks: warnings, session-block **count + interval boundaries**, therapy
+  aggregates (usage/span/gap), settings **count/presence + per-setting values**
+  (missing-vs-off), **event count/type/timestamp/duration parity**, identity
+  hashes (DB-gated), and the OSCAR reference **export hash**. The value/boundary/
+  event comparators are exercised by injecting a normalized `ImportRun`; the
+  ResMed loader does not yet map `SettingsSnapshot` *values*, so against a real
+  card settings `values` still needs loader work. Still deferred: OSCAR **numeric
+  parity** (designed in the conformance plan §13, not implemented) and
+  weighted/time-based summaries.
 
 ## Alpha 7 must-do
 
@@ -182,13 +186,22 @@ Alpha 7 is "done enough" to move on when:
 2. This Alpha 7 checklist exists, derived from the review. **(Met — §2.)**
 3. At least the first import-level conformance depth item (session-block interval
    boundaries) is implemented against the existing ResMed fixture, backward
-   compatibly, with deferred sub-checks skipping cleanly.
+   compatibly, with deferred sub-checks skipping cleanly. **(Met — §3:
+   interval boundaries, settings values, and event count/type/timestamp/duration
+   parity are implemented and tested; deferred sub-keys skip cleanly.)**
 4. Future waveform storage is reframed as a compressed segment/BLOB design
    investigation, with event-window storage kept as the production default.
-5. A device-time-correction design note is recorded (no migration).
+   **(Partly met — the event-window production decision is recorded (§4); the
+   prose reframe of full-night → compressed-segment investigation is still open.)**
+5. A device-time-correction design note is recorded (no migration). **(Met — §5:
+   `docs/sleeplab_2_device_time_correction_design.md`.)**
 6. Lowenstein read-only conformance remains explicitly deferred behind a safe
-   fixture.
+   fixture. **(On track — still deferred by design; §6.)**
 
-Items 1–2 are met by the planning/documentation work in this milestone. Items
-3–6 are the implementation/documentation depth that follows, none of which
-requires a migration, routing change, or new tag.
+Items 1–3 and 5 are met by the planning, documentation, and import-level
+conformance depth landed in this milestone (interval boundaries, settings values,
+and event parity comparators, plus the OSCAR-numeric-parity and device-time-
+correction design notes). The open items are the waveform-storage prose reframe
+(§4, item 4), OSCAR **numeric parity** implementation (designed but not built),
+weighted/time-based summaries, and Lowenstein read-only conformance — none of
+which requires a migration, routing change, or new tag.
