@@ -68,10 +68,18 @@ begin beta.
 Extend `validate_import` / the `expected.import` manifest block (backward
 compatibly; existing synthetic + AirSense 10 fixtures stay green; absence stays
 skipped, never faked). No routing or schema change. In priority order:
-- [ ] **Session-block interval boundaries.** Compare `expected.import`
-      session-block start/end (and mask-on/off) with a one-sample tolerance,
-      upgrading the current block-**count**-only check. (Alpha 6 §5 deferred item;
-      OSCAR `session_slices` is the reference shape.)
+- [x] **(done)** **Session-block interval boundaries.** `expected.import.
+      session_blocks.<date>.intervals` now compares each block's start/end against
+      manifest ISO timestamps within a 1s tolerance, upgrading the
+      block-**count**-only check. Actual blocks are sorted canonically by
+      `(start_time, end_time, source_block_key)`; expected intervals are compared
+      in listed (chronological) order; count mismatch, malformed shape, invalid
+      timestamp, and naive-vs-tz-aware boundaries are clear failures (no timezone
+      conversion invented). Backward compatible — `block_count`-only and
+      no-`expected.import` fixtures are unchanged. Mask-on/off boundaries remain
+      deferred. (Alpha 6 §5 deferred item; OSCAR `session_slices` is the reference
+      shape.) Implemented in `importer/conformance.py`; covered in
+      `tests/test_conformance.py`.
 - [ ] **Settings values / missing-vs-off semantics.** Compare per-setting
       normalized values where the loader maps them, asserting `None`/absent rather
       than a fabricated `0`/`off`. (Blocked on the ResMed loader mapping

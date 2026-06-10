@@ -7,8 +7,9 @@ parse-observable comparators for `warnings`, `session_blocks`,
 `therapy_aggregates`, and `settings` (count/presence), the `oscar_reference`
 export-hash verification, and the DB-gated `identity_hashes` checks (persisted
 session/block key-set hashes + counts, with duplicate/incremental stability
-proven by DB-gated tests) are built and tested. Remaining: OSCAR **numeric
-parity** (Step 3b) and settings-value / interval-boundary comparison, which need
+proven by DB-gated tests) are built and tested. `session_blocks.intervals`
+start/end boundary comparison (±1s) is now implemented too. Remaining: OSCAR
+**numeric parity** (Step 3b) and settings-value comparison, which need
 loader/parser support.
 
 This document expands the design note in
@@ -200,7 +201,7 @@ is a subset; everything else is surfaced as a *skip*, never a silent pass:
 | Sub-block | Checked now | Deferred (→ skip) |
 |---|---|---|
 | `warnings` | `codes` (present), `absent` (forbidden) | any other key |
-| `session_blocks` | `block_count` per date | `intervals` / boundary start-end |
+| `session_blocks` | `block_count` per date; `intervals` start/end boundaries (±1s) | any other key |
 | `therapy_aggregates` | `usage_seconds`, `wall_clock_seconds`, `gap_seconds` (= wall-clock − usage), `block_count` | any non-observable field, or a field whose source `DerivedValue` is absent |
 | `settings` | `snapshot_count`, `present` | per-setting *value* keys (loader maps no settings snapshots yet) |
 | `identity_hashes` | `sessions`/`blocks` key-set hashes, `session_count`/`block_count` (needs `conn` + `machine_id`) | `machine`, `incremental_night` sub-keys |
@@ -229,10 +230,14 @@ Parse-only, no database — these compare the **pre-persistence** `ImportRun`
   from `Session.settings`. Per-setting *value* comparison (with missing-≠-off) is
   deferred because the ResMed cpap-parser loader maps no `SettingsSnapshot`s yet;
   a value key is skipped, not faked.
-- `session_blocks` — **[implemented: block_count]** summed `len(Session.blocks)`
-  per machine-local date. `intervals` start/end comparison
-  (`SessionBlock.start_time`/`end_time`, with the one-sample tolerance below) is
-  deferred and skipped.
+- `session_blocks` — **[implemented: block_count + intervals]** summed
+  `len(Session.blocks)` per machine-local date, plus `intervals` start/end
+  boundary comparison against each `SessionBlock.start_time`/`end_time`. Actual
+  blocks are sorted canonically by `(start_time, end_time, source_block_key)`;
+  expected intervals are compared in the order listed (chronological), within the
+  one-second tolerance below. A count mismatch, malformed interval shape, invalid
+  expected timestamp, or naive-vs-tz-aware boundary is a clear failure (never a
+  crash). The harness does not invent a timezone conversion.
 - `therapy_aggregates` — **[implemented]** `usage_seconds`
   (`computed_usage_hours`×3600), `wall_clock_seconds` (`recording_span_hours`×
   3600), `gap_seconds` (= wall-clock − usage), and `block_count`, all derived
@@ -422,10 +427,11 @@ CLI wiring.
    against the normalized `ImportRun`. Implemented as pure comparators dispatched
    from `_IMPORT_BLOCK_COMPARATORS`; each returns `(failures, skips)`. Unit-tested
    in `tests/test_conformance.py` by **injecting** an `ImportRun` (`run=`), so the
-   logic runs with no parser and no DB; deferred sub-keys (interval boundaries,
-   settings values) and unobservable/absent fields are skipped, not faked, and a
-   missing requested date is a real failure. The auto-parse acquisition path is
-   `cpap-parser`/`cpap-py`-gated.
+   logic runs with no parser and no DB; deferred sub-keys (settings values) and
+   unobservable/absent fields are skipped, not faked, and a missing requested date
+   is a real failure. `session_blocks.intervals` start/end boundary comparison
+   (±1s, naive-vs-aware reported as a clear failure) is now implemented alongside
+   `block_count`. The auto-parse acquisition path is `cpap-parser`/`cpap-py`-gated.
 3. **[DONE: hash; parity deferred] OSCAR reference check.** `oscar_reference`
    export-hash verification is implemented (`_compare_oscar_reference`): a
    declared reference file whose sha256 mismatches (or is missing) is a failure.

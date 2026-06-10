@@ -506,11 +506,84 @@ def test_validate_import_session_blocks_fail_on_missing_date(tmp_path):
     ), f"expected a missing-date failure, got {result.failures}"
 
 
-def test_validate_import_session_blocks_interval_key_is_skipped(tmp_path):
-    """Plan Step 2: interval/boundary comparison is deferred, surfaced as a skip."""
+def _two_block_run(date_key="2026-06-01"):
+    """A run whose one session has two blocks: 22:00–23:00 and 23:15–00:30."""
+    return _fake_run(
+        sessions=[
+            _fake_session(
+                date_key,
+                blocks=[
+                    _block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0)),
+                    _block(datetime(2026, 6, 1, 23, 15), datetime(2026, 6, 2, 0, 30)),
+                ],
+            )
+        ]
+    )
+
+
+def test_validate_import_session_blocks_intervals_pass(tmp_path):
+    """Alpha 7: expected interval boundaries matching the run's blocks pass.
+
+    Both start/end boundaries match within tolerance, so the intervals check runs
+    and produces no failure and no skip for the intervals sub-key.
+    """
     fixture = _write_import_manifest(
         tmp_path,
-        {"session_blocks": {"2026-06-01": {"block_count": 1, "intervals": [{"start": "x"}]}}},
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "block_count": 2,
+                    "intervals": [
+                        {"start": "2026-06-01T22:00:00", "end": "2026-06-01T23:00:00"},
+                        {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:30:00"},
+                    ],
+                }
+            }
+        },
+    )
+
+    result = validate_import(fixture, run=_two_block_run())
+
+    assert result.passed, result.failures
+    assert not any("session_blocks.2026-06-01.intervals" in s for s in result.skipped)
+
+
+def test_validate_import_session_blocks_intervals_within_tolerance_pass(tmp_path):
+    """Alpha 7: a sub-second boundary difference is within the 1s tolerance."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [
+                        # +0.5s on start, -0.5s on end — both inside ±1s.
+                        {"start": "2026-06-01T21:59:59.500000", "end": "2026-06-01T23:00:00.500000"},
+                        {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:30:00"},
+                    ]
+                }
+            }
+        },
+    )
+
+    result = validate_import(fixture, run=_two_block_run())
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_session_blocks_intervals_count_mismatch_fails(tmp_path):
+    """Alpha 7: expecting two intervals when the run has one is a clear failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [
+                        {"start": "2026-06-01T22:00:00", "end": "2026-06-01T23:00:00"},
+                        {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:30:00"},
+                    ]
+                }
+            }
+        },
     )
     run = _fake_run(
         sessions=[
@@ -523,11 +596,215 @@ def test_validate_import_session_blocks_interval_key_is_skipped(tmp_path):
 
     result = validate_import(fixture, run=run)
 
-    # block_count still passes; only the intervals sub-key is skipped.
-    assert result.passed, result.failures
+    assert not result.passed
     assert any(
-        "expected.import.session_blocks.2026-06-01.intervals" in s for s in result.skipped
-    ), f"expected an intervals skip, got {result.skipped}"
+        "session_blocks.2026-06-01.intervals" in f and "interval count mismatch" in f
+        for f in result.failures
+    ), f"expected an interval-count-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_interval_start_mismatch_fails(tmp_path):
+    """Alpha 7: a start boundary beyond tolerance is a specific start failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [
+                        # Start is 5 minutes off; end matches.
+                        {"start": "2026-06-01T22:05:00", "end": "2026-06-01T23:00:00"},
+                        {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:30:00"},
+                    ]
+                }
+            }
+        },
+    )
+
+    result = validate_import(fixture, run=_two_block_run())
+
+    assert not result.passed
+    assert any(
+        "session_blocks.2026-06-01.intervals[0].start" in f for f in result.failures
+    ), f"expected a start-boundary failure, got {result.failures}"
+    # The matching end boundary must not also be flagged.
+    assert not any("intervals[0].end" in f for f in result.failures)
+
+
+def test_validate_import_session_blocks_interval_end_mismatch_fails(tmp_path):
+    """Alpha 7: an end boundary beyond tolerance is a specific end failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [
+                        {"start": "2026-06-01T22:00:00", "end": "2026-06-01T23:00:00"},
+                        # End is 10 minutes off; start matches.
+                        {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:40:00"},
+                    ]
+                }
+            }
+        },
+    )
+
+    result = validate_import(fixture, run=_two_block_run())
+
+    assert not result.passed
+    assert any(
+        "session_blocks.2026-06-01.intervals[1].end" in f for f in result.failures
+    ), f"expected an end-boundary failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_interval_invalid_timestamp_fails(tmp_path):
+    """Alpha 7: a malformed expected timestamp fails clearly rather than crashing."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [{"start": "not-a-timestamp", "end": "2026-06-01T23:00:00"}]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[_block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0))],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)  # must not raise
+
+    assert not result.passed
+    assert any(
+        "intervals[0].start" in f and "invalid expected timestamp" in f
+        for f in result.failures
+    ), f"expected an invalid-timestamp failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_interval_bad_shape_fails(tmp_path):
+    """Alpha 7: an interval missing 'start'/'end' is a clear shape failure, not a skip."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {"session_blocks": {"2026-06-01": {"intervals": [{"start": "2026-06-01T22:00:00"}]}}},
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[_block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0))],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "intervals[0]" in f and "unexpected interval shape" in f for f in result.failures
+    ), f"expected a shape failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_intervals_missing_date_fails(tmp_path):
+    """Alpha 7: intervals for a date absent from the run is a failure, not a skip."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-09": {
+                    "intervals": [{"start": "2026-06-09T22:00:00", "end": "2026-06-09T23:00:00"}]
+                }
+            }
+        },
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", blocks=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.session_blocks.2026-06-09" in f and "date not found" in f
+        for f in result.failures
+    ), f"expected a missing-date failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_intervals_tz_awareness_mismatch_fails(tmp_path):
+    """Alpha 7: a tz-aware expected boundary vs a naive actual block fails clearly.
+
+    The harness must not invent a timezone conversion. When the manifest carries a
+    tz-aware ISO string but the normalized block is naive machine-local, the
+    boundary is reported as an explicit, non-crashing failure.
+    """
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [
+                        {"start": "2026-06-01T22:00:00+00:00", "end": "2026-06-01T23:00:00+00:00"}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[_block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0))],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)  # must not raise
+
+    assert not result.passed
+    assert any(
+        "intervals[0].start" in f and "naive and timezone-aware" in f
+        for f in result.failures
+    ), f"expected a tz-awareness failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_intervals_sorted_by_start_end_key(tmp_path):
+    """Alpha 7: actual blocks are sorted by (start, end, source key) before comparison.
+
+    The run lists its two blocks out of chronological order; the expected
+    intervals are listed chronologically. The comparator canonically sorts the
+    actual blocks, so the match still holds — documenting that expected intervals
+    are compared in listed (chronological) order against sorted actuals.
+    """
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "session_blocks": {
+                "2026-06-01": {
+                    "intervals": [
+                        {"start": "2026-06-01T22:00:00", "end": "2026-06-01T23:00:00"},
+                        {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:30:00"},
+                    ]
+                }
+            }
+        },
+    )
+    # Blocks emitted later-first; the comparator must sort them.
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[
+                    _block(datetime(2026, 6, 1, 23, 15), datetime(2026, 6, 2, 0, 30)),
+                    _block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0)),
+                ],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
 
 
 # ---------------------------------------------------------------------------

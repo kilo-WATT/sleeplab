@@ -18,10 +18,17 @@ import hashlib
 import importlib.util
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from importer.loaders import create_import_plan
+
+#: Conservative default tolerance for session-block interval boundary
+#: comparison. The loader plan's "Session boundaries" default is one source
+#: sample interval; one second is comfortably below the coarsest ResMed STR
+#: mask-interval resolution while still catching real boundary drift.
+_BLOCK_INTERVAL_TOLERANCE_SECONDS = 1
 
 #: ``expected.import`` sub-blocks compared against a normalized ``ImportRun``
 #: (parse-observable). Their comparators need a run (injected or parsed); they do
@@ -410,10 +417,14 @@ def _sessions_by_date(run: Any) -> dict[str, list]:
 def _compare_session_blocks(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
     """Compare ``expected.import.session_blocks`` against a normalized run.
 
-    Per machine-local date, only ``block_count`` (summed across that night's
-    sessions) is observable from the normalized run today. Interval start/end
-    comparison is a later plan step, so an ``intervals`` key (or any other key)
-    is reported as a skip rather than silently passed.
+    Per machine-local date, two checks are observable from the normalized run:
+
+    * ``block_count`` — summed ``len(Session.blocks)`` across that night's
+      sessions.
+    * ``intervals`` — start/end boundary comparison against each normalized
+      ``SessionBlock`` (see :func:`_compare_block_intervals`).
+
+    Any other key is reported as a skip rather than silently passed.
     """
 
     failures: list[str] = []
@@ -427,20 +438,142 @@ def _compare_session_blocks(expected_block: dict, run: Any) -> tuple[list[str], 
                 f"(present: {sorted(by_date)})"
             )
             continue
-        block_count = sum(len(session.blocks) for session in by_date[date_key])
+        blocks = [block for session in by_date[date_key] for block in session.blocks]
         if "block_count" in expected_dict:
             _expect(
                 failures,
                 f"expected.import.session_blocks.{date_key}.block_count",
-                block_count,
+                len(blocks),
                 expected_dict["block_count"],
             )
-        for key in sorted(set(expected_dict) - {"block_count"}):
+        if "intervals" in expected_dict:
+            _compare_block_intervals(
+                failures, date_key, expected_dict["intervals"], blocks
+            )
+        for key in sorted(set(expected_dict) - {"block_count", "intervals"}):
             skips.append(
                 f"expected.import.session_blocks.{date_key}.{key}: skipped — "
-                "interval/boundary comparison not implemented yet (later plan step)"
+                "unsupported session_blocks key (only 'block_count'/'intervals' are checked)"
             )
     return failures, skips
+
+
+def _boundary_delta_seconds(actual: datetime, expected: datetime) -> float | None:
+    """Absolute seconds between two datetimes, or ``None`` on a tz-awareness clash.
+
+    Normalized ``ImportRun`` objects use **naive** machine-local datetimes and
+    manifest intervals are naive ISO strings, so the common case is naive-vs-naive
+    and the delta is well-defined. A naive-vs-aware pair cannot be compared without
+    inventing a timezone conversion (which this harness deliberately does not do),
+    so it returns ``None`` for the caller to fail on with a clear message. This
+    introduces no app-wide timezone behavior.
+    """
+
+    if (actual.tzinfo is None) != (expected.tzinfo is None):
+        return None
+    return abs((actual - expected).total_seconds())
+
+
+def _compare_boundary(
+    failures: list[str], field: str, actual: datetime, expected: datetime
+) -> None:
+    """Append a specific failure if ``actual`` differs from ``expected`` beyond tolerance."""
+
+    delta = _boundary_delta_seconds(actual, expected)
+    if delta is None:
+        failures.append(
+            f"{field}: cannot compare naive and timezone-aware datetimes "
+            f"(actual={actual.isoformat()}, expected={expected.isoformat()})"
+        )
+    elif delta > _BLOCK_INTERVAL_TOLERANCE_SECONDS:
+        failures.append(
+            f"{field}: expected {expected.isoformat()}, got {actual.isoformat()} "
+            f"(delta {delta:g}s > {_BLOCK_INTERVAL_TOLERANCE_SECONDS}s tolerance)"
+        )
+
+
+def _compare_block_intervals(
+    failures: list[str], date_key: str, expected_intervals: Any, blocks: list
+) -> None:
+    """Compare ``expected.import.session_blocks.<date>.intervals`` against blocks.
+
+    Actual blocks are sorted canonically by ``(start_time, end_time,
+    source_block_key)`` so the comparison is deterministic regardless of the
+    order the loader emitted them. Expected intervals are compared **in the order
+    listed in the manifest** against that sorted sequence — i.e. list them in
+    chronological ``(start, end)`` order to match. Each interval is an object with
+    ISO-like ``start``/``end`` strings; boundaries compare within
+    :data:`_BLOCK_INTERVAL_TOLERANCE_SECONDS`.
+
+    Every discrepancy is a specific failure (never a crash): a non-list
+    ``intervals`` value, an interval count mismatch, a malformed interval shape,
+    an invalid timestamp, or a start/end boundary beyond tolerance.
+    """
+
+    field = f"expected.import.session_blocks.{date_key}.intervals"
+
+    if not isinstance(expected_intervals, list):
+        failures.append(
+            f"{field}: unexpected interval shape — expected a list of "
+            f"{{'start','end'}} objects, got {type(expected_intervals).__name__}"
+        )
+        return
+
+    actual = sorted(
+        blocks, key=lambda b: (b.start_time, b.end_time, b.source_block_key)
+    )
+    if len(expected_intervals) != len(actual):
+        failures.append(
+            f"{field}: interval count mismatch — expected {len(expected_intervals)}, "
+            f"got {len(actual)}"
+        )
+        return
+
+    for index, (expected_interval, block) in enumerate(zip(expected_intervals, actual)):
+        item = f"{field}[{index}]"
+        if not isinstance(expected_interval, dict):
+            failures.append(
+                f"{item}: unexpected interval shape — expected an object with "
+                f"'start'/'end', got {type(expected_interval).__name__}"
+            )
+            continue
+        missing = {"start", "end"} - set(expected_interval)
+        if missing:
+            failures.append(
+                f"{item}: unexpected interval shape — missing key(s) "
+                f"{sorted(missing)}"
+            )
+            continue
+        expected_start = _parse_expected_timestamp(failures, f"{item}.start", expected_interval["start"])
+        expected_end = _parse_expected_timestamp(failures, f"{item}.end", expected_interval["end"])
+        if expected_start is not None:
+            _compare_boundary(failures, f"{item}.start", block.start_time, expected_start)
+        if expected_end is not None:
+            _compare_boundary(failures, f"{item}.end", block.end_time, expected_end)
+
+
+def _parse_expected_timestamp(
+    failures: list[str], field: str, value: Any
+) -> datetime | None:
+    """Parse a manifest ISO-like timestamp; on bad input append a failure and return ``None``.
+
+    Uses :meth:`datetime.fromisoformat`, which accepts the manifest's
+    ``YYYY-MM-DDTHH:MM:SS`` form (with or without a trailing offset). A non-string
+    or unparseable value is a specific *failure*, never an exception that aborts
+    the run.
+    """
+
+    if not isinstance(value, str):
+        failures.append(
+            f"{field}: invalid expected timestamp — expected an ISO string, "
+            f"got {type(value).__name__}"
+        )
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        failures.append(f"{field}: invalid expected timestamp {value!r}")
+        return None
 
 
 def _observable_aggregates(session: Any) -> dict[str, int | None]:
