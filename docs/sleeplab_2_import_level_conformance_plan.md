@@ -4,8 +4,9 @@ Status: **Steps 1–2 (parse-observable), the OSCAR reference-hash check, and
 Step 4 (DB identity hashes) implemented; OSCAR numeric parity still
 design-only.** The `validate_import` entry point, `ImportConformanceResult`, the
 parse-observable comparators for `warnings`, `session_blocks`,
-`therapy_aggregates`, and `settings` (count/presence **and** per-setting
-`values`), the `oscar_reference` export-hash verification, and the DB-gated
+`therapy_aggregates`, `settings` (count/presence **and** per-setting `values`),
+`events` (count/type-tally/ordered-list parity), the `oscar_reference`
+export-hash verification, and the DB-gated
 `identity_hashes` checks (persisted session/block key-set hashes + counts, with
 duplicate/incremental stability proven by DB-gated tests) are built and tested.
 `session_blocks.intervals` start/end boundary comparison (±1s) is implemented
@@ -173,6 +174,16 @@ A single new **optional** top-level block under `expected`, mirroring
     "warnings": {
       "codes": ["resmed_summary_only_day", "resmed_waveform_absent"]
     },
+    "events": {
+      "2026-06-01": {
+        "count": 3,
+        "types": {"obstructive_apnea": 1, "hypopnea": 2},
+        "events": [                    // ordered; compared to sorted actual
+          {"type": "obstructive_apnea", "start": "2026-06-01T22:10:00", "duration_seconds": 12.0},
+          {"type": "hypopnea", "start": "2026-06-01T23:15:00", "duration_seconds": null}
+        ]
+      }
+    },
     "identity_hashes": {
       "algorithm": "sha256",
       "machine": "…",               // hash of stable identity tuple, see §11
@@ -196,7 +207,7 @@ A single new **optional** top-level block under `expected`, mirroring
 Every sub-block is independently optional. A manifest may assert only
 `therapy_aggregates`, only `settings`, etc. Each present sub-block runs only the
 checks it can (gating in §4–§8). Naming follows the brief's
-`expected.import.{settings,session_blocks,therapy_aggregates,warnings,identity_hashes,oscar_reference}`.
+`expected.import.{settings,session_blocks,therapy_aggregates,warnings,events,identity_hashes,oscar_reference}`.
 
 #### Implemented vs deferred sub-keys (current state)
 
@@ -209,6 +220,7 @@ is a subset; everything else is surfaced as a *skip*, never a silent pass:
 | `session_blocks` | `block_count` per date; `intervals` start/end boundaries (±1s) | any other key |
 | `therapy_aggregates` | `usage_seconds`, `wall_clock_seconds`, `gap_seconds` (= wall-clock − usage), `block_count` | any non-observable field, or a field whose source `DerivedValue` is absent |
 | `settings` | `snapshot_count`, `present`, `values` (per-setting, null=missing) | a bare setting key placed outside `values` (→ skip) |
+| `events` | `count`, `types` (per-type tally), `events` (ordered list: type/start ±1s/duration ±1s, null duration) | any other key |
 | `identity_hashes` | `sessions`/`blocks` key-set hashes, `session_count`/`block_count` (needs `conn` + `machine_id`) | `machine`, `incremental_night` sub-keys |
 | `oscar_reference` | `export_hash` of the reference file | numeric `parity` vs OSCAR rows (Step 3b) |
 
@@ -264,6 +276,16 @@ Parse-only, no database — these compare the **pre-persistence** `ImportRun`
   `resmed_waveform_absent` become observable here — they are invisible to the
   planning-only harness, which is why `validate_fixture` sees only
   *detection/planning* diagnostics.
+- `events` — **[implemented]** per machine-local date: total `count`, per-type
+  `types` tallies, and an ordered `events` list compared against
+  `Session.events` sorted by `(start_time, event_type, duration_seconds,
+  source_event_key)`. Each expected event compares `type` exactly, `start` within
+  one second, and an optional `duration_seconds` within one second (with `null`
+  asserting an actual `None` duration). A missing date, count/type/length
+  mismatch, malformed expected event, invalid timestamp, or naive-vs-tz-aware
+  start is a clear failure. The OSCAR event-type enum / `central→unclassified`
+  mapping (checklist §3) is the intended `type` vocabulary; this comparator is
+  vocabulary-agnostic and asserts whatever the normalized run emits.
 - `oscar_reference` — **[deferred, Step 3]** comparison against checked-in CSVs
   and the manifest hash assertion. No DB; needs only the reference files (and a
   normalized side).

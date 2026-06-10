@@ -20,6 +20,7 @@ from importer.conformance import (
 from importer.loaders.models import (
     Confidence,
     DerivedValue,
+    Event,
     ImportWarning,
     Session,
     SessionBlock,
@@ -39,6 +40,7 @@ def _fake_session(
     settings=(),
     derived=None,
     warnings=(),
+    events=(),
 ):
     """Build a normalized :class:`Session` for import-level comparison tests.
 
@@ -56,6 +58,7 @@ def _fake_session(
     session.blocks = list(blocks)
     session.settings = list(settings)
     session.warnings = list(warnings)
+    session.events = list(events)
     for key, (value, unit) in (derived or {}).items():
         session.derived_values.append(
             DerivedValue(
@@ -82,6 +85,19 @@ def _block(start, end, kind="recording"):
         end_time=end,
         block_kind=kind,
         source_file_ids=(),
+    )
+
+
+def _event(event_type, start, duration=None, *, source_event_key=None):
+    """A minimal normalized :class:`Event` for event-parity comparison tests."""
+    return Event(
+        source_event_key=source_event_key or f"evt:{event_type}:{start.isoformat()}",
+        event_type=event_type,
+        source_type="resmed",
+        start_time=start,
+        duration_seconds=duration,
+        source_file_id="f1",
+        confidence=Confidence.PROBABLE,
     )
 
 
@@ -1261,6 +1277,389 @@ def test_validate_import_mixed_blocks_check_and_skip_together(tmp_path):
 
     assert result.passed, result.failures
     assert any("expected.import.settings.2026-06-01.therapy_mode" in s for s in result.skipped)
+
+
+# ---------------------------------------------------------------------------
+# expected.import.events
+# ---------------------------------------------------------------------------
+
+
+def _events_run(date_key="2026-06-01"):
+    """A run whose one session has 3 events: 1 obstructive_apnea, 2 hypopnea."""
+    return _fake_run(
+        sessions=[
+            _fake_session(
+                date_key,
+                events=[
+                    _event("obstructive_apnea", datetime(2026, 6, 1, 22, 10), 12.0),
+                    _event("hypopnea", datetime(2026, 6, 1, 23, 15), 18.0),
+                    _event("hypopnea", datetime(2026, 6, 2, 0, 5), 20.0),
+                ],
+            )
+        ]
+    )
+
+
+def test_validate_import_events_count_pass(tmp_path):
+    """Alpha 7: total event count is compared against the normalized run."""
+    fixture = _write_import_manifest(tmp_path, {"events": {"2026-06-01": {"count": 3}}})
+
+    result = validate_import(fixture, run=_events_run())
+
+    assert result.passed, result.failures
+    assert not any("expected.import.events" in s for s in result.skipped)
+
+
+def test_validate_import_events_count_fail(tmp_path):
+    """Alpha 7: a wrong total event count is a clear failure."""
+    fixture = _write_import_manifest(tmp_path, {"events": {"2026-06-01": {"count": 5}}})
+
+    result = validate_import(fixture, run=_events_run())
+
+    assert not result.passed
+    assert any(
+        "expected.import.events.2026-06-01.count" in f for f in result.failures
+    ), f"expected a count failure, got {result.failures}"
+
+
+def test_validate_import_events_type_counts_pass(tmp_path):
+    """Alpha 7: per-type event tallies are compared."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {"events": {"2026-06-01": {"types": {"obstructive_apnea": 1, "hypopnea": 2}}}},
+    )
+
+    result = validate_import(fixture, run=_events_run())
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_events_type_counts_fail(tmp_path):
+    """Alpha 7: a wrong per-type tally is a clear type-count-mismatch failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"events": {"2026-06-01": {"types": {"hypopnea": 5}}}}
+    )
+
+    result = validate_import(fixture, run=_events_run())
+
+    assert not result.passed
+    assert any(
+        "expected.import.events.2026-06-01.types.hypopnea" in f
+        and "type count mismatch" in f
+        for f in result.failures
+    ), f"expected a type-count-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_events_ordered_list_pass(tmp_path):
+    """Alpha 7: an ordered event list matches the canonically sorted actual events.
+
+    The run emits its events out of chronological order; the comparator sorts the
+    actual events, so the chronologically listed expected events still match.
+    """
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "count": 2,
+                    "events": [
+                        {"type": "obstructive_apnea", "start": "2026-06-01T22:10:00", "duration_seconds": 12.0},
+                        {"type": "hypopnea", "start": "2026-06-01T23:15:00", "duration_seconds": 18.0},
+                    ],
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                events=[
+                    # Emitted later-first; the comparator must sort.
+                    _event("hypopnea", datetime(2026, 6, 1, 23, 15), 18.0),
+                    _event("obstructive_apnea", datetime(2026, 6, 1, 22, 10), 12.0),
+                ],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_events_list_length_mismatch_fail(tmp_path):
+    """Alpha 7: an event list length mismatch is a clear failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        {"type": "hypopnea", "start": "2026-06-01T23:15:00"}
+                    ]
+                }
+            }
+        },
+    )
+
+    result = validate_import(fixture, run=_events_run())  # run has 3 events
+
+    assert not result.passed
+    assert any(
+        "expected.import.events.2026-06-01.events" in f
+        and "event list length mismatch" in f
+        for f in result.failures
+    ), f"expected a length-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_events_type_in_list_mismatch_fail(tmp_path):
+    """Alpha 7: a per-event type mismatch in the ordered list is a clear failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        {"type": "clear_airway", "start": "2026-06-01T22:10:00", "duration_seconds": 12.0}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                events=[_event("obstructive_apnea", datetime(2026, 6, 1, 22, 10), 12.0)],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "events.2026-06-01.events[0].type" in f and "event type mismatch" in f
+        for f in result.failures
+    ), f"expected an event-type-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_events_start_mismatch_fail(tmp_path):
+    """Alpha 7: a start beyond the 1s tolerance is a clear start-mismatch failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        # 5 minutes off.
+                        {"type": "obstructive_apnea", "start": "2026-06-01T22:15:00", "duration_seconds": 12.0}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                events=[_event("obstructive_apnea", datetime(2026, 6, 1, 22, 10), 12.0)],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "events.2026-06-01.events[0].start" in f and "event start mismatch" in f
+        for f in result.failures
+    ), f"expected a start-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_events_start_within_tolerance_pass(tmp_path):
+    """Alpha 7: a sub-second start difference is within the 1s tolerance."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        {"type": "obstructive_apnea", "start": "2026-06-01T22:10:00.400000", "duration_seconds": 12.0}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                events=[_event("obstructive_apnea", datetime(2026, 6, 1, 22, 10), 12.0)],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_events_duration_mismatch_fail(tmp_path):
+    """Alpha 7: a duration beyond the 1s tolerance is a clear duration-mismatch failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        {"type": "obstructive_apnea", "start": "2026-06-01T22:10:00", "duration_seconds": 30.0}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                events=[_event("obstructive_apnea", datetime(2026, 6, 1, 22, 10), 12.0)],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "events.2026-06-01.events[0].duration_seconds" in f and "duration mismatch" in f
+        for f in result.failures
+    ), f"expected a duration-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_events_null_duration_pass(tmp_path):
+    """Alpha 7: expected null duration is satisfied by an actual None duration."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        {"type": "rera", "start": "2026-06-01T22:10:00", "duration_seconds": None}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01", events=[_event("rera", datetime(2026, 6, 1, 22, 10), None)]
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_events_invalid_timestamp_fail(tmp_path):
+    """Alpha 7: a malformed expected timestamp fails cleanly, never crashes."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [{"type": "hypopnea", "start": "not-a-timestamp"}]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01", events=[_event("hypopnea", datetime(2026, 6, 1, 22, 10), 12.0)]
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)  # must not raise
+
+    assert not result.passed
+    assert any(
+        "events.2026-06-01.events[0].start" in f and "invalid expected timestamp" in f
+        for f in result.failures
+    ), f"expected an invalid-timestamp failure, got {result.failures}"
+
+
+def test_validate_import_events_malformed_object_fail(tmp_path):
+    """Alpha 7: an expected event missing required keys is a clear malformed-object failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {"events": {"2026-06-01": {"events": [{"start": "2026-06-01T22:10:00"}]}}},
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01", events=[_event("hypopnea", datetime(2026, 6, 1, 22, 10), 12.0)]
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "events.2026-06-01.events[0]" in f and "malformed expected event object" in f
+        for f in result.failures
+    ), f"expected a malformed-object failure, got {result.failures}"
+
+
+def test_validate_import_events_missing_date_fail(tmp_path):
+    """Alpha 7: events for a date absent from the run is a failure, not a skip."""
+    fixture = _write_import_manifest(tmp_path, {"events": {"2026-06-09": {"count": 1}}})
+    run = _fake_run(sessions=[_fake_session("2026-06-01", events=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.events.2026-06-09" in f and "date not found" in f
+        for f in result.failures
+    ), f"expected a missing-date failure, got {result.failures}"
+
+
+def test_validate_import_events_tz_awareness_mismatch_fail(tmp_path):
+    """Alpha 7: a tz-aware expected start vs a naive actual event fails clearly."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "events": {
+                "2026-06-01": {
+                    "events": [
+                        {"type": "hypopnea", "start": "2026-06-01T22:10:00+00:00", "duration_seconds": 12.0}
+                    ]
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01", events=[_event("hypopnea", datetime(2026, 6, 1, 22, 10), 12.0)]
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)  # must not raise
+
+    assert not result.passed
+    assert any(
+        "events.2026-06-01.events[0].start" in f and "naive and timezone-aware" in f
+        for f in result.failures
+    ), f"expected a tz-awareness failure, got {result.failures}"
 
 
 # ---------------------------------------------------------------------------

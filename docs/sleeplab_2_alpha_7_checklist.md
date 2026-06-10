@@ -92,11 +92,21 @@ skipped, never faked). No routing or schema change. In priority order:
       gated:** the ResMed loader does not yet map `SettingsSnapshot` values, so
       against a real card only presence/count applies — wiring real values is the
       remaining loader step (not done here; no loader change in this milestone).
-- [ ] **Event count / type / timestamp parity.** Compare `session_events`
-      against an OSCAR reference, using OSCAR's event-type enum
-      (`0=Obstructive,1=Unclassified,2=Hypopnea,3=RERA,4=Clear Airway,
-      5=User-flagged`) and the v10 `central→unclassified` semantic correction as
-      the mapping target.
+- [x] **(done — against the normalized run; OSCAR-reference sourcing still
+      future)** **Event count / type / timestamp parity.**
+      `expected.import.events.<date>` compares total `count`, per-type `types`
+      tallies, and an ordered `events` list (type exact, start ±1s, optional
+      `duration_seconds` ±1s with `null`=`None`) against the normalized
+      `Session.events`, sorted canonically by `(start_time, event_type,
+      duration_seconds, source_event_key)`. Missing date, count/type/length
+      mismatch, malformed event, invalid timestamp, and naive-vs-tz-aware starts
+      are clear failures. Implemented in `importer/conformance.py`, covered in
+      `tests/test_conformance.py` via injected event-bearing runs. The comparator
+      is event-type-vocabulary-agnostic; aligning the normalized vocabulary to
+      OSCAR's enum (`0=Obstructive,1=Unclassified,2=Hypopnea,3=RERA,4=Clear
+      Airway,5=User-flagged`) and the v10 `central→unclassified` correction, and
+      sourcing the expected values directly from an OSCAR export, remain future
+      work (see OSCAR numeric parity below).
 - [ ] **OSCAR reference comparison** beyond the export hash: begin numeric/row
       parity against OSCAR `session_summaries` / `daily_summaries` values
       (per-night), gated on availability of a reference export.

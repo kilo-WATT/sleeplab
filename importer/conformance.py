@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,13 @@ _BLOCK_INTERVAL_TOLERANCE_SECONDS = 1
 #: spurious failure.
 _SETTINGS_FLOAT_TOLERANCE = 1e-6
 
+#: Default tolerances (seconds) for event parity. Event start boundaries and
+#: durations compare within one second, matching the loader plan's boundary
+#: default; both are kept as named constants so a format with coarser resolution
+#: can be tuned later without touching the comparators.
+_EVENT_BOUNDARY_TOLERANCE_SECONDS = 1
+_EVENT_DURATION_TOLERANCE_SECONDS = 1
+
 #: ``expected.import`` sub-blocks compared against a normalized ``ImportRun``
 #: (parse-observable). Their comparators need a run (injected or parsed); they do
 #: not need Postgres.
@@ -44,6 +52,7 @@ _PARSE_DEPENDENT_IMPORT_BLOCKS = (
     "session_blocks",
     "therapy_aggregates",
     "warnings",
+    "events",
 )
 
 #: ``expected.import`` sub-blocks compared against checked-in reference exports.
@@ -839,6 +848,197 @@ def _compare_settings_value_block(
             )
 
 
+def _compare_events(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
+    """Compare ``expected.import.events`` against a normalized run.
+
+    Per machine-local date, three independent checks (each optional):
+
+    * ``count`` — total ``len(Session.events)`` summed across that night.
+    * ``types`` — object of ``event_type → expected count``; each is compared
+      against the actual per-type tally (a type absent from the run counts as 0).
+    * ``events`` — an ordered list of expected events compared against the run's
+      events sorted canonically by ``(start_time, event_type, duration_seconds,
+      source_event_key)``. Each expected event is an object with ``type``,
+      ``start`` (ISO-like), and an optional ``duration_seconds`` (which may be
+      ``null`` to assert the actual duration is ``None``).
+
+    Start boundaries compare within :data:`_EVENT_BOUNDARY_TOLERANCE_SECONDS` and
+    durations within :data:`_EVENT_DURATION_TOLERANCE_SECONDS`; a naive-vs-aware
+    timestamp clash is a clear failure (no timezone conversion invented). Any
+    other per-date key is skipped, never silently passed.
+    """
+
+    failures: list[str] = []
+    skips: list[str] = []
+    by_date = _sessions_by_date(run)
+
+    for date_key, expected_dict in expected_block.items():
+        if date_key not in by_date:
+            failures.append(
+                f"expected.import.events.{date_key}: date not found in normalized output "
+                f"(present: {sorted(by_date)})"
+            )
+            continue
+        events = [ev for session in by_date[date_key] for ev in getattr(session, "events", [])]
+        if "count" in expected_dict:
+            _expect(
+                failures,
+                f"expected.import.events.{date_key}.count",
+                len(events),
+                expected_dict["count"],
+            )
+        if "types" in expected_dict:
+            _compare_event_type_counts(failures, date_key, events, expected_dict["types"])
+        if "events" in expected_dict:
+            _compare_event_list(failures, date_key, events, expected_dict["events"])
+        for key in sorted(set(expected_dict) - {"count", "types", "events"}):
+            skips.append(
+                f"expected.import.events.{date_key}.{key}: skipped — unsupported events key "
+                "(only 'count'/'types'/'events' are checked)"
+            )
+    return failures, skips
+
+
+def _compare_event_type_counts(
+    failures: list[str], date_key: str, events: list, expected_types: Any
+) -> None:
+    """Compare ``expected.import.events.<date>.types`` per-type tallies."""
+
+    base = f"expected.import.events.{date_key}.types"
+    if not isinstance(expected_types, dict):
+        failures.append(
+            f"{base}: unexpected shape — expected an object of type→count, "
+            f"got {type(expected_types).__name__}"
+        )
+        return
+    actual_counts = Counter(getattr(ev, "event_type", None) for ev in events)
+    for event_type, expected_count in expected_types.items():
+        actual_count = actual_counts.get(event_type, 0)
+        if actual_count != expected_count:
+            failures.append(
+                f"{base}.{event_type}: type count mismatch — expected {expected_count}, "
+                f"got {actual_count}"
+            )
+
+
+def _event_sort_key(event: Any) -> tuple:
+    """Canonical, ``None``-safe sort key for normalized events."""
+
+    duration = event.duration_seconds
+    return (
+        event.start_time,
+        event.event_type,
+        duration is None,  # None durations sort after present ones
+        duration if duration is not None else 0.0,
+        event.source_event_key,
+    )
+
+
+def _compare_event_list(
+    failures: list[str], date_key: str, events: list, expected_events: Any
+) -> None:
+    """Compare ``expected.import.events.<date>.events`` as an ordered list.
+
+    Actual events are sorted canonically; expected events are compared in the
+    order listed (list them chronologically to match). Every discrepancy is a
+    specific failure: a non-list value, a length mismatch, a malformed expected
+    event, an invalid timestamp, or a type/start/duration mismatch.
+    """
+
+    base = f"expected.import.events.{date_key}.events"
+    if not isinstance(expected_events, list):
+        failures.append(
+            f"{base}: unexpected shape — expected a list of event objects, "
+            f"got {type(expected_events).__name__}"
+        )
+        return
+    actual = sorted(events, key=_event_sort_key)
+    if len(expected_events) != len(actual):
+        failures.append(
+            f"{base}: event list length mismatch — expected {len(expected_events)}, "
+            f"got {len(actual)}"
+        )
+        return
+
+    for index, (expected_event, actual_event) in enumerate(zip(expected_events, actual)):
+        item = f"{base}[{index}]"
+        if not isinstance(expected_event, dict):
+            failures.append(
+                f"{item}: malformed expected event object — expected an object, "
+                f"got {type(expected_event).__name__}"
+            )
+            continue
+        missing = {"type", "start"} - set(expected_event)
+        if missing:
+            failures.append(
+                f"{item}: malformed expected event object — missing key(s) {sorted(missing)}"
+            )
+            continue
+        if expected_event["type"] != actual_event.event_type:
+            failures.append(
+                f"{item}.type: event type mismatch — expected {expected_event['type']!r}, "
+                f"got {actual_event.event_type!r}"
+            )
+        expected_start = _parse_expected_timestamp(failures, f"{item}.start", expected_event["start"])
+        if expected_start is not None:
+            _compare_event_boundary(
+                failures, f"{item}.start", actual_event.start_time, expected_start
+            )
+        if "duration_seconds" in expected_event:
+            _compare_event_duration(
+                failures,
+                f"{item}.duration_seconds",
+                actual_event.duration_seconds,
+                expected_event["duration_seconds"],
+            )
+
+
+def _compare_event_boundary(
+    failures: list[str], field: str, actual: datetime, expected: datetime
+) -> None:
+    """Append a specific failure if an event start differs beyond the event tolerance."""
+
+    delta = _boundary_delta_seconds(actual, expected)
+    if delta is None:
+        failures.append(
+            f"{field}: cannot compare naive and timezone-aware datetimes "
+            f"(actual={actual.isoformat()}, expected={expected.isoformat()})"
+        )
+    elif delta > _EVENT_BOUNDARY_TOLERANCE_SECONDS:
+        failures.append(
+            f"{field}: event start mismatch — expected {expected.isoformat()}, "
+            f"got {actual.isoformat()} (delta {delta:g}s > "
+            f"{_EVENT_BOUNDARY_TOLERANCE_SECONDS}s tolerance)"
+        )
+
+
+def _compare_event_duration(
+    failures: list[str], field: str, actual: Any, expected: Any
+) -> None:
+    """Compare an event duration with ``null``-aware, tolerance-based semantics.
+
+    Expected ``null`` asserts the actual duration is ``None``; a present number
+    requires the actual to be within :data:`_EVENT_DURATION_TOLERANCE_SECONDS`.
+    A non-numeric expected duration is itself a failure (malformed manifest).
+    """
+
+    if expected is None:
+        if actual is not None:
+            failures.append(f"{field}: expected null duration, got {actual!r}")
+        return
+    if isinstance(expected, bool) or not isinstance(expected, (int, float)):
+        failures.append(f"{field}: invalid expected duration {expected!r}")
+        return
+    if actual is None:
+        failures.append(f"{field}: duration mismatch — expected {expected!r}s, got None")
+        return
+    if abs(actual - expected) > _EVENT_DURATION_TOLERANCE_SECONDS:
+        failures.append(
+            f"{field}: duration mismatch — expected {expected!r}s, got {actual!r}s "
+            f"(tolerance {_EVENT_DURATION_TOLERANCE_SECONDS}s)"
+        )
+
+
 def _compare_oscar_reference(
     expected_block: dict, fixture_root: Path, run: Any
 ) -> tuple[list[str], list[str]]:
@@ -1007,6 +1207,7 @@ _IMPORT_BLOCK_COMPARATORS = {
     "session_blocks": _compare_session_blocks,
     "therapy_aggregates": _compare_therapy_aggregates,
     "settings": _compare_settings,
+    "events": _compare_events,
 }
 
 
