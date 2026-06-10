@@ -31,6 +31,9 @@ from importer.loaders.planning import CoverageSummary
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "conformance"
 DOCS_ROOT = Path(__file__).resolve().parent.parent / "docs"
+AIRSENSE10_FIXTURE = (
+    Path(__file__).resolve().parent / "conformance" / "fixtures" / "resmed_airsense10_001"
+)
 
 
 def _fake_session(
@@ -1734,6 +1737,41 @@ def test_validate_import_oscar_reference_hash_without_path_skips(tmp_path):
         "oscar_reference.export_hash" in s and "no reference file path" in s
         for s in result.skipped
     ), result.skipped
+
+
+def test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fixture():
+    """Phase 2: the committed AirSense 10 manifest pins its OSCAR export hash.
+
+    This is the **first committed-fixture-backed** ``expected.import`` coverage
+    (every other ``validate_import`` comparator is exercised injected-only — by a
+    ``_fake_run`` / a ``tmp_path`` manifest / synthetic DB rows). Here
+    ``validate_import`` reads the *committed* anonymized fixture's
+    ``expected.import.oscar_reference`` and verifies the sha256 of the *committed*
+    ``oscar_reference/summary.csv`` — parser-free.
+
+    A trivial run is injected so the check never depends on ``cpap-parser`` /
+    ``cpap-py`` or an expensive real multi-night parse: the hash check reads only
+    the committed manifest + committed reference file. This asserts **reference
+    file integrity**, NOT a capability-``validated`` claim; numeric parity stays a
+    skip. No PHI is exposed — the assertion is over a sha256 of a redistributable
+    export (plan §11).
+    """
+    manifest = json.loads((AIRSENSE10_FIXTURE / "manifest.json").read_text(encoding="utf-8"))
+    oscar_ref = manifest["expected"]["import"]["oscar_reference"]
+    assert oscar_ref["export_hash"].startswith("sha256:"), "fixture must pin a sha256 export hash"
+    assert oscar_ref["summary_csv"] == "oscar_reference/summary.csv"
+
+    # Inject a trivial run so no real parse is attempted; the oscar_reference hash
+    # check is parser-free and reads the committed file regardless.
+    result = validate_import(AIRSENSE10_FIXTURE, run=SimpleNamespace(warnings=[], sessions=[]))
+
+    assert result.passed, result.failures
+    # The hash was actually verified — a mismatch/missing file would be a failure,
+    # and the path-present branch means it was not skipped for "no reference file".
+    assert not any("oscar_reference" in f for f in result.failures), result.failures
+    assert not any("no reference file path" in s for s in result.skipped), result.skipped
+    # Numeric parity is explicitly deferred, never silently passed.
+    assert any("oscar_reference.parity" in s for s in result.skipped), result.skipped
 
 
 def test_validate_import_surfaces_unknown_import_block(tmp_path):
