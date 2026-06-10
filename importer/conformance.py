@@ -30,6 +30,12 @@ from importer.loaders import create_import_plan
 #: mask-interval resolution while still catching real boundary drift.
 _BLOCK_INTERVAL_TOLERANCE_SECONDS = 1
 
+#: Numeric tolerance for comparing floating-point settings values (e.g.
+#: ``minimum_pressure_cm_h2o``). Strings/bools compare exactly; numbers compare
+#: within this epsilon so a benign float-representation difference is not a
+#: spurious failure.
+_SETTINGS_FLOAT_TOLERANCE = 1e-6
+
 #: ``expected.import`` sub-blocks compared against a normalized ``ImportRun``
 #: (parse-observable). Their comparators need a run (injected or parsed); they do
 #: not need Postgres.
@@ -662,15 +668,24 @@ def _compare_therapy_aggregates(expected_block: dict, run: Any) -> tuple[list[st
 def _compare_settings(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
     """Compare ``expected.import.settings`` against a normalized run.
 
-    The ResMed cpap-parser loader does not map settings *values* into the
-    normalized ``Session`` yet, so only presence/count is observable. Supported
-    per-date keys:
+    Supported per-date keys:
 
     * ``snapshot_count`` — number of ``SettingsSnapshot``s for that date.
     * ``present`` — bool: whether any snapshot exists for that date.
+    * ``values`` — object of ``setting_name → expected value`` compared against the
+      selected snapshot's ``settings`` map (see :func:`_compare_settings_value_block`).
 
-    A per-date setting *value* key (e.g. ``therapy_mode``) is skipped with a clear
-    reason rather than silently passed — value comparison is a later plan step.
+    ``values`` is nested under its own key (rather than placing setting names
+    directly beside ``snapshot_count``/``present``) so a setting can never collide
+    with a reserved key. Any other per-date key is skipped with a clear reason
+    rather than silently passed.
+
+    Missing-vs-off semantics for ``values``: an expected ``null`` asserts the
+    setting is **missing** (absent from the snapshot, or present as ``None``); a
+    present non-``None`` value there is a failure. A non-``null`` expectation
+    requires the key to be present and non-``None``. "Missing" is never satisfied
+    by a fabricated ``0``/``false``/``off``, and ``0``/``false`` never count as
+    missing.
     """
 
     failures: list[str] = []
@@ -684,18 +699,144 @@ def _compare_settings(expected_block: dict, run: Any) -> tuple[list[str], list[s
                 f"(present: {sorted(by_date)})"
             )
             continue
-        snapshots = [snap for session in by_date[date_key] for snap in getattr(session, "settings", [])]
-        for key, expected_value in expected_dict.items():
-            if key == "snapshot_count":
-                _expect(failures, f"expected.import.settings.{date_key}.snapshot_count", len(snapshots), expected_value)
-            elif key == "present":
-                _expect(failures, f"expected.import.settings.{date_key}.present", bool(snapshots), expected_value)
-            else:
-                skips.append(
-                    f"expected.import.settings.{date_key}.{key}: skipped — settings value "
-                    "comparison not implemented yet (loader maps no settings snapshots)"
-                )
+        sessions = by_date[date_key]
+        snapshots = [snap for session in sessions for snap in getattr(session, "settings", [])]
+        if "snapshot_count" in expected_dict:
+            _expect(
+                failures,
+                f"expected.import.settings.{date_key}.snapshot_count",
+                len(snapshots),
+                expected_dict["snapshot_count"],
+            )
+        if "present" in expected_dict:
+            _expect(
+                failures,
+                f"expected.import.settings.{date_key}.present",
+                bool(snapshots),
+                expected_dict["present"],
+            )
+        if "values" in expected_dict:
+            _compare_settings_value_block(
+                failures, date_key, sessions, snapshots, expected_dict["values"]
+            )
+        for key in sorted(set(expected_dict) - {"snapshot_count", "present", "values"}):
+            skips.append(
+                f"expected.import.settings.{date_key}.{key}: skipped — unsupported settings "
+                "key (use 'values' for per-setting comparison)"
+            )
     return failures, skips
+
+
+def _select_settings_snapshot(sessions: list, snapshots: list) -> tuple[Any, str | None]:
+    """Pick the snapshot to compare ``values`` against; return ``(snapshot, error)``.
+
+    Deliberately simple (no production effective-settings semantics):
+
+    * exactly one snapshot → use it;
+    * several snapshots → the latest ``effective_at`` at or before the date's
+      earliest session start; if none qualifies (or awareness clashes), return a
+      clear ambiguous-snapshot error so the caller fails rather than guessing.
+
+    ``error`` is ``None`` on success; otherwise it is a human reason and the
+    snapshot is ``None``.
+    """
+
+    if len(snapshots) == 1:
+        return snapshots[0], None
+
+    session_start = min(
+        (s.start_time for s in sessions if getattr(s, "start_time", None) is not None),
+        default=None,
+    )
+    if session_start is None:
+        return None, (
+            "ambiguous settings snapshot: multiple snapshots and no session start "
+            "to disambiguate"
+        )
+
+    candidates = []
+    for snap in snapshots:
+        eff = getattr(snap, "effective_at", None)
+        if eff is None:
+            continue
+        if (eff.tzinfo is None) != (session_start.tzinfo is None):
+            return None, (
+                "ambiguous settings snapshot: cannot compare naive and timezone-aware "
+                "effective_at against the session start"
+            )
+        if eff <= session_start:
+            candidates.append(snap)
+    if not candidates:
+        return None, (
+            "ambiguous settings snapshot: no snapshot effective at or before the "
+            "session start"
+        )
+    return max(candidates, key=lambda s: s.effective_at), None
+
+
+def _settings_value_matches(actual: Any, expected: Any) -> bool:
+    """True when a normalized setting value matches an expected (non-``None``) value.
+
+    Booleans compare exactly and never coerce to/from ``int`` (``True`` ≠ ``1``);
+    numbers compare within :data:`_SETTINGS_FLOAT_TOLERANCE`; everything else
+    compares with ``==`` (strings exactly).
+    """
+
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        return isinstance(actual, bool) and isinstance(expected, bool) and actual == expected
+    if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+        return abs(actual - expected) <= _SETTINGS_FLOAT_TOLERANCE
+    return actual == expected
+
+
+def _compare_settings_value_block(
+    failures: list[str], date_key: str, sessions: list, snapshots: list, expected_values: Any
+) -> None:
+    """Compare ``expected.import.settings.<date>.values`` against the chosen snapshot.
+
+    Emits specific failures: a non-object ``values``, no snapshot to compare,
+    an ambiguous snapshot selection, a missing expected key, or a value mismatch
+    (including the missing-vs-off cases described on :func:`_compare_settings`).
+    """
+
+    base = f"expected.import.settings.{date_key}.values"
+    if not isinstance(expected_values, dict):
+        failures.append(
+            f"{base}: unexpected shape — expected an object of setting→value, "
+            f"got {type(expected_values).__name__}"
+        )
+        return
+    if not snapshots:
+        failures.append(
+            f"{base}: expected settings values but no settings snapshot was produced"
+        )
+        return
+    snapshot, error = _select_settings_snapshot(sessions, snapshots)
+    if error is not None:
+        failures.append(f"{base}: {error}")
+        return
+
+    actual_settings = getattr(snapshot, "settings", {}) or {}
+    for key, expected_value in expected_values.items():
+        field = f"{base}.{key}"
+        present = key in actual_settings
+        actual_value = actual_settings.get(key)
+        if expected_value is None:
+            # null = missing: absent or present-as-None passes; a real value fails.
+            if present and actual_value is not None:
+                failures.append(
+                    f"{field}: expected missing/null, got {actual_value!r}"
+                )
+            continue
+        if not present or actual_value is None:
+            failures.append(
+                f"{field}: missing expected key (expected {expected_value!r})"
+            )
+            continue
+        if not _settings_value_matches(actual_value, expected_value):
+            failures.append(
+                f"{field}: value mismatch — expected {expected_value!r}, got {actual_value!r}"
+            )
 
 
 def _compare_oscar_reference(

@@ -4,13 +4,14 @@ Status: **Steps 1–2 (parse-observable), the OSCAR reference-hash check, and
 Step 4 (DB identity hashes) implemented; OSCAR numeric parity still
 design-only.** The `validate_import` entry point, `ImportConformanceResult`, the
 parse-observable comparators for `warnings`, `session_blocks`,
-`therapy_aggregates`, and `settings` (count/presence), the `oscar_reference`
-export-hash verification, and the DB-gated `identity_hashes` checks (persisted
-session/block key-set hashes + counts, with duplicate/incremental stability
-proven by DB-gated tests) are built and tested. `session_blocks.intervals`
-start/end boundary comparison (±1s) is now implemented too. Remaining: OSCAR
-**numeric parity** (Step 3b) and settings-value comparison, which need
-loader/parser support.
+`therapy_aggregates`, and `settings` (count/presence **and** per-setting
+`values`), the `oscar_reference` export-hash verification, and the DB-gated
+`identity_hashes` checks (persisted session/block key-set hashes + counts, with
+duplicate/incremental stability proven by DB-gated tests) are built and tested.
+`session_blocks.intervals` start/end boundary comparison (±1s) is implemented
+too. Remaining: OSCAR **numeric parity** (Step 3b), and — until the ResMed loader
+maps `SettingsSnapshot`s — settings `values` only has effect against an injected
+run.
 
 This document expands the design note in
 `docs/sleeplab_2_alpha_6_checklist.md` §6 ("Import-level conformance path") into
@@ -140,12 +141,16 @@ A single new **optional** top-level block under `expected`, mirroring
   "import": {
     "settings": {
       "2026-06-01": {
-        "therapy_mode": "apap",
-        "minimum_pressure_cm_h2o": 4.0,
-        "maximum_pressure_cm_h2o": 15.0,
-        "ramp_mode": "auto",
-        "mask_type": "nasal",
-        "epr_level": null            // present-and-null = "missing", NOT off/0
+        "snapshot_count": 1,
+        "present": true,
+        "values": {                  // per-setting values, nested to avoid
+          "therapy_mode": "apap",    //   collision with reserved keys above
+          "minimum_pressure_cm_h2o": 4.0,
+          "maximum_pressure_cm_h2o": 15.0,
+          "ramp_mode": "auto",
+          "mask_type": "nasal",
+          "epr_level": null          // null = "missing" (absent or None), NOT off/0
+        }
       }
     },
     "session_blocks": {
@@ -203,7 +208,7 @@ is a subset; everything else is surfaced as a *skip*, never a silent pass:
 | `warnings` | `codes` (present), `absent` (forbidden) | any other key |
 | `session_blocks` | `block_count` per date; `intervals` start/end boundaries (±1s) | any other key |
 | `therapy_aggregates` | `usage_seconds`, `wall_clock_seconds`, `gap_seconds` (= wall-clock − usage), `block_count` | any non-observable field, or a field whose source `DerivedValue` is absent |
-| `settings` | `snapshot_count`, `present` | per-setting *value* keys (loader maps no settings snapshots yet) |
+| `settings` | `snapshot_count`, `present`, `values` (per-setting, null=missing) | a bare setting key placed outside `values` (→ skip) |
 | `identity_hashes` | `sessions`/`blocks` key-set hashes, `session_count`/`block_count` (needs `conn` + `machine_id`) | `machine`, `incremental_night` sub-keys |
 | `oscar_reference` | `export_hash` of the reference file | numeric `parity` vs OSCAR rows (Step 3b) |
 
@@ -218,18 +223,27 @@ plan's "Session boundaries" default tolerance. `therapy_aggregates` seconds are
 exact (they are integer second counts the native path already produces — see the
 `nightly_therapy_aggregates` assertion in
 `tests/test_resmed_import_regressions.py`, which expects `(8100, 9000, 900, 2)`).
-Settings values compare exactly; **missing is asserted as `null`/absent, never a
-fabricated `0`/`off`**.
+Settings `values` compare exactly for strings/bools and within `1e-6` for
+numbers (bools never coerce to/from `int`); **missing is asserted as
+`null`/absent, never a fabricated `0`/`off`**, and `0`/`false` never count as
+missing. When several `SettingsSnapshot`s exist for a date, the one compared is
+the latest `effective_at` at or before the date's earliest session start; if none
+qualifies the check fails with an ambiguous-snapshot message rather than guessing.
 
 ## 5. Which checks run without Postgres
 
 Parse-only, no database — these compare the **pre-persistence** `ImportRun`
 (implemented in Step 2 unless noted):
 
-- `settings` — **[implemented: count/presence]** `snapshot_count` and `present`
-  from `Session.settings`. Per-setting *value* comparison (with missing-≠-off) is
-  deferred because the ResMed cpap-parser loader maps no `SettingsSnapshot`s yet;
-  a value key is skipped, not faked.
+- `settings` — **[implemented: count/presence + values]** `snapshot_count` and
+  `present` from `Session.settings`, plus per-setting `values` compared against the
+  selected snapshot's `settings` map with explicit missing-≠-off semantics
+  (`null` = absent/`None`; strings/bools exact; numbers within `1e-6`). The
+  comparator is loader-agnostic, so it is exercised today by injecting a
+  `SettingsSnapshot`-bearing run; the ResMed cpap-parser loader does not yet map
+  `SettingsSnapshot`s, so against a real card `values` simply finds an empty
+  snapshot and fails/needs presence assertions rather than fabricating a pass. A
+  bare setting key placed outside `values` is skipped, not faked.
 - `session_blocks` — **[implemented: block_count + intervals]** summed
   `len(Session.blocks)` per machine-local date, plus `intervals` start/end
   boundary comparison against each `SessionBlock.start_time`/`end_time`. Actual

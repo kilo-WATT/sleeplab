@@ -940,8 +940,13 @@ def test_validate_import_settings_count_mismatch_fails(tmp_path):
     ), f"expected a snapshot_count failure, got {result.failures}"
 
 
-def test_validate_import_settings_value_key_is_skipped(tmp_path):
-    """Plan Step 2: a settings *value* key is deferred (loader maps no settings yet)."""
+def test_validate_import_settings_bare_value_key_is_skipped(tmp_path):
+    """Alpha 7: a bare setting key (not under ``values``) is skipped, not silently passed.
+
+    Per-setting comparison now lives under the nested ``values`` key, so a setting
+    name placed directly beside ``snapshot_count``/``present`` is an unsupported
+    key and is surfaced as a clear skip (never a fabricated pass).
+    """
     fixture = _write_import_manifest(
         tmp_path, {"settings": {"2026-06-01": {"therapy_mode": "apap"}}}
     )
@@ -949,13 +954,288 @@ def test_validate_import_settings_value_key_is_skipped(tmp_path):
 
     result = validate_import(fixture, run=run)
 
-    # Not a failure — value comparison is honestly skipped, not faked.
     assert result.passed, result.failures
     assert any(
         "expected.import.settings.2026-06-01.therapy_mode" in s
-        and "value comparison not implemented" in s
+        and "use 'values'" in s
         for s in result.skipped
-    ), f"expected a settings-value skip, got {result.skipped}"
+    ), f"expected a bare-setting-key skip, got {result.skipped}"
+
+
+def test_validate_import_settings_values_pass(tmp_path):
+    """Alpha 7: per-setting values under ``values`` compare against the snapshot."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "settings": {
+                "2026-06-01": {
+                    "snapshot_count": 1,
+                    "present": True,
+                    "values": {
+                        "therapy_mode": "apap",
+                        "minimum_pressure_cm_h2o": 4.0,
+                        "maximum_pressure_cm_h2o": 15.0,
+                        "epr_enabled": False,
+                    },
+                }
+            }
+        },
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                settings=[
+                    _settings_snapshot(
+                        therapy_mode="apap",
+                        minimum_pressure_cm_h2o=4.0,
+                        maximum_pressure_cm_h2o=15.0,
+                        epr_enabled=False,
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+    assert not any("expected.import.settings.2026-06-01.values" in s for s in result.skipped)
+
+
+def test_validate_import_settings_values_missing_key_fails(tmp_path):
+    """Alpha 7: an expected (non-null) key absent from the snapshot is a clear failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"ramp_mode": "auto"}}}}
+    )
+    run = _fake_run(
+        sessions=[_fake_session("2026-06-01", settings=[_settings_snapshot(therapy_mode="apap")])]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.values.ramp_mode" in f
+        and "missing expected key" in f
+        for f in result.failures
+    ), f"expected a missing-key failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_value_mismatch_fails(tmp_path):
+    """Alpha 7: a differing value is a clear value-mismatch failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"therapy_mode": "apap"}}}}
+    )
+    run = _fake_run(
+        sessions=[_fake_session("2026-06-01", settings=[_settings_snapshot(therapy_mode="cpap")])]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.values.therapy_mode" in f
+        and "value mismatch" in f
+        for f in result.failures
+    ), f"expected a value-mismatch failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_null_means_missing(tmp_path):
+    """Alpha 7: expected ``null`` is satisfied by an absent key or a present ``None``.
+
+    Pins the missing-vs-off semantics: ``null`` = missing. An absent key passes,
+    a present ``None`` passes, but a fabricated ``0``/``false``/``off`` fails.
+    """
+    # Absent key passes; present-None passes.
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"epr_level": None, "ramp_mode": None}}}}
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                # ramp_mode present-but-None; epr_level absent entirely.
+                settings=[_settings_snapshot(ramp_mode=None)],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_settings_values_null_rejects_fabricated_off(tmp_path):
+    """Alpha 7: expected ``null`` (missing) is NOT satisfied by a real ``0``/``off`` value."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"epr_level": None}}}}
+    )
+    run = _fake_run(
+        sessions=[_fake_session("2026-06-01", settings=[_settings_snapshot(epr_level=0)])]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.values.epr_level" in f
+        and "expected missing/null" in f
+        for f in result.failures
+    ), f"expected a missing/null failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_present_true_but_none_fails(tmp_path):
+    """Alpha 7: present=True with no snapshot is a clear failure (not faked)."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"present": True}}}
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", settings=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.present" in f for f in result.failures
+    ), f"expected a present failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_present_false_but_exists_fails(tmp_path):
+    """Alpha 7: present=False while a snapshot exists is a clear failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"present": False}}}
+    )
+    run = _fake_run(
+        sessions=[_fake_session("2026-06-01", settings=[_settings_snapshot(therapy_mode="apap")])]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.present" in f for f in result.failures
+    ), f"expected a present failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_no_snapshot_fails(tmp_path):
+    """Alpha 7: requesting ``values`` with no snapshot produced is a clear failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"therapy_mode": "apap"}}}}
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", settings=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.values" in f
+        and "no settings snapshot" in f
+        for f in result.failures
+    ), f"expected a no-snapshot failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_multiple_snapshots_resolve_latest(tmp_path):
+    """Alpha 7: with several snapshots, the latest effective_at ≤ session start wins.
+
+    The session starts at 22:00; two snapshots are effective at 20:00 and 21:30
+    (both ≤ start). The 21:30 snapshot is selected, so its therapy_mode is the one
+    compared.
+    """
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"therapy_mode": "apap"}}}}
+    )
+    early = SettingsSnapshot(
+        effective_at=datetime(2026, 6, 1, 20, 0),
+        settings={"therapy_mode": "cpap"},
+        source_names={},
+        source_file_ids=(),
+        confidence=Confidence.PROBABLE,
+    )
+    late = SettingsSnapshot(
+        effective_at=datetime(2026, 6, 1, 21, 30),
+        settings={"therapy_mode": "apap"},
+        source_names={},
+        source_file_ids=(),
+        confidence=Confidence.PROBABLE,
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", settings=[early, late])])
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_settings_values_ambiguous_snapshot_fails(tmp_path):
+    """Alpha 7: several snapshots with none effective at/before start fails clearly."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"therapy_mode": "apap"}}}}
+    )
+    # Both snapshots are effective AFTER the 22:00 session start, so none qualifies.
+    after_a = SettingsSnapshot(
+        effective_at=datetime(2026, 6, 1, 22, 30),
+        settings={"therapy_mode": "apap"},
+        source_names={},
+        source_file_ids=(),
+        confidence=Confidence.PROBABLE,
+    )
+    after_b = SettingsSnapshot(
+        effective_at=datetime(2026, 6, 1, 23, 0),
+        settings={"therapy_mode": "cpap"},
+        source_names={},
+        source_file_ids=(),
+        confidence=Confidence.PROBABLE,
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", settings=[after_a, after_b])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.values" in f
+        and "ambiguous settings snapshot" in f
+        for f in result.failures
+    ), f"expected an ambiguous-snapshot failure, got {result.failures}"
+
+
+def test_validate_import_settings_values_float_within_tolerance_pass(tmp_path):
+    """Alpha 7: a float value within 1e-6 passes."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"minimum_pressure_cm_h2o": 4.0}}}}
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01", settings=[_settings_snapshot(minimum_pressure_cm_h2o=4.0000001)]
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_settings_values_float_beyond_tolerance_fails(tmp_path):
+    """Alpha 7: a float value beyond 1e-6 is a clear value mismatch."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"values": {"minimum_pressure_cm_h2o": 4.0}}}}
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01", settings=[_settings_snapshot(minimum_pressure_cm_h2o=4.5)]
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.values.minimum_pressure_cm_h2o" in f
+        and "value mismatch" in f
+        for f in result.failures
+    ), f"expected a float value-mismatch failure, got {result.failures}"
 
 
 def test_validate_import_mixed_blocks_check_and_skip_together(tmp_path):

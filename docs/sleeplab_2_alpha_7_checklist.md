@@ -80,10 +80,18 @@ skipped, never faked). No routing or schema change. In priority order:
       deferred. (Alpha 6 §5 deferred item; OSCAR `session_slices` is the reference
       shape.) Implemented in `importer/conformance.py`; covered in
       `tests/test_conformance.py`.
-- [ ] **Settings values / missing-vs-off semantics.** Compare per-setting
-      normalized values where the loader maps them, asserting `None`/absent rather
-      than a fabricated `0`/`off`. (Blocked on the ResMed loader mapping
-      `SettingsSnapshot`s; assert presence + skip values until then.)
+- [x] **(done — comparator; loader mapping still pending)** **Settings values /
+      missing-vs-off semantics.** `expected.import.settings.<date>.values` compares
+      per-setting normalized values against the selected `SettingsSnapshot`:
+      strings/bools exact, numbers within `1e-6`, and `null` asserts *missing*
+      (absent or `None`) — never satisfied by a fabricated `0`/`false`/`off`, and
+      `0`/`false` never count as missing. Multiple snapshots resolve to the latest
+      `effective_at` at/before the session start, else fail with an
+      ambiguous-snapshot message. Implemented in `importer/conformance.py`, covered
+      in `tests/test_conformance.py` via injected snapshot-bearing runs. **Still
+      gated:** the ResMed loader does not yet map `SettingsSnapshot` values, so
+      against a real card only presence/count applies — wiring real values is the
+      remaining loader step (not done here; no loader change in this milestone).
 - [ ] **Event count / type / timestamp parity.** Compare `session_events`
       against an OSCAR reference, using OSCAR's event-type enum
       (`0=Obstructive,1=Unclassified,2=Hypopnea,3=RERA,4=Clear Airway,
