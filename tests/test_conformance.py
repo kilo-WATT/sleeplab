@@ -2,7 +2,9 @@
 
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import importer.conformance as conformance
 from importer.conformance import (
@@ -11,10 +13,70 @@ from importer.conformance import (
     validate_import,
     validate_manifest_metadata,
 )
+from importer.loaders.models import (
+    DerivedValue,
+    ImportWarning,
+    Session,
+    SessionBlock,
+    ValidationStatus,
+)
 from importer.loaders.planning import CoverageSummary
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "conformance"
 DOCS_ROOT = Path(__file__).resolve().parent.parent / "docs"
+
+
+def _fake_session(
+    machine_local_date,
+    *,
+    blocks=(),
+    settings=(),
+    derived=None,
+    warnings=(),
+):
+    """Build a normalized :class:`Session` for import-level comparison tests.
+
+    Real model objects (not mocks) so the comparators run against the same shapes
+    the ResMed loader produces, but without needing the parser or a real card.
+    """
+    session = Session(
+        source_session_key=f"resmed:SN-TEST:{machine_local_date}",
+        machine_key="SN-TEST",
+        start_time=datetime(2026, 6, 1, 22, 0),
+        end_time=datetime(2026, 6, 2, 6, 0),
+        machine_local_date=machine_local_date,
+        timezone_basis="machine_local",
+    )
+    session.blocks = list(blocks)
+    session.settings = list(settings)
+    session.warnings = list(warnings)
+    for key, (value, unit) in (derived or {}).items():
+        session.derived_values.append(
+            DerivedValue(
+                key=key,
+                value=value,
+                unit=unit,
+                method="test",
+                input_refs=(),
+                validation=ValidationStatus.PARTIAL,
+            )
+        )
+    return session
+
+
+def _fake_run(*, warnings=(), sessions=()):
+    """A duck-typed stand-in carrying only what the comparators read."""
+    return SimpleNamespace(warnings=list(warnings), sessions=list(sessions))
+
+
+def _block(start, end, kind="recording"):
+    return SessionBlock(
+        source_block_key=f"blk:{start.isoformat()}",
+        start_time=start,
+        end_time=end,
+        block_kind=kind,
+        source_file_ids=(),
+    )
 
 
 def test_synthetic_resmed_fixture_matches_manifest():
@@ -272,6 +334,93 @@ def test_validate_import_skips_clearly_when_no_parser_or_db(tmp_path):
     # The DB-dependent block skips specifically because there is no connection.
     db_skip = next(s for s in result.skipped if "identity_hashes" in s)
     assert "no database connection" in db_skip
+
+
+def _write_import_manifest(tmp_path, import_block):
+    """Copy the synthetic fixture and inject an ``expected.import`` block."""
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["import"] = import_block
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return fixture
+
+
+def test_validate_import_warnings_pass_when_codes_present(tmp_path):
+    """Plan Step 2: an injected run with the expected warning codes passes.
+
+    The warnings comparator reads run-level (and session-level) ``ImportWarning``
+    codes from a normalized ``ImportRun``. Injecting a run lets the real
+    comparison run without the parser or a database.
+    """
+    fixture = _write_import_manifest(
+        tmp_path, {"warnings": {"codes": ["resmed_summary_only_day", "resmed_waveform_absent"]}}
+    )
+    run = _fake_run(
+        warnings=[
+            ImportWarning(code="resmed_summary_only_day", severity="info", message="x"),
+            ImportWarning(code="resmed_waveform_absent", severity="warning", message="y"),
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+    assert result.failures == ()
+    # The warnings block was actually checked, so it is not in skipped.
+    assert not any("expected.import.warnings:" in s for s in result.skipped)
+
+
+def test_validate_import_warnings_fail_when_code_absent(tmp_path):
+    """Plan Step 2: a missing expected warning code is a real failure, not a skip."""
+    fixture = _write_import_manifest(
+        tmp_path, {"warnings": {"codes": ["resmed_summary_only_day", "resmed_waveform_absent"]}}
+    )
+    # Only one of the two expected codes is surfaced.
+    run = _fake_run(
+        warnings=[ImportWarning(code="resmed_summary_only_day", severity="info", message="x")]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.warnings.codes" in f and "resmed_waveform_absent" in f
+        for f in result.failures
+    ), f"expected a warnings.codes failure, got {result.failures}"
+
+
+def test_validate_import_warnings_collected_from_session_level(tmp_path):
+    """Plan Step 2: session-level warnings count toward the surfaced codes.
+
+    A loader that leaves a diagnostic only on ``session.warnings`` (not flushed to
+    the run) must still satisfy an expected code — the collector reads both.
+    """
+    fixture = _write_import_manifest(tmp_path, {"warnings": {"codes": ["resmed_summary_only_day"]}})
+    session = _fake_session(
+        "2026-06-01",
+        warnings=[ImportWarning(code="resmed_summary_only_day", severity="info", message="x")],
+    )
+    run = _fake_run(sessions=[session])
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_warnings_absent_check(tmp_path):
+    """Plan Step 2: ``warnings.absent`` fails when a forbidden code is present."""
+    fixture = _write_import_manifest(tmp_path, {"warnings": {"absent": ["resmed_waveform_absent"]}})
+    run = _fake_run(
+        warnings=[ImportWarning(code="resmed_waveform_absent", severity="warning", message="y")]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any("expected.import.warnings.absent" in f for f in result.failures)
 
 
 def test_validate_import_surfaces_unknown_import_block(tmp_path):

@@ -172,31 +172,44 @@ def validate_manifest_metadata(fixture_dir: str | Path) -> list[str]:
     return failures
 
 
-def validate_import(fixture_dir: str | Path, *, conn: Any = None) -> ImportConformanceResult:
-    """Import-level conformance entry point (plan Step 1 scaffold).
+def validate_import(
+    fixture_dir: str | Path, *, conn: Any = None, run: Any = None
+) -> ImportConformanceResult:
+    """Import-level conformance entry point.
 
     Sibling of :func:`validate_fixture`, kept separate so the planning-only
-    harness stays dependency-free. This scaffold reads the optional
-    ``expected.import`` manifest block and applies the dependency/Postgres gating
-    from ``docs/sleeplab_2_import_level_conformance_plan.md`` (§2, §6–§9). It does
-    **not** parse CPAP payloads or touch the database yet: every present
-    sub-block is reported as a clearly-reasoned *skip*, never a silent pass and
-    never a crash. The real comparisons land in later plan steps.
+    harness stays dependency-free. It reads the optional ``expected.import``
+    manifest block and compares it against a normalized
+    :class:`~importer.loaders.models.ImportRun` (parse-observable checks) and,
+    when a connection is supplied, persisted database state (DB checks). The
+    dependency/Postgres gating follows
+    ``docs/sleeplab_2_import_level_conformance_plan.md`` (§2, §5–§9).
+
+    A check is run only when its inputs are genuinely available; otherwise it is
+    recorded as a clearly-reasoned *skip*. Nothing is ever silently passed, and
+    the function never crashes on a missing parser/connection.
 
     Behavior:
 
     * No ``expected.import`` block → ``passed=True``, ``failures=()``, a single
       ``skipped`` reason. Fully backward compatible.
-    * ``expected.import`` present → each recognized sub-block is gated and
-      skipped (parser/``conn`` unavailable, or "not implemented yet"); an
-      unrecognized sub-block is surfaced as a skip too, so a typo is visible.
+    * Parse-observable blocks run against ``run`` when one is available — either
+      injected via ``run=`` or parsed from the fixture source when
+      ``cpap-parser``/``cpap-py`` are installed. When no run can be obtained the
+      block is skipped with the acquisition reason.
+    * DB blocks run only when ``conn`` is supplied; otherwise they skip with
+      ``"no database connection"``.
+    * An unrecognized sub-block is surfaced as a skip so a manifest typo is
+      visible.
 
     Args:
         fixture_dir: Fixture root containing ``manifest.json`` (same shape as
             :func:`validate_fixture`).
-        conn: Optional open ``psycopg2`` connection for the (future) DB-backed
-            identity-hash checks. ``None`` (the default) skips all DB checks; no
-            database is required to call this function.
+        conn: Optional open ``psycopg2`` connection for DB-backed checks. ``None``
+            (the default) skips all DB checks; no database is required.
+        run: Optional pre-computed normalized ``ImportRun`` to compare against. If
+            omitted, one is parsed from the fixture source when the parser is
+            installed; otherwise parse-observable checks are skipped.
     """
 
     root = Path(fixture_dir)
@@ -214,20 +227,27 @@ def validate_import(fixture_dir: str | Path, *, conn: Any = None) -> ImportConfo
 
     failures: list[str] = []
     skipped: list[str] = []
-    parser_available = _import_parser_available()
+
+    # Acquire the normalized run once, up front, so every parse-observable block
+    # shares one acquisition reason when it is unavailable.
+    run, run_reason = _acquire_import_run(root, manifest, run)
 
     for block in _PARSE_DEPENDENT_IMPORT_BLOCKS:
         if block not in import_expected:
             continue
-        if not parser_available:
-            skipped.append(
-                f"expected.import.{block}: skipped — cpap-parser/cpap-py not installed"
-            )
-        else:
+        comparator = _IMPORT_BLOCK_COMPARATORS.get(block)
+        if comparator is None:
             skipped.append(
                 f"expected.import.{block}: skipped — import-level check not implemented "
-                "yet (plan Step 1 scaffold)"
+                "yet (later plan step)"
             )
+            continue
+        if run is None:
+            skipped.append(f"expected.import.{block}: skipped — {run_reason}")
+            continue
+        block_failures, block_skips = comparator(import_expected[block], run)
+        failures.extend(block_failures)
+        skipped.extend(block_skips)
 
     for block in _DB_DEPENDENT_IMPORT_BLOCKS:
         if block not in import_expected:
@@ -238,8 +258,8 @@ def validate_import(fixture_dir: str | Path, *, conn: Any = None) -> ImportConfo
             )
         else:
             skipped.append(
-                f"expected.import.{block}: skipped — import-level check not implemented "
-                "yet (plan Step 1 scaffold)"
+                f"expected.import.{block}: skipped — persisted check not implemented "
+                "yet (later plan step)"
             )
 
     # An unrecognized sub-block has no checker; surface it as a skip (not a
@@ -256,6 +276,103 @@ def validate_import(fixture_dir: str | Path, *, conn: Any = None) -> ImportConfo
         failures=tuple(failures),
         skipped=tuple(skipped),
     )
+
+
+def _acquire_import_run(root: Path, manifest: dict, run: Any) -> tuple[Any, str]:
+    """Return ``(run, reason)`` for the parse-observable comparisons.
+
+    Preference order, matching the plan's gating:
+
+    1. an explicitly injected ``run`` (used as-is — this is how tests exercise the
+       comparison logic without the parser);
+    2. a run parsed from the fixture source, when ``cpap-parser``/``cpap-py`` are
+       installed;
+    3. otherwise ``None`` with a human reason, so each block skips cleanly.
+
+    Parsing real cards is fragile, so a parse failure is caught and turned into a
+    skip reason rather than crashing conformance.
+    """
+
+    if run is not None:
+        return run, "injected run provided"
+    if not _import_parser_available():
+        return None, "cpap-parser/cpap-py not installed"
+    try:
+        from importer.loaders.models import ImportOptions
+        from importer.loaders.resmed_native import ResMedNativeLoader
+
+        source_root = root / manifest.get("source_directory", "source")
+        loader = ResMedNativeLoader()
+        detected = loader.detect(source_root)
+        if not detected:
+            return None, "no ResMed device detected in fixture source"
+        parsed, _directory = loader.import_data_with_directory(detected[0], ImportOptions())
+        return parsed, "parsed from fixture source"
+    except Exception as exc:  # noqa: BLE001 — parsing real cards must never crash conformance
+        return None, f"could not parse fixture source ({type(exc).__name__})"
+
+
+def _run_warning_codes(run: Any) -> set[str]:
+    """Collect structured warning codes from a normalized ``ImportRun``.
+
+    Gathers run-level warnings and each session's warnings. The ResMed loader
+    flushes session warnings up to the run level, but reading both makes the
+    collector robust to loaders that do not.
+    """
+
+    codes: set[str] = set()
+    for warning in getattr(run, "warnings", []) or []:
+        code = getattr(warning, "code", None)
+        if code:
+            codes.add(code)
+    for session in getattr(run, "sessions", []) or []:
+        for warning in getattr(session, "warnings", []) or []:
+            code = getattr(warning, "code", None)
+            if code:
+                codes.add(code)
+    return codes
+
+
+def _compare_warnings(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
+    """Compare ``expected.import.warnings`` against a normalized run.
+
+    Supported keys:
+
+    * ``codes`` — each listed code must be surfaced by the run.
+    * ``absent`` — each listed code must *not* be surfaced.
+
+    Any other key is reported as a skip (no silent pass for an unsupported key).
+    """
+
+    failures: list[str] = []
+    skips: list[str] = []
+    present = _run_warning_codes(run)
+
+    for code in expected_block.get("codes", []):
+        if code not in present:
+            failures.append(
+                f"expected.import.warnings.codes: expected {code!r} present, "
+                f"got {sorted(present)}"
+            )
+    for code in expected_block.get("absent", []):
+        if code in present:
+            failures.append(
+                f"expected.import.warnings.absent: {code!r} should be absent but was present"
+            )
+    for key in sorted(set(expected_block) - {"codes", "absent"}):
+        skips.append(
+            f"expected.import.warnings.{key}: skipped — unsupported warnings key "
+            "(only 'codes'/'absent' are checked)"
+        )
+    return failures, skips
+
+
+#: Dispatch table of implemented parse-observable comparators. A block listed in
+#: :data:`_PARSE_DEPENDENT_IMPORT_BLOCKS` but absent here skips as
+#: "not implemented yet". Each comparator returns ``(failures, skips)``.
+_IMPORT_BLOCK_COMPARATORS = {
+    "warnings": _compare_warnings,
+}
 
 
 def _import_parser_available() -> bool:
