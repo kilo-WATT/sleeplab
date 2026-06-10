@@ -118,6 +118,23 @@ Items:
       `tests/test_resmed_import_regressions.py`. The four ResMed waveform tiers
       are now diagnosable: summary-only night, detailed-without-BRP, detailed
       event-window waveform, and (future) full-night storage.
+- [x] **(done)** Absence diagnostics are now *persisted and visible*, not only
+      in-memory. `_build_session` flushes each night's `session.warnings` to the
+      run-level list, so the cpap-parser execution path serializes them
+      (`execution._warning_dict` -> `finish_import_run`) into
+      `import_runs.warnings` (JSONB, migration 023) and they surface through the
+      existing import-history API (`api/routers/imports.py:list_import_runs`).
+      Structured fields (code/severity/affects/relative_path) are retained — not
+      collapsed to a string — and `finish_import_run` dedupes identical entries
+      so repeated ghost/waveform-absent nights collapse to one. Tested in
+      `tests/test_resmed_import_regressions.py`.
+- [ ] **(open gap)** `signal_channels.validation_status` is not yet downgraded
+      from these absence warnings (e.g. a waveform-absent night still leaves
+      channel validation at `partial`). Wiring warning severity into per-channel
+      validation is the smallest sensible next diagnostics step. (Note: this
+      persistence path is the cpap-parser execution route, which stays opt-in
+      behind `SLEEPLAB_USE_CPAP_PARSER`; the legacy native subprocess persists
+      its own `run_stats["warnings"]` separately.)
 
 ### 5. Conformance manifest expansion
 Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:

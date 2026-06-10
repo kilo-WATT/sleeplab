@@ -358,6 +358,14 @@ class ResMedNativeLoader(LoaderAdapter):
                         affects=("waveforms",),
                     )
                 )
+        # Surface this night's diagnostics at the run level so they are persisted
+        # into ``import_runs.warnings`` (via ``execution._warning_dict`` ->
+        # ``finish_import_run``) and shown in import history — not only carried on
+        # the in-memory ``session.warnings``. ``finish_import_run`` dedupes
+        # identical entries, so repeated summary-only/waveform-absent nights
+        # collapse to one diagnostic. Severity is unchanged here, so a non-error
+        # warning still does not force the run partial.
+        run_warnings.extend(session.warnings)
         return session
 
     @staticmethod

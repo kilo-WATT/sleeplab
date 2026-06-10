@@ -2,6 +2,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from api.therapy_score import compute_therapy_score
@@ -634,6 +635,110 @@ def test_detailed_night_with_brp_waveform_has_no_absence_diagnostic():
 
     assert "resmed_waveform_absent" not in {w.code for w in session.warnings}
     assert ResMedNativeLoader._has_high_rate_waveform(session.waveforms)
+
+
+def test_build_session_flushes_absence_warnings_to_run_level():
+    """Alpha 6: session absence warnings reach the run-level list for persistence.
+
+    ``_build_session`` carries diagnostics on ``session.warnings``, but only the
+    *run-level* ``run.warnings`` is serialized into ``import_runs.warnings`` (via
+    ``execution._warning_dict`` -> ``finish_import_run``) and shown in import
+    history. This pins that both ``resmed_summary_only_day`` and
+    ``resmed_waveform_absent`` are flushed into the shared ``run_warnings`` list
+    so they survive past the in-memory ``ImportRun``.
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    loader = ResMedNativeLoader()
+    run_warnings = []
+
+    # Ghost night: no detailed DATALOG -> summary-only diagnostic.
+    ghost = SimpleNamespace(
+        date=date(2026, 6, 2),
+        has_detailed_data=False,
+        summary_reported_usage=7.5,
+        computed_usage=None,
+        recording_span=None,
+        ahi=3.1,
+    )
+    loader._build_session(
+        ghost, detailed=[], machine_key="SN-TEST", include_waveforms=True, run_warnings=run_warnings
+    )
+
+    # Detailed night with PLD data but no BRP waveform -> waveform-absent.
+    loader._build_session(
+        _waveform_summary(),
+        detailed=[_detailed_session(flow_rate=[], set_pressure=[10.0, 11.0])],
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=run_warnings,
+    )
+
+    codes = {w.code for w in run_warnings}
+    assert "resmed_summary_only_day" in codes
+    assert "resmed_waveform_absent" in codes
+    # Proof 4: non-error warnings do not force the import to fail/partial.
+    # (``import_data`` escalates status only when a warning has severity "error".)
+    assert not any(w.severity == "error" for w in run_warnings)
+
+
+def test_run_warnings_persist_as_structured_diagnostics():
+    """Alpha 6: persisted diagnostics keep code/severity/affects/path, not a string.
+
+    Drives the exact serialization the cpap-parser execution path uses —
+    ``execution._warning_dict`` then ``db._dedupe_diagnostics`` — and asserts the
+    structured fields survive (proof 3) and that repeated identical night
+    warnings collapse to a single entry rather than flooding import history.
+    """
+    from importer.db import _dedupe_diagnostics
+    from importer.loaders.execution import _warning_dict
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    loader = ResMedNativeLoader()
+    run_warnings = []
+    # Two ghost nights produce the *same* summary-only diagnostic; one detailed
+    # night without BRP produces the waveform-absent diagnostic.
+    for day in (date(2026, 6, 2), date(2026, 6, 3)):
+        loader._build_session(
+            SimpleNamespace(
+                date=day,
+                has_detailed_data=False,
+                summary_reported_usage=7.5,
+                computed_usage=None,
+                recording_span=None,
+                ahi=3.1,
+            ),
+            detailed=[],
+            machine_key="SN-TEST",
+            include_waveforms=True,
+            run_warnings=run_warnings,
+        )
+    loader._build_session(
+        _waveform_summary(),
+        detailed=[_detailed_session(flow_rate=[], set_pressure=[10.0, 11.0])],
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=run_warnings,
+    )
+
+    persisted = _dedupe_diagnostics([_warning_dict(w) for w in run_warnings])
+
+    by_code = {d["code"]: d for d in persisted}
+    # Duplicate ghost-night warnings collapsed to one; waveform-absent retained.
+    assert sorted(by_code) == ["resmed_summary_only_day", "resmed_waveform_absent"]
+    assert len(persisted) == 2
+
+    waveform = by_code["resmed_waveform_absent"]
+    # Structured fields, not a flattened string.
+    assert waveform["severity"] == "warning"
+    assert waveform["affects"] == ["waveforms"]
+    assert waveform["relative_path"] == "DATALOG"
+    assert isinstance(waveform["message"], str) and waveform["message"]
+
+    summary_only = by_code["resmed_summary_only_day"]
+    assert summary_only["severity"] == "info"
+    assert summary_only["affects"] == ["sessions", "summary_only_days"]
+    assert summary_only["relative_path"] == "STR.edf"
 
 
 def test_dedupe_events_preserves_zero_duration_arousal():
