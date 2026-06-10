@@ -1,11 +1,15 @@
 # SleepLab 2.0 Import-Level Conformance Plan
 
-Status: **Steps 1–2 implemented (parse-observable checks); DB/OSCAR checks
-still design-only.** The `validate_import` entry point, `ImportConformanceResult`,
-and the parse-observable comparators for `warnings`, `session_blocks`,
-`therapy_aggregates`, and `settings` (count/presence) are built and unit-tested
-against an injected `ImportRun`. The DB (`identity_hashes`) and `oscar_reference`
-comparisons (Steps 3–6) are not built yet and skip cleanly.
+Status: **Steps 1–2 (parse-observable), the OSCAR reference-hash check, and
+Step 4 (DB identity hashes) implemented; OSCAR numeric parity still
+design-only.** The `validate_import` entry point, `ImportConformanceResult`, the
+parse-observable comparators for `warnings`, `session_blocks`,
+`therapy_aggregates`, and `settings` (count/presence), the `oscar_reference`
+export-hash verification, and the DB-gated `identity_hashes` checks (persisted
+session/block key-set hashes + counts, with duplicate/incremental stability
+proven by DB-gated tests) are built and tested. Remaining: OSCAR **numeric
+parity** (Step 3b) and settings-value / interval-boundary comparison, which need
+loader/parser support.
 
 This document expands the design note in
 `docs/sleeplab_2_alpha_6_checklist.md` §6 ("Import-level conformance path") into
@@ -191,8 +195,7 @@ checks it can (gating in §4–§8). Naming follows the brief's
 #### Implemented vs deferred sub-keys (current state)
 
 The shape above is the full target. What `validate_import` actually checks today
-(Steps 1–2) is a subset; everything else is surfaced as a *skip*, never a silent
-pass:
+is a subset; everything else is surfaced as a *skip*, never a silent pass:
 
 | Sub-block | Checked now | Deferred (→ skip) |
 |---|---|---|
@@ -200,8 +203,8 @@ pass:
 | `session_blocks` | `block_count` per date | `intervals` / boundary start-end |
 | `therapy_aggregates` | `usage_seconds`, `wall_clock_seconds`, `gap_seconds` (= wall-clock − usage), `block_count` | any non-observable field, or a field whose source `DerivedValue` is absent |
 | `settings` | `snapshot_count`, `present` | per-setting *value* keys (loader maps no settings snapshots yet) |
-| `identity_hashes` | — | all (needs `conn`; Step 4) |
-| `oscar_reference` | — | all (Step 3) |
+| `identity_hashes` | `sessions`/`blocks` key-set hashes, `session_count`/`block_count` (needs `conn` + `machine_id`) | `machine`, `incremental_night` sub-keys |
+| `oscar_reference` | `export_hash` of the reference file | numeric `parity` vs OSCAR rows (Step 3b) |
 
 A requested date absent from the normalized run is a **failure** (not a skip):
 the run claims data the manifest expects and none was produced.
@@ -395,8 +398,10 @@ comparators, exercised by injecting a normalized `ImportRun`; the next step
 
 ## Implementation sequence
 
-Each step is a small PR. **Steps 0–2 are landed**; step 3 (OSCAR reference) is
-the next in-scope work, then the DB-gated steps 4–5.
+Each step is a small PR. **Steps 0–2, the Step 3 OSCAR hash check, and the
+DB-gated Steps 4–5 are landed.** Remaining: Step 3b (OSCAR numeric parity),
+loader-dependent settings-value / interval-boundary comparison, and the Step 6
+CLI wiring.
 
 0. **[DONE] Design.** This document; checklist §6 points here. (The original
    boundary test asserting `validate_import` did not exist was replaced when
@@ -421,12 +426,18 @@ the next in-scope work, then the DB-gated steps 4–5.
    settings values) and unobservable/absent fields are skipped, not faked, and a
    missing requested date is a real failure. The auto-parse acquisition path is
    `cpap-parser`/`cpap-py`-gated.
-3. **OSCAR reference check.** `oscar_reference` hash + CSV comparison, backed by
-   the committed anonymized AirSense 10 fixture's existing `oscar_reference/`.
-4. **Identity-hash checks (DB).** `identity_hashes` for a single import, gated on
-   the `db`/`test_user` fixtures; transaction rolled back.
-5. **Duplicate + incremental checks (DB).** Reuse the idempotency tests'
-   patterns; assert hash stability and incremental-night non-mutation.
+3. **[DONE: hash; parity deferred] OSCAR reference check.** `oscar_reference`
+   export-hash verification is implemented (`_compare_oscar_reference`): a
+   declared reference file whose sha256 mismatches (or is missing) is a failure.
+   Numeric CSV parity vs the parsed run (Step 3b) is still deferred and skipped.
+4. **[DONE] Identity-hash checks (DB).** `identity_hashes` for a persisted
+   machine via the read-only `persisted_identity_snapshot(conn, machine_id)`
+   primitive (`sessions`/`blocks` key-set hashes + counts), gated on `conn` +
+   `machine_id`; `db`/`test_user` tests roll back.
+5. **[DONE] Duplicate + incremental checks (DB).** DB-gated tests in
+   `tests/test_conformance.py` assert duplicate-import snapshot stability and
+   incremental-night non-mutation (first night's id/keys unchanged, only the new
+   night added), reusing the idempotency persistence pattern.
 6. **Wire into the conformance CLI** (`python -m importer.conformance --import …`
    or a sibling subcommand) and document in the data-architecture "Conformance
    fixtures" section.

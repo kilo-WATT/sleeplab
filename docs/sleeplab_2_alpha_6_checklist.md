@@ -202,14 +202,20 @@ Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:
       (`usage_seconds`/`wall_clock_seconds`/`gap_seconds`/`block_count`) derived
       from the normalized run's usage `DerivedValue`s + block list; an absent
       source value is skipped, never faked. (Commit `8d8ac6e`.)
-- [ ] **(import-level, DB)** duplicate-import stable hashes (persisted UUID sets
-      unchanged on re-import) — `expected.import.identity_hashes`, Step 4; skips
-      cleanly without `conn`.
-- [ ] **(import-level, DB)** incremental nights (adding a newer night leaves
-      existing identities unchanged) — Step 5.
-- [ ] **(import-level)** OSCAR references (version/commit + export hashes) as
-      first-class manifest fields, required before a capability may claim
-      `validated` — Step 3.
+- [x] **(import-level, DB)** duplicate-import stable hashes. `validate_import`
+      checks `expected.import.identity_hashes` (`sessions`/`blocks` key-set
+      sha256 + counts) via the read-only `persisted_identity_snapshot(conn,
+      machine_id)`; a DB-gated test asserts a duplicate re-import yields an
+      identical snapshot. Skips cleanly without `conn`/`machine_id`. (Commit
+      `d388598`.)
+- [x] **(import-level, DB)** incremental nights. A DB-gated test asserts adding a
+      newer night leaves the first night's session id and source keys unchanged
+      and adds only the new night (counts +1). (Commit `d388598`.)
+- [~] **(import-level, partial)** OSCAR references. `validate_import` verifies the
+      `expected.import.oscar_reference.export_hash` (sha256 of the committed,
+      anonymized reference file; mismatch/missing → failure). The version/commit
+      metadata fields and numeric CSV parity remain deferred (Step 3b). (Commit
+      `2778759`.)
 
 **Observability boundary.** Two distinct entry points now exist (see §6 and
 `docs/sleeplab_2_import_level_conformance_plan.md`):
