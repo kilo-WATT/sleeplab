@@ -303,6 +303,12 @@ intentional, documented limitation — not a hidden bug or a silent gap.
   a general dependency graph over derived values.
 - The source manifest records filenames; deployments must treat import
   diagnostics as private health data.
+- Device clocks are not corrected: sessions carry only a `timezone_basis` label,
+  not an offset/DST/drift correction, so a wrong device clock, travel, DST, or
+  clock drift can mis-date a night. A future non-destructive, machine-scoped,
+  reversible correction model (inspired by OSCAR v17 `device_time_corrections`)
+  is sketched in `docs/sleeplab_2_device_time_correction_design.md` — design only,
+  no migration in Alpha 7.
 
 ## Next milestone
 

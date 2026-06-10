@@ -136,14 +136,19 @@ skipped, never faked). No routing or schema change. In priority order:
       (Review §8; Alpha 6 §2 decision.)
 
 ### 5. Device-time-correction design note (documentation only)
-- [ ] Capture, as a design note (no migration, no table, no production code), the
-      shape implied by OSCAR's v17 `device_time_corrections`: a per-machine,
+- [x] **(done — design note only, no migration/schema/code)** Captured the shape
+      implied by OSCAR's v17 `device_time_corrections` as a dedicated design note,
+      `docs/sleeplab_2_device_time_correction_design.md`: a per-machine,
       date-ranged, **typed** (`timezone|travel|dst|reset|offset|drift`),
       **reversible** (`applied_at`/`undone_at`) correction record using either a
       constant `offset_ms` or a linear drift model (`corrected = c0_ms + c1·t`),
-      layered **non-destructively** over raw device timestamps. Relate it to
-      SleepLab's current `timezone_basis` string on `Session`/`Capabilities`.
-      (Review §10.)
+      layered **non-destructively** over raw device timestamps, related to
+      SleepLab's current `timezone_basis` string on `Session`/`Capabilities`. The
+      note records the problem (wrong clock/travel/DST/reset/drift), the OSCAR v17
+      reference, SleepLab requirements (machine-scoped, import-run provenance,
+      source timestamps retained, corrected times derived, audited/reversible, UI
+      explains corrected-vs-source), explicit Alpha 7 non-goals, and future
+      stop-and-ask implementation gates. (Review §10.)
 
 ### 6. Lowenstein read-only conformance (prep only)
 - [ ] Keep the first Lowenstein **read-only** normalized fixture comparison
