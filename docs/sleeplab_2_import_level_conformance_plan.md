@@ -1,0 +1,413 @@
+# SleepLab 2.0 Import-Level Conformance Plan
+
+Status: **design / planning only — not implemented in this milestone.**
+
+This document expands the design note in
+`docs/sleeplab_2_alpha_6_checklist.md` §6 ("Import-level conformance path") into
+a concrete API, manifest, and gating design. It is the next major Alpha 6 item.
+Nothing here builds a DB-backed conformance runner yet; it defines the contract
+so the *first* implementation step can be small, reviewable, and dependency-free.
+
+It complements — does **not** replace — the planning-only harness in
+`importer/conformance.py` (`validate_fixture`). That harness stays exactly as it
+is: it runs `create_import_plan` and compares file-derived inspection results
+against a checked-in `manifest.json`. The import-level path is a *second*,
+separately-gated entry point.
+
+## 1. Why a second entry point is needed
+
+The current harness is **planning/inspection-only**. `validate_fixture` runs
+`importer.loaders.create_import_plan`, whose `CoverageSummary` is derived from
+file inventory and directory structure (`first_date`, `last_date`,
+`therapy_days`, `estimated_session_blocks`, `waveform_files`, `event_files`,
+`oximetry_files`, `settings_files`). It never decodes an EDF payload and never
+writes a database row.
+
+That boundary is pinned by
+`tests/test_conformance.py::test_conformance_coverage_cannot_observe_therapy_aggregates`,
+which asserts that parsed/aggregate semantics (usage, wall-clock span, gap,
+mask-on intervals, therapy mode) are **not** observable fields.
+
+So the following checklist §5 items marked **(import-level)** cannot be honestly
+validated today, and must not be faked with file-count proxies:
+
+- persisted **settings** *values* (mode, pressures, EPR, ramp, humidification,
+  mask) with "missing ≠ off";
+- **interval boundaries** (session-block start/end, mask-on/off);
+- **therapy aggregates** (usage / wall-clock span / gap per machine-local date);
+- **duplicate-import** stable identity hashes (persisted UUID sets unchanged on
+  re-import);
+- **incremental nights** (a newer night leaves existing identities unchanged);
+- **OSCAR parity** as a first-class, hash-pinned reference.
+
+These require a real parse (for values/boundaries/aggregates) and a real persist
+(for identity hashes). That is the import-level conformance path.
+
+## 2. Entry point
+
+### Name
+
+```python
+validate_import(fixture_dir, *, conn=None) -> ImportConformanceResult
+```
+
+`validate_import` is the chosen name (the brief's example). It mirrors the
+existing `validate_fixture` so the two read as siblings: same module
+(`importer/conformance.py`), same `Path`-or-str fixture argument, same
+"compare normalized output against the manifest" shape, same dataclass result
+style (`ConformanceResult` → `ImportConformanceResult`).
+
+It is **separate** from `validate_fixture` on purpose:
+
+- `validate_fixture` stays dependency-free (no `cpap-parser`, no Postgres) so the
+  default CI suite is always green and fast.
+- `validate_import` is allowed to require heavier, optional dependencies, and
+  degrades to *skips*, never hard failures, when they are absent (§9).
+
+### What it does, in order
+
+1. Read `manifest.json`; if there is no `expected.import` block, return a result
+   with `skipped=("no expected.import block",)` and `passed=True` — fully
+   backward compatible (the same pattern as the optional `expected.diagnostics`
+   block in `validate_fixture`).
+2. Run the loader's `import_data_with_directory(detected, options)` on the
+   fixture source to obtain the normalized `ImportRun` (and the raw
+   `CPAPDirectory`). This needs `cpap-parser` / `cpap-py`; absent → skip the
+   parse-dependent sub-checks.
+3. Compare the **pre-persistence** `ImportRun` against the parse-only blocks
+   (`settings`, `blocks`, `aggregates`, `warnings`). No database needed.
+4. If `conn` is provided, persist via `persist_import_run` into a throwaway
+   transaction, then compare **post-persistence** database state
+   (`identity_hashes`, and the duplicate/incremental idempotency checks). Roll
+   the transaction back at the end — `validate_import` is read-only with respect
+   to durable state.
+5. If an `oscar_reference` block is present, compare normalized output against
+   the checked-in OSCAR export and assert the reference's version/hash matches
+   the manifest.
+
+### Result shape
+
+```python
+@dataclass(frozen=True)
+class ImportConformanceResult:
+    fixture_id: str
+    passed: bool
+    failures: tuple[str, ...]   # real discrepancies — a non-empty tuple fails
+    skipped: tuple[str, ...]    # gated-out checks, each with a human reason
+```
+
+A *skip* is never a *failure*. A run with `failures == ()` is `passed=True` even
+if every check was skipped (e.g. no `cpap-parser` installed). The CLI/test layer
+surfaces `skipped` reasons so a green-but-skipped run is visibly distinct from a
+green-and-checked one.
+
+## 3. What it compares (three-to-four layers)
+
+Per the loader-and-conformance plan's "Conformance compares three layers", with
+a fourth optional cross-check:
+
+| Layer | Source | Needs |
+|---|---|---|
+| Normalized **pre-persistence** | `ImportRun` from `import_data_with_directory` | `cpap-parser` |
+| Persisted **post-import** DB state | rows written by `persist_import_run` | `cpap-parser` + Postgres |
+| Optional **OSCAR reference** | checked-in `oscar_reference/*.csv` + manifest hash | reference files only |
+| Optional **cpap-parser raw** | `CPAPDirectory` before normalization | `cpap-parser` |
+
+The fourth (raw `cpap-parser` output) is where SleepLab's normalization is
+distinguished from the upstream parser — useful for catching a regression where
+the loader, not the parser, drops or mislabels a value. It is optional and only
+populated where a manifest cares.
+
+## 4. Manifest: the `expected.import` block
+
+A single new **optional** top-level block under `expected`, mirroring
+`expected.diagnostics`. Fixtures without it are unaffected (backward compatible).
+
+```jsonc
+"expected": {
+  "import": {
+    "settings": {
+      "2026-06-01": {
+        "therapy_mode": "apap",
+        "minimum_pressure_cm_h2o": 4.0,
+        "maximum_pressure_cm_h2o": 15.0,
+        "ramp_mode": "auto",
+        "mask_type": "nasal",
+        "epr_level": null            // present-and-null = "missing", NOT off/0
+      }
+    },
+    "session_blocks": {
+      "2026-06-01": {
+        "block_count": 2,
+        "intervals": [
+          {"start": "2026-06-01T22:00:00", "end": "2026-06-01T23:00:00"},
+          {"start": "2026-06-01T23:15:00", "end": "2026-06-02T00:30:00"}
+        ]
+      }
+    },
+    "therapy_aggregates": {
+      "2026-06-01": {
+        "usage_seconds": 8100,
+        "wall_clock_seconds": 9000,
+        "gap_seconds": 900,
+        "block_count": 2
+      }
+    },
+    "warnings": {
+      "codes": ["resmed_summary_only_day", "resmed_waveform_absent"]
+    },
+    "identity_hashes": {
+      "algorithm": "sha256",
+      "machine": "…",               // hash of stable identity tuple, see §11
+      "sessions": "…",              // hash of sorted source_session_key set
+      "blocks": "…",
+      "incremental_night": {
+        "add_date": "2026-06-02",
+        "unchanged": ["machine", "sessions", "blocks"]
+      }
+    },
+    "oscar_reference": {
+      "oscar_version": "1.5.1",
+      "oscar_commit": "…",
+      "export_hash": "sha256:…",
+      "summary_csv": "oscar_reference/summary.csv"
+    }
+  }
+}
+```
+
+Every sub-block is independently optional. A manifest may assert only
+`therapy_aggregates`, only `settings`, etc. Each present sub-block runs only the
+checks it can (gating in §4–§8). Naming follows the brief's
+`expected.import.{settings,session_blocks,therapy_aggregates,warnings,identity_hashes,oscar_reference}`.
+
+### Tolerances
+
+Boundaries (`session_blocks.intervals`) compare to within **one source sample
+interval** unless the format reports coarser resolution, matching the loader
+plan's "Session boundaries" default tolerance. `therapy_aggregates` seconds are
+exact (they are integer second counts the native path already produces — see the
+`nightly_therapy_aggregates` assertion in
+`tests/test_resmed_import_regressions.py`, which expects `(8100, 9000, 900, 2)`).
+Settings values compare exactly; **missing is asserted as `null`/absent, never a
+fabricated `0`/`off`**.
+
+## 5. Which checks run without Postgres
+
+Parse-only, no database — these compare the **pre-persistence** `ImportRun`:
+
+- `settings` — `Session.settings` / `SettingsSnapshot.settings` values, with
+  missing-≠-off.
+- `session_blocks` — `Session.blocks` start/end and block count
+  (`SessionBlock.start_time` / `end_time`).
+- `therapy_aggregates` — usage / span / gap, recomputed from the normalized
+  `Session.blocks` and the loader's three usage `DerivedValue`s
+  (`summary_reported_usage_hours`, `computed_usage_hours`,
+  `recording_span_hours`). The semantics already exist in the loader and in
+  `persist._session_duration_seconds`; the import-level check recomputes the
+  triple from normalized output rather than reading
+  `nightly_therapy_aggregates`.
+- `warnings.codes` — run-level `ImportRun.warnings` codes (this is where the
+  *import-time* codes `resmed_summary_only_day` / `resmed_waveform_absent` become
+  observable — they are invisible to the planning-only harness, which is why
+  `validate_fixture` can only see *detection/planning* diagnostics).
+- `oscar_reference` — comparison against checked-in CSVs and the manifest
+  hash assertion. No DB; needs only the reference files (and a parse to produce
+  the normalized side).
+
+These still require `cpap-parser`/`cpap-py` to do the parse (§6); they just do
+not require Postgres.
+
+## 6. Which checks require cpap-py / cpap-parser
+
+**All of `validate_import`'s payload checks** require a parse, so all of
+§5 and §7 depend on `cpap-parser` + its `cpap-py` EDF backend being installed.
+The dependency is gated exactly like the existing conformance suite:
+
+```python
+pytest.importorskip("cpap_parser", reason="cpap-parser not installed; see requirements.txt pin")
+pytest.importorskip("cpap_py", reason="cpap-py EDF backend not installed")
+```
+
+(mirroring `tests/conformance/test_resmed_airsense10.py` and
+`tests/conformance/conftest.py`). When absent, `validate_import` records a skip
+reason and returns `passed=True` with the parse-dependent checks listed in
+`skipped`. The manifest-metadata-only checks (`validate_manifest_metadata`) and
+`validate_fixture` remain fully runnable without the parser, unchanged.
+
+## 7. Which checks require Postgres
+
+The **post-persistence** checks, because they read rows written by
+`persist_import_run`:
+
+- `identity_hashes.{machine,sessions,blocks}` — hash the persisted stable
+  identity sets after one import.
+- `identity_hashes` **duplicate** check — import twice, assert the hashes are
+  unchanged (no new machine/session/block rows; stable `source_session_key`s).
+  This reuses the idempotency already proven by
+  `tests/test_resmed_import_regressions.py::test_upsert_session_reimport_is_idempotent`
+  and `…::test_resmed_str_persistence_is_duplicate_safe_and_incremental`.
+- `identity_hashes.incremental_night` — import night A, snapshot hashes, import
+  night A+B, assert A's identities are unchanged and only B's are new.
+
+Postgres is gated through the existing `db` / `test_user` fixtures
+(`tests/conftest.py`), which `pytest.skip` when no `TEST_DATABASE_URL` is
+configured. `validate_import(conn=None)` simply skips all DB checks; the
+`conn`-bearing form is only exercised by a `db`-gated test. The transaction is
+always rolled back — conformance never commits durable rows.
+
+## 8. Which checks require private / restricted fixtures
+
+**None are required.** The design is explicitly satisfiable with committed
+synthetic fixtures (§9 reporting makes the gaps visible rather than failing).
+
+- Restricted fixtures (a real anonymized AirSense card) give *stronger* evidence
+  for `oscar_reference` parity and realistic multi-night `identity_hashes`, but
+  they are **optional** and live as manifest-only entries retrieved by hash in an
+  authorized job (per the data-architecture "Conformance fixtures" section).
+- The committed `tests/conformance/fixtures/resmed_airsense10_001/` anonymized
+  fixture (serial replaced, timestamps shifted) already carries an
+  `oscar_reference/` and is redistributable; it can back the `oscar_reference`
+  and aggregate checks without any private data.
+
+No PHI, real serials, or raw cards are ever committed — see §11.
+
+## 9. Which checks use synthetic committed fixtures, and how skips report
+
+The smallest first target is the **synthetic** fixture
+`fixtures/conformance/synthetic-resmed-minimal/`. It has one therapy day, an
+`STR.edf`, one PLD, and event files — enough to assert a minimal
+`therapy_aggregates`/`session_blocks`/`settings` block once the parse runs.
+
+Skip reporting rules (so a gated check never masquerades as a pass **or** a
+fail):
+
+- No `expected.import` block → `skipped=("no expected.import block",)`,
+  `passed=True`.
+- `cpap-parser`/`cpap-py` absent → each parse-dependent sub-check appended to
+  `skipped` with the dependency reason; `passed` reflects only real failures
+  (none, if nothing could be checked).
+- `conn is None` → DB sub-checks appended to `skipped` with
+  `"no database connection"`.
+- `oscar_reference` present but reference file missing/hash-mismatched → this is
+  a **failure**, not a skip (a declared reference that cannot be verified is a
+  real problem).
+
+The CLI prints `{fixture_id, passed, failures, skipped}` so a reviewer sees
+`passed: true, skipped: [...]` distinctly from `passed: true, skipped: []`.
+
+## 10. Duplicate and incremental import checks
+
+Both are DB-gated (`conn` required) and reuse the existing idempotency machinery:
+
+**Duplicate:** persist the same `ImportRun` twice in one rolled-back
+transaction. Assert:
+
+- machine/session/block row counts are identical after the second persist;
+- the set of persisted `source_session_key`s (and their derived identity hashes)
+  is byte-for-byte unchanged;
+- summary values are *updated in place*, not duplicated (the dedup key is the
+  partial unique index `uq_sessions_machine_source_key` on
+  `(machine_id, source_session_key)`).
+
+This is the persisted-UUID-stability property the data-architecture doc calls
+"Duplicate verification compares stable persisted UUID sets".
+
+**Incremental:** persist night A, snapshot the identity hashes; then persist a
+superset (A + a newer night B). Assert A's machine/session/block identities are
+unchanged and only B's rows are added. The manifest's
+`identity_hashes.incremental_night.add_date` names B; `unchanged` lists which
+identity sets must match the pre-B snapshot.
+
+For synthetic fixtures, "night B" can be a second committed synthetic day or a
+test-constructed `ImportRun` — no private/expanded card is needed.
+
+## 11. How expected hashes avoid exposing PHI or serials
+
+The manifest stores **hashes of stable keys**, never the keys themselves, and
+the keys are already pseudonymized before they reach a hash:
+
+- **Serials** are never hashed raw. Identity hashing uses the *fixture
+  pseudonym* (`MachineIdentity.serial_number` after anonymization — e.g.
+  `SN-FIXTURE-AirSense10-001`), so the hash is reproducible from the committed
+  fixture and reveals nothing about a real device.
+- **Session/block identity** hashes are computed over the normalized
+  `source_session_key`s (`resmed:{machine_key}:{date}`) — derived, non-PHI
+  strings — sorted and joined, then `sha256`. A hash is one-way; even the
+  pseudonymous inputs are not recoverable from the manifest.
+- **Timestamps** in a restricted fixture are already shifted by the anonymizer
+  (`anonymization.timestamp_shift_days`), so any date that enters a hash is on
+  the shifted calendar, not a real therapy date.
+- The manifest records `identity_hashes.algorithm` so a hash scheme change is
+  explicit and versioned.
+- `validate_manifest_metadata` already enforces `anonymization.reviewed: true`
+  and a redistribution policy; the import-level block adds no new PHI surface —
+  it only adds *hashes of already-anonymized derived keys*.
+
+Net: a committed manifest contains stable hashes + pseudonymous expected values,
+and committing it leaks no serial, no patient identifier, and no real date.
+
+## 12. Smallest first implementation step
+
+**Docs + one dependency-free test. No `validate_import` code, no DB, no parser
+requirement.** Concretely, the first PR is *this* document plus:
+
+1. A test that pins the planning-only boundary the design rests on: assert
+   `importer.conformance` does **not** yet expose `validate_import`, so the
+   "design-only, not built" claim cannot silently drift. (Added in this change
+   as `test_validate_import_entrypoint_is_design_only` — see §"First PR".)
+2. A test (or extension of the existing manifest-metadata validation) asserting
+   that an `expected.import` block, *when present*, is shaped as documented and
+   that its absence is tolerated — exercised against a tiny in-test manifest, no
+   real source. This pins backward compatibility before any consumer exists.
+
+This keeps the first change a checklist/doc update plus a narrow test, exactly
+the cadence the Alpha 6 kickoff prescribes.
+
+## Implementation sequence (proposed — do not build beyond step 1 yet)
+
+Each step is a small PR; only **step 0** (this design + the boundary test) is in
+scope right now.
+
+0. **Design + boundary test (this PR).** This document; checklist §6 points here;
+   a test pinning that `validate_import` does not yet exist and that
+   `expected.import` is optional/backward-compatible.
+1. **`ImportConformanceResult` + `validate_import` skeleton.** Returns
+   `passed=True` with everything in `skipped` when no `expected.import` block /
+   no parser / no `conn`. Parse-free, DB-free. Unit-tested against the synthetic
+   fixture's existing (block-less) manifest — proves backward compatibility.
+2. **Parse-only checks.** `settings`, `session_blocks`, `therapy_aggregates`,
+   `warnings.codes` against the normalized `ImportRun`. Gated on
+   `importorskip("cpap_parser")`. Add a minimal `expected.import` block to the
+   synthetic fixture (or a copy) and one positive + one negative test.
+3. **OSCAR reference check.** `oscar_reference` hash + CSV comparison, backed by
+   the committed anonymized AirSense 10 fixture's existing `oscar_reference/`.
+4. **Identity-hash checks (DB).** `identity_hashes` for a single import, gated on
+   the `db`/`test_user` fixtures; transaction rolled back.
+5. **Duplicate + incremental checks (DB).** Reuse the idempotency tests'
+   patterns; assert hash stability and incremental-night non-mutation.
+6. **Wire into the conformance CLI** (`python -m importer.conformance --import …`
+   or a sibling subcommand) and document in the data-architecture "Conformance
+   fixtures" section.
+
+Acceptance: an adapter may claim a capability `validated` only when its
+fixture's `expected.import` checks pass *and* its `oscar_reference` is present
+and hash-verified — tying this path to the loader plan's "Acceptance gates" and
+the roadmap's "before a capability may claim `validated`".
+
+## Cross-references
+
+- `docs/sleeplab_2_alpha_6_checklist.md` §5 (manifest expansion, import-level
+  items) and §6 (the design note this expands).
+- `docs/sleeplab_2_loader_and_conformance_plan.md` — "Conformance testing
+  strategy" (layers, session boundaries, settings, duplicate imports, acceptance
+  gates) and the `ImportRun`/`Session`/`SettingsSnapshot` contract.
+- `docs/sleeplab_2_data_architecture.md` — "Conformance fixtures" (manifest
+  fields, restricted-fixture handling) and "Next milestone".
+- `importer/conformance.py` — the planning-only `validate_fixture` this sits
+  beside.
+- `importer/loaders/resmed_native.py` (`import_data_with_directory`) and
+  `importer/loaders/persist.py` (`persist_import_run`) — the parse and persist
+  entry points `validate_import` drives.
+- `tests/test_resmed_import_regressions.py` — the idempotency/aggregate tests
+  whose patterns the DB-gated checks reuse.

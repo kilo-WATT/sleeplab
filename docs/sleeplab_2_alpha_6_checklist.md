@@ -212,6 +212,12 @@ introduced.
 
 ### 6. Import-level conformance path (design note — not yet built)
 
+> **Full design:** `docs/sleeplab_2_import_level_conformance_plan.md` expands
+> this note into the concrete `validate_import` API, the `expected.import`
+> manifest block, dependency/Postgres/fixture gating, duplicate & incremental
+> checks, PHI-safe hashing, and a step-by-step implementation sequence. The
+> summary below is the at-a-glance version; the plan doc is authoritative.
+
 The §5 items marked **(import-level)** need a conformance layer that does not
 exist yet. The current `importer.conformance` harness validates a *plan*
 (`create_import_plan`, file-derived) and never decodes payloads or writes the

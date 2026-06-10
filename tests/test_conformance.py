@@ -4,10 +4,12 @@ import json
 import shutil
 from pathlib import Path
 
+import importer.conformance as conformance
 from importer.conformance import validate_fixture, validate_manifest_metadata
 from importer.loaders.planning import CoverageSummary
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "conformance"
+DOCS_ROOT = Path(__file__).resolve().parent.parent / "docs"
 
 
 def test_synthetic_resmed_fixture_matches_manifest():
@@ -177,6 +179,74 @@ def test_unknown_coverage_field_reports_failure_not_crash(tmp_path):
         failure.startswith("coverage.waveform_file:") and "unknown coverage field" in failure
         for failure in result.failures
     ), f"expected an unknown-coverage-field failure, got {result.failures}"
+
+
+def test_validate_import_entrypoint_is_design_only():
+    """Alpha 6 §6: ``validate_import`` is designed but NOT yet implemented.
+
+    The import-level conformance path
+    (``docs/sleeplab_2_import_level_conformance_plan.md``) is design-only this
+    milestone — building it touches parsing and the database and is an explicit
+    stop-and-ask change. Pin that ``importer.conformance`` still exposes only the
+    planning-only ``validate_fixture`` so the "not built yet" claim cannot
+    silently drift into a half-built entry point. When step 1 of the plan lands,
+    this test is the one that should be deliberately updated.
+    """
+    assert hasattr(conformance, "validate_fixture")
+    assert not hasattr(conformance, "validate_import"), (
+        "validate_import appears implemented; update the import-level conformance "
+        "design doc/checklist §6 to reflect that it is no longer design-only."
+    )
+
+
+def test_import_level_conformance_design_doc_is_linked():
+    """Alpha 6 §6: the checklist points at the import-level conformance plan.
+
+    Validates the documentation assumption that the design lives in a dedicated
+    plan doc and that the checklist references it, so the two cannot drift apart.
+    Doc/checklist-only — no parser, DB, or fixture data.
+    """
+    plan = DOCS_ROOT / "sleeplab_2_import_level_conformance_plan.md"
+    assert plan.is_file(), "import-level conformance design doc is missing"
+
+    checklist = (DOCS_ROOT / "sleeplab_2_alpha_6_checklist.md").read_text(encoding="utf-8")
+    assert "sleeplab_2_import_level_conformance_plan.md" in checklist, (
+        "Alpha 6 checklist §6 must link the import-level conformance design doc"
+    )
+
+    # The plan must answer the entry-point and manifest-block design questions.
+    plan_text = plan.read_text(encoding="utf-8")
+    assert "validate_import" in plan_text
+    assert "expected.import" in plan_text
+
+
+def test_expected_import_block_is_optional_and_absent_today(tmp_path):
+    """Alpha 6 §6: ``expected.import`` is optional; no committed fixture uses it.
+
+    The planning-only ``validate_fixture`` must keep passing whether or not an
+    ``expected.import`` block is present (backward compatibility for the future
+    import-level path). The synthetic fixture ships none today; adding one must
+    not change ``validate_fixture``'s verdict, since that harness does not
+    consume it.
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+
+    # No committed synthetic fixture carries the (future) import-level block yet.
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    assert "import" not in manifest["expected"], "fixture must stay import-block-free"
+    assert validate_fixture(src).passed
+
+    # Adding an import block is inert for the planning-only harness.
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+    manifest_path = fixture / "manifest.json"
+    manifest["expected"]["import"] = {
+        "therapy_aggregates": {"2026-06-01": {"usage_seconds": 600}}
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    assert validate_fixture(fixture).passed, (
+        "an expected.import block must not affect the planning-only harness"
+    )
 
 
 def test_oximetry_files_coverage_is_observable_and_checked(tmp_path):
