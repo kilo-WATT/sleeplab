@@ -122,7 +122,12 @@ skipped, never faked). No routing or schema change. In priority order:
       archive hash + export hash; no OSCAR source/export committed unless safely
       anonymized). **Not implemented** — `oscar_reference.parity` still skips with
       a clear reason until a redistributable reference export and a normalized run
-      are both available.
+      are both available. **Phase 2 update:** the export-**hash** half is now
+      *committed-fixture-backed* — the anonymized AirSense 10 fixture
+      (`tests/conformance/fixtures/resmed_airsense10_001/manifest.json`) pins
+      `expected.import.oscar_reference.export_hash` for its committed
+      `oscar_reference/summary.csv`, verified parser-free by `validate_import`
+      (`tests/test_conformance.py`). Numeric `parity` is unchanged (still skips).
 - [ ] **Weighted / time-based summaries.** Where ResMed PLD data already exists,
       exercise time-weighted summary conformance — OSCAR's
       `session_channel_values` (value → count + `time_ms`) is the precedent for
@@ -213,3 +218,55 @@ waveform segment/BLOB design notes). The open items are OSCAR **numeric parity**
 implementation (designed but not built), weighted/time-based summaries, and
 Lowenstein read-only conformance — none of which requires a migration, routing
 change, or new tag.
+
+## Phase 2 status (fixture-backed validation)
+
+Phase 2 moves import-level conformance from "comparators implemented with
+injected normalized `ImportRun` tests" toward "committed safe fixtures assert
+`expected.import` behavior where loader/fixture evidence honestly supports it."
+It is **started, not complete**, and broadens no production behavior.
+
+**Readiness audit result:** Alpha 7 is **coherent and milestone-ready** from a
+docs/conformance standpoint. All audited docs correctly keep event-window
+waveform storage as the production default, frame future waveform work as a
+compressed segment/BLOB design investigation, and keep Lowenstein persistence,
+the ResMed `cpap-parser` cutover, full-night/compressed waveform storage, and
+device-time-correction implementation blocked/deferred. The implemented
+`validate_import` comparators match the conformance plan. No OSCAR source,
+archive, raw card, real serial, or PHI is committed. Tests pass.
+
+**`v2.0.0-alpha.7` was NOT tagged in this session.** The milestone conditions
+are met (clean tree, passing tests, latest tag still `v2.0.0-alpha.6`), but
+cutting and pushing a public annotated tag is an outward-facing, hard-to-reverse
+action, and the tag remains an explicit *stop-and-ask* item (this checklist's
+"Explicit no-go", `AGENTS.md`). Tagging is deferred until explicitly authorized.
+
+**Fixture inventory:** `docs/sleeplab_2_fixture_validation_matrix.md` records,
+per committed fixture, exactly what is fixture-backed vs injected-only.
+
+**Fixture-backed coverage that exists:**
+
+- Planning-level on the synthetic fixture (`validate_fixture`): detection,
+  identity, capabilities, file-count coverage, planning diagnostics, and
+  waveform-absence detection.
+- Real-card (anonymized AirSense 10): serial identity and signal channel
+  inventory (pure-Python, normal suite); AHI / computed-usage / ghost-night
+  parity vs the committed OSCAR export (`cpap-py`-gated).
+- **New this phase:** `expected.import.oscar_reference.export_hash` is now
+  committed-fixture-backed on the AirSense 10 fixture and verified parser-free by
+  `validate_import` — the first committed `expected.import` coverage.
+
+**Still injected-only** (no committed fixture drives them): the `warnings`,
+`session_blocks` (count + intervals), `therapy_aggregates`, `settings`
+(count/present/values), `events`, and `identity_hashes` comparators — exercised
+by injected runs, `tmp_path` manifests, or synthetic DB rows.
+
+**Tooling:** `summarize_import_blocks(fixture_dir, result)` labels each requested
+`expected.import` block passed/skipped/failed so a green-and-checked block reads
+distinctly from a green-but-gated one (read-only; no production behavior).
+
+**Remaining blocked/deferred (unchanged):** OSCAR numeric parity,
+weighted/time-based summaries, the `settings.values` loader mapping (no loader
+constructs a `SettingsSnapshot` yet — comparator stays injected-only), Lowenstein
+persistence, ResMed parser cutover, full-night/compressed-segment waveform
+storage, and device-time-correction implementation.

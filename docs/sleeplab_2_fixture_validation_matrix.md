@@ -119,14 +119,15 @@ anonymized reference CSVs in fixture #2.
 | events (AHI parity) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ahi_matches_oscar_summary` vs `oscar_reference/summary.csv`, detailed nights, abs=0.05 |
 | therapy aggregates (computed usage) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_computed_usage_matches_oscar_for_detailed_nights` vs OSCAR total time, abs=0.1 h |
 | summary-only / ghost nights | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ghost_nights_flagged_not_deleted` (kept + `has_detailed_data is False`) |
-| OSCAR reference (export hash) | **not yet** | reference CSV committed but no `export_hash` pinned; not run through `validate_import` |
+| OSCAR reference (export hash) | **fixture-backed (Phase 2)** | manifest now pins `expected.import.oscar_reference.export_hash` for the committed `oscar_reference/summary.csv`; verified parser-free by `validate_import` in `test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fixture` |
 | `expected.import` (warnings / session_blocks / settings / events / therapy_aggregates / identity_hashes) | **not committed** | manifest has no `expected.import`; non-standard schema |
 | settings values | **cannot — loader gap** | ResMed loader maps no `SettingsSnapshot` (see §3) |
 | DB identity hashes | **not via this fixture** | exercised only by synthetic DB-row tests |
 
-- **Cannot validate yet:** anything through `validate_import` (no `expected.import`,
-  non-standard manifest); OSCAR export-hash integrity (no committed hash);
-  per-setting values (loader gap); persisted DB identity hashes for this card.
+- **Cannot validate yet:** the parse-dependent `expected.import` comparators for
+  this card (no `session_blocks`/`settings`/`events`/`therapy_aggregates` block,
+  non-standard manifest); per-setting values (loader gap); persisted DB identity
+  hashes for this card. *(OSCAR export-hash integrity is now pinned — see below.)*
 - **Privacy concerns / unknowns:** anonymized real card. Do **not** expose real
   values; do **not** overwrite the data files. Safe, already-committed summary
   facts (from `README.md`/`oscar_reference`): 40 summary nights, 3 detailed
@@ -134,12 +135,13 @@ anonymized reference CSVs in fixture #2.
   `SN-FIXTURE-AirSense10-001`. The `manifest.json` `nights_included: 5` vs 3
   on-disk detailed nights is a *recorded, intentionally-unfixed* discrepancy (the
   on-disk DATALOG is authoritative).
-- **Recommended next action:** the safest honest upgrade is to **pin the OSCAR
-  reference `export_hash`** for the already-committed `oscar_reference/summary.csv`
-  and exercise it through `validate_import`'s parser-free hash check — moving the
-  `oscar_reference` comparator from injected-only to committed-fixture-backed
-  without any PHI, parse, or DB. This touches the *manifest* (metadata), never the
-  anonymized data files, and the fixture's privacy/redistribution status is clear.
+- **Recommended next action — DONE (Phase 2):** the OSCAR reference `export_hash`
+  is now pinned in the manifest for the committed `oscar_reference/summary.csv` and
+  exercised through `validate_import`'s parser-free hash check — moving the
+  `oscar_reference` comparator from injected-only to committed-fixture-backed with
+  no PHI, parse, or DB. This touched the *manifest* (metadata) only, never the
+  anonymized data files. Next candidates remain gated: a standard `expected.import`
+  block (parse-dependent) and `settings.values` (loader gap).
 
 ## 3. The settings-value loader gap (why `settings.values` stays injected-only)
 
@@ -162,6 +164,8 @@ snapshot list and fail/skip, never fabricate a pass. Wiring real
 - Parser-backed real-card: serial identity, signal channel inventory
   (pure-Python), AHI parity, computed-usage parity, ghost-night flagging
   (airsense10; the last three `cpap-py`-gated against the committed OSCAR CSV).
+- **`validate_import.oscar_reference.export_hash`** — now committed-fixture-backed
+  on the AirSense 10 fixture (parser-free hash check; see §2.2).
 
 **Injected-only today** (no committed fixture drives them — exercised by an
 injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
@@ -171,8 +175,8 @@ injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
 - `validate_import.therapy_aggregates` (`usage`/`wall_clock`/`gap`/`block_count`)
 - `validate_import.settings` (`snapshot_count`/`present`/`values`)
 - `validate_import.events` (`count`/`types`/ordered `events`)
-- `validate_import.oscar_reference.export_hash` (tests write a tmp CSV, not a
-  committed fixture)
+- `validate_import.oscar_reference.parity` (numeric parity — still deferred,
+  always a skip; the export-**hash** half is now fixture-backed, above)
 - `validate_import.identity_hashes` (synthetic upserted DB rows, DB-gated)
 
 **Blocked / deferred (unchanged):** OSCAR numeric parity (`oscar_reference.parity`),
@@ -182,9 +186,10 @@ compressed-segment waveform storage, device-time-correction implementation.
 
 ## 5. Recommended Phase 2 order (conservative)
 
-1. **Pin the airsense10 OSCAR `export_hash`** and add a parser-free
+1. **DONE — Pin the airsense10 OSCAR `export_hash`** and add a parser-free
    `validate_import` test → first committed-fixture-backed `oscar_reference`
-   coverage. Lowest risk: no parse, no DB, no PHI, manifest-only.
+   coverage. Lowest risk: no parse, no DB, no PHI, manifest-only. Plus a
+   read-only `summarize_import_blocks` reporting helper.
 2. **Add a parser-free `warnings.absent` `expected.import`** to the synthetic
    fixture (skips cleanly without the parser) — only if it does not overclaim.
 3. **Defer** parse-dependent committed expectations (`session_blocks.intervals`,
