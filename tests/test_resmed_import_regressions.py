@@ -377,25 +377,92 @@ def test_normalized_signal_classification_boundary_is_5hz():
     assert importer_db._normalized_signal("Press.2s", None)[1] == "low_rate"
 
 
+def test_normalized_signal_maps_sa2_oximetry_channels():
+    """Alpha 6 item 1: SA2/SAD oximetry channels are inventoried, not unknown.
+
+    Real ResMed SA2/SAD files (verified against the anonymized AirSense 10
+    fixture) carry ``SpO2.1s`` (unit ``%``) and ``Pulse.1s`` (unit ``bpm``) at
+    1 Hz. They normalize to ``spo2``/``pulse`` and stay ``low_rate`` at that
+    rate. Oximetry channels carry no leak semantics.
+    """
+    assert importer_db._normalized_signal("SpO2.1s", 1.0) == ("spo2", "low_rate", None)
+    assert importer_db._normalized_signal("Pulse.1s", 1.0) == ("pulse", "low_rate", None)
+
+    # Classification still follows the sample-rate rule, not the channel name:
+    # an oximetry label arriving at high rate would be a waveform.
+    assert importer_db._normalized_signal("SpO2.1s", 25.0)[1] == "waveform"
+
+
 def test_normalized_signal_unknown_channel_is_flagged_not_silently_mapped():
     """Alpha 6 absence diagnostics: unknown channels surface, never get aliased.
 
     The loader-plan invariant is "never silently map an unknown channel to a
-    known one". SA2/SAD oximetry labels (SpO2, Pulse) are not yet in the native
-    inventory, so they must come back with the explicit ``unknown:`` sentinel
-    rather than being folded into a known normalized name. This documents the
-    known SA2 oximetry inventory gap as a visible diagnostic instead of a
-    silent mislabel.
+    known one". A label outside the known inventory must come back with the
+    explicit ``unknown:`` sentinel (preserving the raw source label) rather than
+    being folded into a known normalized name, so a missing mapping is
+    diagnosable from the persisted channel row instead of lost.
     """
-    spo2 = importer_db._normalized_signal("SpO2", 1.0)
-    assert spo2 == ("unknown:SpO2", "low_rate", None)
+    assert importer_db._normalized_signal("Movement.2s", 0.5) == ("unknown:Movement.2s", "low_rate", None)
 
-    pulse = importer_db._normalized_signal("Pulse.1s", 1.0)
-    assert pulse[0] == "unknown:Pulse.1s"
-    assert pulse[0].startswith("unknown:")
-    # The sentinel preserves the raw source label, so a missing mapping is
-    # diagnosable from the persisted channel row rather than lost.
-    assert importer_db._normalized_signal("Totally.Novel", 12.0) == ("unknown:Totally.Novel", "waveform", None)
+    novel = importer_db._normalized_signal("Totally.Novel", 12.0)
+    assert novel == ("unknown:Totally.Novel", "waveform", None)
+    assert novel[0].startswith("unknown:")
+
+
+def test_replace_signal_channels_persists_sa2_units_and_low_rate(monkeypatch):
+    """End-to-end: SA2 oximetry rows carry correct units and low-rate kind.
+
+    ``_normalized_signal`` sets names/kinds; the unit comes from the EDF ``dim``
+    field via ``replace_signal_channels``. This pins that SpO2/Pulse persist with
+    units ``%``/``bpm`` at ``low_rate``, and that the ``Crc16`` checksum channel
+    is skipped (not inventoried).
+    """
+    from types import SimpleNamespace
+
+    inserted = []
+
+    def fake_execute_values(_cur, _sql, rows, **_kwargs):
+        inserted.extend(rows)
+
+    monkeypatch.setattr(importer_db.psycopg2.extras, "execute_values", fake_execute_values)
+
+    header = SimpleNamespace(
+        duration_per_record=60.0,
+        signals=[
+            SimpleNamespace(label="Pulse.1s", dim="bpm", num_samples_per_record=60),
+            SimpleNamespace(label="SpO2.1s", dim="%", num_samples_per_record=60),
+            SimpleNamespace(label="Crc16", dim="", num_samples_per_record=1),
+        ],
+    )
+
+    count = importer_db.replace_signal_channels(
+        FakeConn(),
+        session_db_id="sess-1",
+        import_run_id=None,
+        source_file_id_value=None,
+        adapter_id="resmed-native-v2",
+        header=header,
+    )
+
+    # Crc16 is skipped; only the two oximetry channels are inventoried.
+    assert count == 2
+    # Row layout: (session_id, import_run_id, source_file_id, normalized_name,
+    #              source_name, unit, sample_rate_hz, channel_kind, value_kind,
+    #              leak_kind, adapter_id, confidence, validation_status)
+    by_name = {row[3]: row for row in inserted}
+    assert set(by_name) == {"pulse", "spo2"}
+
+    pulse = by_name["pulse"]
+    assert pulse[4] == "Pulse.1s"
+    assert pulse[5] == "bpm"
+    assert pulse[6] == 1.0
+    assert pulse[7] == "low_rate"
+
+    spo2 = by_name["spo2"]
+    assert spo2[4] == "SpO2.1s"
+    assert spo2[5] == "%"
+    assert spo2[6] == 1.0
+    assert spo2[7] == "low_rate"
 
 
 def test_dedupe_events_preserves_zero_duration_arousal():

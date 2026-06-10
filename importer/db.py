@@ -837,6 +837,11 @@ def _normalized_signal(source_name: str, sample_rate: float | None) -> tuple[str
         "FlowLim.2s": "flow_limitation",
         "Flow.40ms": "flow",
         "Press.40ms": "pressure",
+        # SA2/SAD oximetry (1 Hz). Units come from the EDF dim field: SpO2 in
+        # "%", Pulse in "bpm". Classification stays low-rate via the sample-rate
+        # rule below.
+        "SpO2.1s": "spo2",
+        "Pulse.1s": "pulse",
     }
     normalized = names.get(source_name, f"unknown:{source_name}")
     kind = "waveform" if sample_rate and sample_rate >= 5 else "low_rate"
