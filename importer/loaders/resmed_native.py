@@ -328,6 +328,11 @@ class ResMedNativeLoader(LoaderAdapter):
             session.derived_values.extend(self._signal_metrics(detailed))
         session.blocks = self._session_blocks(detailed, machine_key, local_date)
         session.events = self._session_events(detailed)
+        # Large-leak bands are derived from the low-rate leak signal (which only
+        # exists when waveforms were requested), matching the old path so OSCAR's
+        # leak overlay is reproduced. They never count toward AHI.
+        if include_waveforms:
+            session.events.extend(self._large_leak_events(detailed))
         if include_waveforms:
             session.signals, session.waveforms = self._session_waveforms(detailed, machine_key, local_date)
         return session
@@ -502,6 +507,65 @@ class ResMedNativeLoader(LoaderAdapter):
                     )
                 )
         return events
+
+    @staticmethod
+    def _large_leak_events(detailed: list, threshold: float = 0.4) -> list[Event]:
+        """Derive ``Large Leak`` duration events from the low-rate leak signal.
+
+        Mirrors ``importer.import_sessions.derive_large_leak_events`` so the
+        cpap-parser path overlays the same large-leak bands the old path — and
+        OSCAR — show. cpap-py's ``timeseries.leak`` values are numerically
+        identical to the old ``Leak.2s`` channel, so the same ``0.4`` threshold
+        applies directly.
+
+        Like the old path, each event is anchored at the *end* of an
+        over-threshold span (``start_time`` = span end) with ``duration_seconds``
+        spanning back to where the leak first crossed the threshold. ``Large
+        Leak`` is not an AHI event, so it never affects event counts or AHI.
+        """
+        events: list[Event] = []
+        for index, cpap_session in enumerate(detailed):
+            timeseries = cpap_session.timeseries
+            if timeseries is None or not timeseries.leak:
+                continue
+            leak = timeseries.leak
+            sample_seconds = ResMedNativeLoader._low_rate_epoch_seconds(timeseries)
+            file_id = f"{cpap_session.file_type}:{index}"
+
+            def emit(span_start: int, span_end: int) -> None:
+                events.append(
+                    Event(
+                        source_event_key=f"largeleak:{index}:{span_start}:{span_end}",
+                        event_type="Large Leak",
+                        source_type="Large Leak",
+                        # Absolute end of the span (old path anchors onset here).
+                        start_time=cpap_session.start_time
+                        + timedelta(seconds=span_end * sample_seconds),
+                        duration_seconds=(span_end - span_start) * sample_seconds,
+                        source_file_id=file_id,
+                        # Derived from a signal threshold, not a device-scored event.
+                        confidence=Confidence.PROBABLE,
+                    )
+                )
+
+            span_start: int | None = None
+            for sample_index, value in enumerate(leak):
+                if value >= threshold and span_start is None:
+                    span_start = sample_index
+                elif value < threshold and span_start is not None:
+                    emit(span_start, sample_index)
+                    span_start = None
+            if span_start is not None:
+                emit(span_start, len(leak))
+        return events
+
+    @staticmethod
+    def _low_rate_epoch_seconds(timeseries) -> float:
+        """Seconds between consecutive low-rate (PLD) samples (ResMed PLD = 2 s)."""
+        low = timeseries.timestamps_low
+        if len(low) >= 2 and low[1] > low[0]:
+            return low[1] - low[0]
+        return 2.0
 
     def _session_waveforms(
         self, detailed: list, machine_key: str, local_date: str
