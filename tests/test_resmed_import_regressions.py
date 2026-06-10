@@ -465,6 +465,83 @@ def test_replace_signal_channels_persists_sa2_units_and_low_rate(monkeypatch):
     assert spo2[7] == "low_rate"
 
 
+def test_summary_only_night_emits_absence_diagnostic_warning():
+    """Alpha 6 absence diagnostics: a night with no detailed DATALOG records WHY.
+
+    A summary-only ("ghost") night has STR history but no BRP/PLD source, so no
+    waveform or metric samples are persisted for it. The native loader must emit
+    a structured ``resmed_summary_only_day`` warning explaining the absence (kept
+    and flagged, not deleted) instead of letting the night silently appear empty.
+    """
+    from types import SimpleNamespace
+
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    summary = SimpleNamespace(
+        date=date(2026, 6, 2),
+        has_detailed_data=False,
+        summary_reported_usage=7.5,
+        computed_usage=None,
+        recording_span=None,
+        ahi=3.1,
+    )
+
+    session = ResMedNativeLoader()._build_session(
+        summary,
+        detailed=[],
+        machine_key="SN-TEST",
+        include_waveforms=False,
+        run_warnings=[],
+    )
+
+    warning = next(w for w in session.warnings if w.code == "resmed_summary_only_day")
+    assert warning.severity == "info"
+    assert warning.relative_path == "STR.edf"
+    assert "summary_only_days" in warning.affects
+    assert "sessions" in warning.affects
+    # Absence is empty, not a fabricated waveform.
+    assert session.waveforms == []
+
+
+def test_detailed_night_does_not_emit_summary_only_absence_warning():
+    """The absence diagnostic is specific to absence.
+
+    A night that ships detailed DATALOG data must NOT be flagged summary-only,
+    so the warning stays a meaningful signal rather than firing on every night.
+    """
+    from types import SimpleNamespace
+
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    summary = SimpleNamespace(
+        date=date(2026, 6, 1),
+        has_detailed_data=True,
+        summary_reported_usage=8.0,
+        computed_usage=8.0,
+        recording_span=8.0,
+        ahi=1.0,
+    )
+    detailed = [
+        SimpleNamespace(
+            start_time=datetime(2026, 6, 1, 22, 0),
+            end_time=datetime(2026, 6, 2, 6, 0),
+            file_type="BRP",
+            events=[],
+            timeseries=None,
+        )
+    ]
+
+    session = ResMedNativeLoader()._build_session(
+        summary,
+        detailed=detailed,
+        machine_key="SN-TEST",
+        include_waveforms=False,
+        run_warnings=[],
+    )
+
+    assert "resmed_summary_only_day" not in {w.code for w in session.warnings}
+
+
 def test_dedupe_events_preserves_zero_duration_arousal():
     events = [
         (10.0, 0.0, "Arousal"),

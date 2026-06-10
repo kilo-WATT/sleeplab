@@ -49,9 +49,13 @@ Scope = the five focus areas in the kickoff brief, mapped to docs.
 - [ ] Enumerate every channel ResMed BRP and SA2/SAD files actually carry on
       the AirSense 10 fixture; record source label, unit, sample rate, value
       kind, and leak semantics. (`signal_channels` already models these.)
-- [ ] Confirm SA2/SAD oximetry channels (SpO2, pulse) are *inventoried* even
-      though persistence remains a known gap; record the absence explicitly
-      rather than dropping the channel.
+- [x] **(done)** SA2/SAD oximetry channel *metadata* is inventoried:
+      `SpO2.1s` → `spo2` (unit `%`), `Pulse.1s` → `pulse` (unit `bpm`),
+      classified `low_rate` at 1 Hz, units sourced from the EDF `dim` field
+      (commit `05261ea`, `importer/db.py:_normalized_signal` +
+      `replace_signal_channels`). Oximetry **sample** persistence through the
+      cpap-parser loader path remains a separate open gap (see §4 /
+      `persist.py` `has_spo2: False`).
 - [ ] Verify the `sample_rate_hz >= 5` → `waveform` classification in
       `persist.py` matches the real BRP/SA2 rates; capture any channel that
       misclassifies.
@@ -76,15 +80,37 @@ Scope = the five focus areas in the kickoff brief, mapped to docs.
       trade-offs. Implementation of a new storage scheme is *later alpha / beta*.
 
 ### 4. Absence diagnostics for missing waveform/settings data
+
+These five concerns are deliberately **distinct** tiers — absence at one tier
+does not imply absence at another, and each needs its own diagnostic:
+
+- **Waveform metadata inventory** — channel names/units/rates/classification in
+  `signal_channels`. (BRP flow/pressure + SA2 SpO2/pulse: *done*, §1.)
+- **Event-window waveform storage** — high-rate `flow`/`pressure` samples around
+  scored events in `session_waveform`. (Current default; partial.)
+- **Full-night waveform storage** — whole-night high-rate samples. (Not
+  implemented; see §2 — do not implement yet.)
+- **Oximetry sample persistence** — per-sample SpO2/pulse rows. Native path
+  writes `session_spo2`; the cpap-parser loader path does **not** yet
+  (`persist.py` `has_spo2: False`). (Open gap.)
+- **Absence diagnostics** — recording *why* any of the above is absent.
+
+Items:
 - [ ] When a waveform or setting is absent, record *why* (summary-only night,
       malformed PLD header, capability unavailable) rather than only
       "unavailable" — roadmap "Required ResMed depth".
 - [ ] Surface absence through structured warnings / capability state, not a
       plausible zero (loader-plan invariant: "absence is `None`/empty, never a
       plausible zero or `Unknown`").
-- [ ] Add regression coverage that the conformance harness genuinely *detects*
-      missing waveform/settings coverage (first increment landed this milestone;
-      see "First implementation change" below).
+- [x] **(in progress)** Regression coverage pins the existing absence
+      diagnostics: the conformance harness *detects* missing waveform coverage
+      (`tests/test_conformance.py`), and the native loader emits the structured
+      `resmed_summary_only_day` warning for a night with no detailed DATALOG
+      waveform/metric source — kept and flagged, not silently empty
+      (`tests/test_resmed_import_regressions.py`).
+- [ ] Extend the same diagnostic to a detailed night that is *missing only its
+      BRP waveform* (PLD present, BRP absent/malformed) — currently no explicit
+      "waveform absent" warning fires in that case.
 
 ### 5. Conformance manifest expansion
 Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:
