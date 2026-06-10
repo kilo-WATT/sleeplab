@@ -49,6 +49,7 @@ parser's machine-local instants and ``timezone_basis`` is reported as
 
 from __future__ import annotations
 
+import statistics
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -66,6 +67,7 @@ from .models import (
     ImportStatus,
     ImportWarning,
     MachineIdentity,
+    NormalizedScalar,
     Session,
     SessionBlock,
     SignalChannel,
@@ -154,6 +156,24 @@ class ResMedNativeLoader(LoaderAdapter):
         installed. We import it lazily so this module — and the registry that
         imports it — load fine in environments where the parser is absent.
         """
+        run, _directory = self.import_data_with_directory(detected, options)
+        return run
+
+    def import_data_with_directory(
+        self, detected: DetectedDevice, options: ImportOptions
+    ):
+        """Parse the card *once* and return ``(ImportRun, CPAPDirectory)``.
+
+        :meth:`import_data` returns only the vendor-neutral :class:`ImportRun`
+        because that is all conformance tests need. The persistence layer,
+        however, needs the *raw* ``CPAPDirectory`` as well: the per-sample arrays
+        (flow/pressure/leak/…) live on ``CPAPSession.timeseries`` but are
+        deliberately *not* carried by :class:`WaveformSegment` (which holds only
+        ``sample_count``/``sample_rate``). Rather than re-parse the card or widen
+        the vendor-neutral model, this method hands the already-parsed directory
+        back so ``persist_import_run`` can populate ``session_metrics`` /
+        ``session_waveform`` directly. The two outputs come from a single parse.
+        """
         # Lazy import: keep the dependency optional at module-load time.
         from cpap_parser.adapters.resmed import ResMedAdapter
         from cpap_parser.schema import CPAPDirectory
@@ -198,7 +218,7 @@ class ResMedNativeLoader(LoaderAdapter):
         if any(w.severity == "error" for w in warnings):
             status = ImportStatus.FAILED if not options.allow_partial else ImportStatus.PARTIAL
 
-        return ImportRun(
+        run = ImportRun(
             run_id=str(uuid.uuid4()),
             adapter_id=self.adapter_id,
             adapter_version=self.adapter_version,
@@ -213,6 +233,7 @@ class ResMedNativeLoader(LoaderAdapter):
             sessions=sessions,
             warnings=warnings,
         )
+        return run, directory
 
     # -- Mapping helpers ---------------------------------------------------
 
@@ -298,6 +319,13 @@ class ResMedNativeLoader(LoaderAdapter):
             warnings=warnings,
         )
         session.derived_values = self._summary_derived_values(summary, has_detailed_data)
+        # Per-signal summary statistics (avg/p95 pressure, avg leak, resp rate,
+        # …) are derived here, in the loader, so they are conformance-testable and
+        # so the persistence layer can map them straight onto the ``sessions``
+        # summary columns. They require decoded timeseries, which only exist when
+        # waveforms were requested.
+        if include_waveforms:
+            session.derived_values.extend(self._signal_metrics(detailed))
         session.blocks = self._session_blocks(detailed, machine_key, local_date)
         session.events = self._session_events(detailed)
         if include_waveforms:
@@ -358,6 +386,88 @@ class ResMedNativeLoader(LoaderAdapter):
             ),
         ]
         return values
+
+    @staticmethod
+    def _signal_metrics(detailed: list) -> list[DerivedValue]:
+        """Compute the old importer's per-night summary statistics.
+
+        This reproduces ``importer.import_sessions.derive_summary`` for the
+        cpap-parser path. The night may span several detailed file-sessions
+        (one ``CPAPSession`` per EDF), so we concatenate each channel's samples
+        across them before aggregating — matching the old path's behavior of
+        averaging the night's low-rate signal as a whole.
+
+        cpap-py signal label -> ``sessions`` summary column mapping
+        ----------------------------------------------------------
+        * ``timeseries.mask_pressure`` (``MaskPress.2s``) -> ``avg_pressure`` /
+          ``p95_pressure``. NOTE: the *old* path used ``Press.2s`` (the device's
+          *set* pressure). cpap-py's ``PLD_SIGNAL_MAP`` has no entry for
+          ``Press.2s`` so it is dropped during decode; ``mask_pressure``
+          (measured) is the closest available low-rate pressure channel and
+          differs only marginally (~1-2% on the validation fixture). The exact
+          ``Press.2s`` set-pressure channel is a documented gap.
+        * ``timeseries.leak`` (``Leak.2s``)               -> ``avg_leak``
+        * ``timeseries.respiratory_rate`` (``RespRate.2s``) -> ``avg_resp_rate``
+        * ``timeseries.tidal_volume`` (``TidVol.2s``)     -> ``avg_tidal_vol``
+        * ``timeseries.minute_ventilation`` (``MinVent.2s``) -> ``avg_min_vent``
+        * ``timeseries.snore`` (``Snore.2s``)             -> ``avg_snore``
+        * ``timeseries.flow_limitation`` (``FlowLim.2s``) -> ``avg_flow_lim``
+
+        Filtering matches ``derive_summary`` exactly: pressure / resp-rate /
+        tidal-volume / minute-ventilation drop non-positive samples; leak / snore
+        / flow-limitation are averaged as-is.
+        """
+        channels: dict[str, list[float]] = {
+            "mask_pressure": [],
+            "leak": [],
+            "respiratory_rate": [],
+            "tidal_volume": [],
+            "minute_ventilation": [],
+            "snore": [],
+            "flow_limitation": [],
+        }
+        for cpap_session in detailed:
+            timeseries = cpap_session.timeseries
+            if timeseries is None:
+                continue
+            for key in channels:
+                channels[key].extend(getattr(timeseries, key, []))
+
+        def safe_mean(values: list[float]) -> float | None:
+            return round(statistics.mean(values), 4) if values else None
+
+        def percentile(values: list[float], pct: float) -> float | None:
+            if not values:
+                return None
+            ordered = sorted(values)
+            return round(ordered[int(pct * len(ordered))], 2)
+
+        positive_pressure = [v for v in channels["mask_pressure"] if v > 0]
+        resp_rate = [v for v in channels["respiratory_rate"] if v > 0]
+        tidal_volume = [v for v in channels["tidal_volume"] if v > 0]
+        minute_ventilation = [v for v in channels["minute_ventilation"] if v > 0]
+
+        metrics: list[tuple[str, NormalizedScalar, str | None]] = [
+            ("avg_pressure", safe_mean(positive_pressure), "cmH2O"),
+            ("p95_pressure", percentile(positive_pressure, 0.95), "cmH2O"),
+            ("avg_leak", safe_mean(channels["leak"]), "L/min"),
+            ("avg_resp_rate", safe_mean(resp_rate), "1/min"),
+            ("avg_tidal_vol", safe_mean(tidal_volume), "mL"),
+            ("avg_min_vent", safe_mean(minute_ventilation), "L/min"),
+            ("avg_snore", safe_mean(channels["snore"]), "index"),
+            ("avg_flow_lim", safe_mean(channels["flow_limitation"]), "index"),
+        ]
+        return [
+            DerivedValue(
+                key=key,
+                value=value,
+                unit=unit,
+                method="resmed_pld_signal_summary",
+                input_refs=("DATALOG",),
+                validation=ValidationStatus.PARTIAL,
+            )
+            for key, value, unit in metrics
+        ]
 
     def _session_blocks(self, detailed: list, machine_key: str, local_date: str) -> list[SessionBlock]:
         blocks: list[SessionBlock] = []

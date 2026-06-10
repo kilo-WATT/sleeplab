@@ -120,7 +120,12 @@ def run_cpap_parser_import(
         raise ImportPlanError(f"No ResMed source detected under {root} for the cpap-parser loader.")
 
     try:
-        run = loader.import_data(detected, ImportOptions(include_waveforms=include_waveforms))
+        # Parse once; keep the raw CPAPDirectory so the persistence layer can
+        # populate the per-sample tables (session_metrics/session_waveform) that
+        # the vendor-neutral ImportRun deliberately does not carry.
+        run, directory = loader.import_data_with_directory(
+            detected, ImportOptions(include_waveforms=include_waveforms)
+        )
     except ImportError as exc:
         # The loader lazily imports cpap_parser; surface a clear dependency error.
         raise ImportError(
@@ -131,7 +136,14 @@ def run_cpap_parser_import(
 
     conn = get_conn()
     try:
-        counts = persist_import_run(run, user_id, conn, import_run_id=import_run_id, machine_id=machine_id)
+        counts = persist_import_run(
+            run,
+            user_id,
+            conn,
+            import_run_id=import_run_id,
+            machine_id=machine_id,
+            raw_directory=directory,
+        )
         conn.commit()
         finish_import_run(
             conn,

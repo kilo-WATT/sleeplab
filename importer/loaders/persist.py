@@ -23,25 +23,44 @@ than silently dropping or inventing data we record the gaps here:
   need an offset, so this bridge localizes every instant with the user's
   configured ``machine_tz`` (``user_import_settings``), matching the legacy
   importer's behavior.
-* **Per-sample signals are not carried.** :class:`WaveformSegment` exposes only
-  ``sample_count``/``sample_rate_hz`` metadata, not the underlying arrays, so the
-  ``session_metrics`` / ``session_waveform`` / ``session_spo2`` sample tables are
-  *not* populated from an ``ImportRun``. Channel *metadata* (``signal_channels``)
-  is persisted; sample bridging is left for a future loader revision.
-* **Summary statistics the loader does not compute** (``avg_pressure``,
-  ``p95_pressure``, ``avg_leak``, the per-channel averages, oximetry) are written
-  as ``NULL``/``0`` rather than fabricated. AHI, event counts and the three usage
-  semantics *are* carried through.
+* **Per-sample signals are not carried by the ImportRun.**
+  :class:`WaveformSegment` exposes only ``sample_count``/``sample_rate_hz``
+  metadata, not the underlying arrays. To still populate the sample tables
+  *without* widening the vendor-neutral model, the execution layer passes the
+  raw ``CPAPDirectory`` (``raw_directory=``) from the same parse; this bridge
+  then writes ``session_metrics`` (full-resolution low-rate) and
+  ``session_waveform`` (event-windowed high-rate) from ``CPAPSession.timeseries``.
+  Channel *metadata* (``signal_channels``) is persisted from the ImportRun.
+* **Summary statistics** (``avg_pressure``, ``p95_pressure``, ``avg_leak`` and the
+  per-channel averages) are computed by the loader from the decoded timeseries
+  (``ResMedNativeLoader._signal_metrics``), carried as DerivedValues, and mapped
+  onto the ``sessions`` columns here. AHI, event counts and the three usage
+  semantics are carried through as before.
+
+Remaining gaps (genuinely unavailable from cpap-py, written ``NULL``):
+
+* ``sessions.avg_pressure``/``p95_pressure`` and ``session_metrics.pressure`` use
+  the measured ``MaskPress.2s`` channel; the old path's ``Press.2s`` *set*
+  pressure is not decoded by cpap-py. ``session_metrics.epr_pressure``
+  (``EprPress.2s``) is likewise unavailable.
+* Oximetry (``session_spo2``, ``has_spo2``) is not mapped yet.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .models import DerivedValue, ImportRun, Session
+from .resmed_native import _ANNOTATION_FILE_TYPES, ResMedNativeLoader
+
+#: Event-focused waveform window, matching ``db.replace_session_waveform``: full
+#: 25 Hz flow/pressure is far too large to store whole-night, so only merged
+#: windows around scored events are persisted (the Event Inspector's needs).
+_WAVEFORM_BEFORE_SECONDS = 120
+_WAVEFORM_AFTER_SECONDS = 180
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +83,7 @@ def persist_import_run(
     *,
     import_run_id: str,
     machine_id: str,
+    raw_directory: Any = None,
 ) -> dict[str, int]:
     """Persist an :class:`ImportRun` to the database.
 
@@ -75,6 +95,14 @@ def persist_import_run(
         import_run_id: The durable ``import_runs`` row id created by
             ``api.import_runs.create_import_run`` for this upload.
         machine_id: The ``cpap_machines`` row id created alongside the run.
+        raw_directory: Optional raw ``cpap_parser.schema.CPAPDirectory`` from the
+            same parse that produced ``run`` (see
+            :meth:`ResMedNativeLoader.import_data_with_directory`). When supplied,
+            the per-sample tables ``session_metrics`` (low-rate) and
+            ``session_waveform`` (high-rate, event-windowed) are populated from
+            ``CPAPSession.timeseries`` — data the vendor-neutral
+            :class:`WaveformSegment` does not carry. When ``None`` those tables
+            are left empty (detection-only/legacy callers).
 
     Returns:
         A summary dict with counts of what was written, suitable for logging and
@@ -113,7 +141,15 @@ def persist_import_run(
         "channels": 0,
         "derived_values": 0,
         "summary_only_days": 0,
+        "metric_rows": 0,
+        "waveform_rows": 0,
     }
+
+    # Index the raw parser's detailed file-sessions by night date so each
+    # normalized Session can pull back its decoded sample arrays. Keyed exactly
+    # like the loader keys its summaries (night date), so the join is a date
+    # lookup. ``None`` when no raw directory was supplied.
+    detailed_by_night = _index_detailed_sessions(raw_directory)
 
     serial = run.machine.serial_number
     manufacturer = run.machine.manufacturer or "ResMed"
@@ -211,6 +247,26 @@ def persist_import_run(
                 summary=summary,
             )
 
+        # -- Per-sample tables (session_metrics / session_waveform) -------
+        # Populated only when the raw CPAPDirectory is available; the decoded
+        # sample arrays live on CPAPSession.timeseries, not on the ImportRun.
+        if detailed_by_night is not None:
+            detailed = detailed_by_night.get(folder_date, [])
+            counts["metric_rows"] += _write_session_metrics(
+                db_conn, str(session_db_id), detailed, machine_tz
+            )
+            # The night's normalized events carry absolute (naive, machine-local)
+            # onsets; the waveform writer rebases them onto each file-session so a
+            # late-night event lands in the block that actually recorded it (not
+            # the block cpap-py happened to park it on).
+            night_events = [
+                (event.start_time, float(event.duration_seconds or 0.0))
+                for event in session.events
+            ]
+            counts["waveform_rows"] += _write_session_waveform(
+                db_conn, str(session_db_id), detailed, machine_tz, night_events
+            )
+
     return counts
 
 
@@ -257,15 +313,19 @@ def _session_row(
         "apnea_count": event_counts["Apnea"],
         "arousal_count": event_counts["Arousal"],
         "total_ahi_events": sum(event_counts[t] for t in _AHI_EVENT_TYPES),
-        # Per-channel summary statistics are not computed by the loader (gap).
-        "avg_pressure": None,
-        "p95_pressure": None,
-        "avg_leak": None,
-        "avg_resp_rate": None,
-        "avg_tidal_vol": None,
-        "avg_min_vent": None,
-        "avg_snore": None,
-        "avg_flow_lim": None,
+        # Per-channel summary statistics are derived by the loader from the
+        # decoded timeseries (see ResMedNativeLoader._signal_metrics) and carried
+        # here as DerivedValues. ``avg_pressure``/``p95_pressure`` come from the
+        # measured mask-pressure channel (the old path's ``Press.2s`` set-pressure
+        # is not exposed by cpap-py — documented gap).
+        "avg_pressure": _derived_scalar(derived, "avg_pressure", default=None),
+        "p95_pressure": _derived_scalar(derived, "p95_pressure", default=None),
+        "avg_leak": _derived_scalar(derived, "avg_leak", default=None),
+        "avg_resp_rate": _derived_scalar(derived, "avg_resp_rate", default=None),
+        "avg_tidal_vol": _derived_scalar(derived, "avg_tidal_vol", default=None),
+        "avg_min_vent": _derived_scalar(derived, "avg_min_vent", default=None),
+        "avg_snore": _derived_scalar(derived, "avg_snore", default=None),
+        "avg_flow_lim": _derived_scalar(derived, "avg_flow_lim", default=None),
         # Oximetry is not mapped by the loader yet (gap).
         "has_spo2": False,
         "therapy_mode": None,
@@ -446,3 +506,232 @@ def _resolve_machine_tz(db_conn: Any, user_id: str) -> tuple[str, ZoneInfo]:
     except (ZoneInfoNotFoundError, KeyError, ValueError):
         zone = ZoneInfo("UTC")
     return zone.key, zone
+
+
+# -- Per-sample table bridging (session_metrics / session_waveform) --------
+
+
+def _index_detailed_sessions(raw_directory: Any) -> dict[date, list] | None:
+    """Group a raw ``CPAPDirectory``'s detailed file-sessions by night date.
+
+    Returns ``None`` when no directory is supplied so the caller can cheaply skip
+    the per-sample writes. Annotation-only files (EVE/CSL/AEV) carry no signal
+    samples and are excluded, mirroring the loader's own grouping so the night
+    keys line up with each Session's ``machine_local_date``.
+    """
+    if raw_directory is None:
+        return None
+    by_night: dict[date, list] = {}
+    for cpap_session in raw_directory.sessions:
+        if cpap_session.file_type in _ANNOTATION_FILE_TYPES:
+            continue
+        night = ResMedNativeLoader._night_date(cpap_session.start_time)
+        by_night.setdefault(night, []).append(cpap_session)
+    return by_night
+
+
+def _low_rate_epoch_seconds(timeseries) -> float:
+    """Seconds between consecutive low-rate (PLD) samples.
+
+    cpap-py stores ``timestamps_low`` as epoch seconds spaced ``1 / rate`` apart;
+    the spacing is the epoch. ResMed PLD is 2 s; fall back to that if the track
+    is too short to measure.
+    """
+    low = timeseries.timestamps_low
+    if len(low) >= 2 and low[1] > low[0]:
+        return low[1] - low[0]
+    return 2.0
+
+
+def _write_session_metrics(
+    db_conn: Any, session_db_id: str, detailed: list, machine_tz: ZoneInfo
+) -> int:
+    """Replace ``session_metrics`` (low-rate PLD samples) for one night.
+
+    Mirrors ``importer.db.replace_session_metrics`` but sources its columns from
+    cpap-py's decoded low-rate track instead of a raw EDF channel dict. The night
+    may aggregate several file-sessions, so rows from every detailed session are
+    written under the single night ``session_id`` after a one-time delete.
+
+    cpap-py field -> ``session_metrics`` column
+    -------------------------------------------
+    * ``mask_pressure``       -> ``mask_pressure`` (``MaskPress.2s``)
+    * ``leak``                -> ``leak``          (``Leak.2s``)
+    * ``respiratory_rate``    -> ``resp_rate``     (``RespRate.2s``)
+    * ``tidal_volume``        -> ``tidal_vol``     (``TidVol.2s``)
+    * ``minute_ventilation``  -> ``min_vent``      (``MinVent.2s``)
+    * ``snore``               -> ``snore``         (``Snore.2s``)
+    * ``flow_limitation``     -> ``flow_lim``      (``FlowLim.2s``)
+
+    GAP: ``pressure`` (``Press.2s`` set pressure) and ``epr_pressure``
+    (``EprPress.2s``) are not decoded by cpap-py and are written ``NULL``.
+    """
+    import psycopg2.extras
+
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM session_metrics WHERE session_id = %s", (session_db_id,))
+
+    rows: list[tuple] = []
+    for cpap_session in detailed:
+        timeseries = cpap_session.timeseries
+        if timeseries is None:
+            continue
+        # Columns in INSERT order; ``pressure``/``epr_pressure`` are absent (gap).
+        tracks = (
+            timeseries.mask_pressure,
+            timeseries.leak,
+            timeseries.respiratory_rate,
+            timeseries.tidal_volume,
+            timeseries.minute_ventilation,
+            timeseries.snore,
+            timeseries.flow_limitation,
+        )
+        sample_count = max((len(track) for track in tracks), default=0)
+        if sample_count == 0:
+            continue
+        epoch = _low_rate_epoch_seconds(timeseries)
+        start = _localize(cpap_session.start_time, machine_tz)
+        for index in range(sample_count):
+            ts = start + timedelta(seconds=index * epoch)
+            mask_pressure, leak, resp_rate, tidal_vol, min_vent, snore, flow_lim = (
+                _sample(track, index) for track in tracks
+            )
+            rows.append(
+                (
+                    session_db_id,
+                    ts,
+                    mask_pressure,  # mask_pressure
+                    None,  # pressure (Press.2s) — not exposed by cpap-py
+                    None,  # epr_pressure (EprPress.2s) — not exposed by cpap-py
+                    leak,
+                    resp_rate,
+                    tidal_vol,
+                    min_vent,
+                    snore,
+                    flow_lim,
+                )
+            )
+
+    if not rows:
+        return 0
+    sql = """
+    INSERT INTO session_metrics
+        (session_id, ts, mask_pressure, pressure, epr_pressure, leak, resp_rate,
+         tidal_vol, min_vent, snore, flow_lim)
+    VALUES %s
+    """
+    with db_conn.cursor() as cur:
+        psycopg2.extras.execute_values(cur, sql, rows, page_size=5000)
+    return len(rows)
+
+
+def _write_session_waveform(
+    db_conn: Any,
+    session_db_id: str,
+    detailed: list,
+    machine_tz: ZoneInfo,
+    night_events: list[tuple[datetime, float]],
+) -> int:
+    """Replace ``session_waveform`` (high-rate BRP samples) for one night.
+
+    Mirrors ``importer.db.replace_session_waveform``: only merged windows around
+    scored events are stored (full-night 25 Hz is far too large).
+
+    ``night_events`` are the night's events as ``(absolute_start, duration_s)``
+    tuples in the loader's naive machine-local frame. Each file-session rebases
+    them onto its own start (``event - session_start``) before windowing, exactly
+    like the old path's ``_events_relative_to_waveform``. This matters because
+    cpap-py parks an EVE file's events on the *first* BRP/PLD group regardless of
+    when they occurred, so an event must be matched to the block that actually
+    recorded its samples — not the block it is attached to.
+
+    cpap-py field -> ``session_waveform`` column
+    --------------------------------------------
+    * ``flow_rate`` (``Flow.40ms``)  -> ``flow``
+    * ``pressure``  (``Press.40ms``) -> ``pressure``
+    """
+    import psycopg2.extras
+
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM session_waveform WHERE session_id = %s", (session_db_id,))
+
+    rows: list[tuple] = []
+    for cpap_session in detailed:
+        timeseries = cpap_session.timeseries
+        if timeseries is None:
+            continue
+        flow = timeseries.flow_rate
+        pressure = timeseries.pressure
+        sample_count = max(len(flow), len(pressure))
+        rate = cpap_session.sample_rate
+        if sample_count == 0 or rate <= 0:
+            continue
+        epoch = 1.0 / rate
+        # Rebase the night's events onto this block; only events whose absolute
+        # time lands within (or near) this block's span survive the window clip.
+        relative_onsets = [
+            ((event_start - cpap_session.start_time).total_seconds(), duration)
+            for event_start, duration in night_events
+        ]
+        windows = _merge_event_windows(relative_onsets, sample_count * epoch)
+        if not windows:
+            # No scored events land in this block -> nothing to window, like the
+            # old path which stores no waveform for a block without events.
+            continue
+        start = _localize(cpap_session.start_time, machine_tz)
+        for window_start, window_end in windows:
+            first = max(0, int(window_start / epoch))
+            last = min(sample_count, int(window_end / epoch) + 1)
+            for index in range(first, last):
+                ts = start + timedelta(seconds=index * epoch)
+                rows.append(
+                    (
+                        session_db_id,
+                        ts,
+                        _sample(flow, index),
+                        _sample(pressure, index, ndigits=2),
+                    )
+                )
+
+    if not rows:
+        return 0
+    sql = "INSERT INTO session_waveform (session_id, ts, flow, pressure) VALUES %s"
+    with db_conn.cursor() as cur:
+        psycopg2.extras.execute_values(cur, sql, rows, page_size=5000)
+    return len(rows)
+
+
+def _merge_event_windows(
+    relative_onsets: list[tuple[float, float]], total_seconds: float
+) -> list[tuple[float, float]]:
+    """Merge ±window intervals around each event onset (seconds from start).
+
+    ``relative_onsets`` are ``(onset_seconds, duration_seconds)`` already rebased
+    to the block start. Mirrors ``db._merge_waveform_windows`` with the same
+    before/after padding, clipped to the recorded span — onsets outside the span
+    clip away to nothing.
+    """
+    windows: list[tuple[float, float]] = []
+    for onset, duration in relative_onsets:
+        start = max(0.0, onset - _WAVEFORM_BEFORE_SECONDS)
+        end = min(total_seconds, onset + (duration or 0.0) + _WAVEFORM_AFTER_SECONDS)
+        if end > start:
+            windows.append((start, end))
+    if not windows:
+        return []
+    windows.sort()
+    merged = [windows[0]]
+    for start, end in windows[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _sample(track: list, index: int, ndigits: int = 4) -> float | None:
+    """Return ``round(track[index], ndigits)`` or ``None`` when out of range."""
+    if index < len(track):
+        return round(track[index], ndigits)
+    return None
