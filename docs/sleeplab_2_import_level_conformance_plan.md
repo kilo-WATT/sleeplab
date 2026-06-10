@@ -489,6 +489,101 @@ fixture's `expected.import` checks pass *and* its `oscar_reference` is present
 and hash-verified — tying this path to the loader plan's "Acceptance gates" and
 the roadmap's "before a capability may claim `validated`".
 
+## 13. OSCAR reference numeric parity (design, not yet implemented)
+
+The `oscar_reference` block currently does one thing: verify the sha256 of a
+committed, anonymized reference export (`export_hash`). That proves the reference
+file is the one the manifest was written against; it does **not** yet compare any
+parsed value to OSCAR. This section designs that next layer (Step 3b) so it can
+land as a small, separately-reviewed change. **Nothing here is implemented yet**
+— numeric parity stays a clearly-reasoned *skip* (`oscar_reference.parity`) until
+a reference export and a normalized run are both available.
+
+### 13.1 Keep the hash check; add an optional `parity` sub-block
+
+The export-hash check is unchanged and remains the gate: a declared reference
+whose hash mismatches (or is missing) is a **failure**, never a skip. Numeric
+parity is added as an optional nested sub-block so existing `oscar_reference`
+manifests (hash only) stay green:
+
+```jsonc
+"oscar_reference": {
+  "oscar_version": "1.5.1",          // OSCAR release the export came from
+  "oscar_schema_version": 17,        // CURRENT_SCHEMA_VERSION from code (docs say 16)
+  "oscar_commit": "…",               // commit or archive hash of the OSCAR source
+  "export_hash": "sha256:…",         // gate: file integrity (already implemented)
+  "summary_csv": "oscar_reference/summary.csv",
+  "parity": {                        // optional; each comparator independently optional
+    "strict": false,                 // see §13.3 — controls missing-file/comparator gating
+    "therapy_aggregates": {"2026-06-01": {"usage_seconds": 8100, "ahi": 1.2}},
+    "settings":           {"2026-06-01": {"values": {"minimum_pressure_cm_h2o": 4.0}}},
+    "session_blocks":     {"2026-06-01": {"intervals": [/* start/end */]}},
+    "events":             {"2026-06-01": {"count": 3, "types": {"hypopnea": 2}}},
+    "channel_stats":      {"2026-06-01": {"pressure": {"p95": 9.4, "mean": 7.1}}}
+  }
+}
+```
+
+The `parity.*` comparators deliberately reuse the **same shapes and code paths**
+as the top-level `expected.import.{therapy_aggregates,settings,session_blocks,
+events}` blocks — the only difference is the *source of truth*: top-level blocks
+compare the normalized run against manifest-authored expectations, while
+`parity.*` compares the normalized run against values **read from the OSCAR
+export**. The manifest values above are the bridge until a CSV/`oscar.db` reader
+exists; once it does, those literals are replaced by reads from the reference.
+
+### 13.2 Tolerances
+
+- **Counts** (event counts, block counts, type tallies): exact.
+- **Interval / event boundaries**: one second, unless the source resolution is
+  coarser (reuse `_BLOCK_INTERVAL_TOLERANCE_SECONDS` / `_EVENT_*_TOLERANCE_SECONDS`).
+- **Therapy aggregates** (usage/wall-clock/gap seconds): exact integer seconds,
+  as today.
+- **Pressure / leak / derived statistics** (`p95`, `mean`, median, AHI): a small
+  numeric tolerance (reuse `_SETTINGS_FLOAT_TOLERANCE`-style epsilon, widened per
+  metric where OSCAR rounds for display). OSCAR's `session_channel_values`
+  (value → count + `time_ms`) means simple averages can legitimately differ from
+  time-weighted ones; where SleepLab and OSCAR weight differently, that is a
+  *documented expected difference*, recorded as a per-metric tolerance rather
+  than forced to bit-exact.
+
+### 13.3 Skip-vs-fail rules (explicit)
+
+- **Mismatched export hash** → **failure** (unchanged; the integrity gate).
+- **Missing reference file**: by default a **failure** when `export_hash` is
+  declared (a declared reference that cannot be read is a real problem). A
+  manifest may set `parity.strict: false` to downgrade a *missing optional parity
+  reference* to a **skip** for fixtures that ship a hash but no parsed export yet.
+  Hash verification itself never honors `strict` — integrity is non-negotiable.
+- **Unimplemented comparator** (a `parity.*` key with no reader/comparator yet)
+  → **skip** with a clear reason. This is the current state for *all* of
+  `parity.*`.
+- **Implemented comparator, value mismatch** → **failure**.
+- **Reference present but the normalized run is unavailable** (no parser) →
+  **skip** with the acquisition reason, exactly like the other parse-observable
+  blocks.
+
+### 13.4 Reference provenance metadata
+
+Because OSCAR 2.0's documented schema (v16) lags its code (`CURRENT_SCHEMA_VERSION
+= 17`), a reference export must record enough to reproduce and disambiguate it:
+
+- `oscar_version` — the OSCAR release string.
+- `oscar_schema_version` — the schema version **from code** if available (v17),
+  noting the docs/code gap (review §1, §10).
+- `oscar_commit` — commit hash, or the archive hash when building from a tarball.
+- `export_hash` — sha256 of the committed reference file (the integrity gate).
+
+### 13.5 What is *not* committed
+
+Numeric parity must not require committing OSCAR source, the OSCAR archive, or any
+private export. Only **redistributable, anonymized** reference exports (serials
+replaced, timestamps shifted — see §8, §11) may be committed, and only when
+licensing/privacy is clear. If a reference cannot be safely committed, it stays a
+manifest-only entry retrieved by hash in an authorized job, and the parity check
+skips in the default suite. No PHI, real serials, or real dates are ever
+committed.
+
 ## Cross-references
 
 - `docs/sleeplab_2_alpha_6_checklist.md` §5 (manifest expansion, import-level

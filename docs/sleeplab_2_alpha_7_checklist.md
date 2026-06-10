@@ -107,9 +107,18 @@ skipped, never faked). No routing or schema change. In priority order:
       Airway,5=User-flagged`) and the v10 `central→unclassified` correction, and
       sourcing the expected values directly from an OSCAR export, remain future
       work (see OSCAR numeric parity below).
-- [ ] **OSCAR reference comparison** beyond the export hash: begin numeric/row
-      parity against OSCAR `session_summaries` / `daily_summaries` values
-      (per-night), gated on availability of a reference export.
+- [~] **(design recorded; implementation deferred)** **OSCAR reference
+      comparison** beyond the export hash: numeric/row parity against OSCAR
+      `session_summaries` / `daily_summaries` values (per-night), gated on
+      availability of a reference export. The design is now written up in
+      `docs/sleeplab_2_import_level_conformance_plan.md` §13 (optional nested
+      `oscar_reference.parity` block reusing the existing aggregate/settings/
+      block/event comparator shapes; tolerances; explicit skip-vs-fail rules;
+      provenance metadata recording OSCAR version + code schema v17 + commit/
+      archive hash + export hash; no OSCAR source/export committed unless safely
+      anonymized). **Not implemented** — `oscar_reference.parity` still skips with
+      a clear reason until a redistributable reference export and a normalized run
+      are both available.
 - [ ] **Weighted / time-based summaries.** Where ResMed PLD data already exists,
       exercise time-weighted summary conformance — OSCAR's
       `session_channel_values` (value → count + `time_ms`) is the precedent for
