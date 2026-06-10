@@ -881,9 +881,12 @@ headers remain visible and make the run `partial`. June 5, 2026 resolves to
 21,840 seconds usage, 22,740 seconds span, and 900 seconds of gaps.
 
 This is evidence for the AirSense 10 path, not a manufacturer-wide validation
-claim. The next priority is deeper ResMed waveform/full-night storage
-validation; Lowenstein read-only conformance follows through the same
-normalized contract.
+claim. The next priority is a future **compressed waveform segment/BLOB design
+investigation** (modeled on OSCAR's `event_lists`/`event_data`, not a
+row-per-sample full-night table — see
+`docs/sleeplab_2_data_architecture.md` → "Waveform storage scope"), with
+event-window storage kept as the production default; Lowenstein read-only
+conformance follows through the same normalized contract.
 
 Each item is intended to be a small PR.
 

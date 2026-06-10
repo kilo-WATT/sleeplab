@@ -129,12 +129,19 @@ skipped, never faked). No routing or schema change. In priority order:
       why simple averages are insufficient.
 
 ### 4. Reframe future waveform storage (documentation only)
-- [ ] Reframe planning language from "full-night row-per-sample storage" to a
-      **future compressed waveform segment/BLOB design investigation** modeled on
-      OSCAR's `event_lists`/`event_data` (metadata index row + compressed payload
-      + integrity checksum), explicitly noting Postgres-native concerns
+- [x] **(done — documentation reframe)** Reframed planning language from
+      "full-night row-per-sample storage" to a **future compressed waveform
+      segment/BLOB design investigation** modeled on OSCAR's
+      `event_lists`/`event_data` (metadata index row + compressed payload +
+      integrity checksum), explicitly noting Postgres-native concerns
       (`BYTEA`/large-object/TOAST trade-offs, backup size, streaming/range reads,
-      retention/downsampling tiers, multi-tenant isolation). (Review §7, §9.)
+      retention/downsampling tiers, multi-tenant isolation). Landed in
+      `docs/sleeplab_2_data_architecture.md` → "Waveform storage scope" (the
+      future-direction + investigation bullets) and "Next milestone"; the ~21.6 M
+      row figure is reframed as the row-per-sample *worst-case upper bound* a
+      compressed design avoids, and `WaveformSegment.storage_ref` is noted as
+      already segment-ready. No schema, migration, or persistence change.
+      (Review §7, §9.)
 - [x] **(decided — unchanged)** Keep **event-window** waveform storage as Alpha 7
       production behavior; full-night storage stays deferred and stop-and-ask.
       (Review §8; Alpha 6 §2 decision.)
@@ -191,17 +198,18 @@ Alpha 7 is "done enough" to move on when:
    parity are implemented and tested; deferred sub-keys skip cleanly.)**
 4. Future waveform storage is reframed as a compressed segment/BLOB design
    investigation, with event-window storage kept as the production default.
-   **(Partly met — the event-window production decision is recorded (§4); the
-   prose reframe of full-night → compressed-segment investigation is still open.)**
+   **(Met — §4: the prose reframe landed in `docs/sleeplab_2_data_architecture.md`
+   ("Waveform storage scope" + "Next milestone"); event-window storage stays the
+   production default.)**
 5. A device-time-correction design note is recorded (no migration). **(Met — §5:
    `docs/sleeplab_2_device_time_correction_design.md`.)**
 6. Lowenstein read-only conformance remains explicitly deferred behind a safe
    fixture. **(On track — still deferred by design; §6.)**
 
-Items 1–3 and 5 are met by the planning, documentation, and import-level
-conformance depth landed in this milestone (interval boundaries, settings values,
-and event parity comparators, plus the OSCAR-numeric-parity and device-time-
-correction design notes). The open items are the waveform-storage prose reframe
-(§4, item 4), OSCAR **numeric parity** implementation (designed but not built),
-weighted/time-based summaries, and Lowenstein read-only conformance — none of
-which requires a migration, routing change, or new tag.
+Items 1–5 are met by the planning, documentation, and import-level conformance
+depth landed in this milestone (interval boundaries, settings values, and event
+parity comparators, plus the OSCAR-numeric-parity, device-time-correction, and
+waveform segment/BLOB design notes). The open items are OSCAR **numeric parity**
+implementation (designed but not built), weighted/time-based summaries, and
+Lowenstein read-only conformance — none of which requires a migration, routing
+change, or new tag.

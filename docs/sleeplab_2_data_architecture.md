@@ -274,15 +274,35 @@ intentional, documented limitation — not a hidden bug or a silent gap.
   row-count estimate is codified in tested, pure helpers
   (`importer/waveform_estimate.py`; `tests/test_waveform_estimate.py`) — ~90k
   rows/hour, ~720k for an 8 h night, ~21.6 M for a 30-night card (one machine,
-  flow+pressure only), with the event-window scheme bounded above by that
-  full-night figure. See checklist §3.
-- **Future work (later alpha/beta), before full-night can become a default,
-  must decide:** storage layout (and any downsampling/rollups), retention and
-  backup implications, query performance under multi-night load (the
-  `idx_session_waveform_session_id_ts` index on a realistic dataset), and the
-  UI/API exposure of full-night vs event-window data. Absence of full-night
-  high-rate samples is surfaced through import-run diagnostics
-  (`resmed_waveform_absent`) and capability state, never a fabricated zero.
+  flow+pressure only), with the event-window scheme bounded above by that figure.
+  That estimate assumes **one SQL row per sample** (the current
+  `session_waveform` shape); it is the *worst-case upper bound* a future
+  compressed design would avoid, not a target storage layout.
+- **Future direction is a compressed segment/BLOB design investigation, not a
+  full-night row-per-sample table.** Earlier planning framed the next step as
+  "whole-night high-rate storage" implicitly extending the per-timestamp
+  `session_waveform` table. The OSCAR 2.0 review re-grounds that: OSCAR does
+  **not** store one row per sample — it uses `event_lists` (one metadata/index
+  row per segment) plus `event_data` (one compressed payload row per segment,
+  qCompress + CRC16 integrity checksum). Any future SleepLab high-rate storage
+  beyond event windows should therefore be investigated as a **compressed
+  waveform segment/BLOB model** (a segment metadata/index row + a compressed
+  payload + an integrity checksum), modeled on that shape — never a naïve
+  row-per-sample full-night table. SleepLab's `WaveformSegment`
+  (`importer/loaders/models.py`) already carries segment metadata + a nullable
+  `storage_ref`, i.e. it is segment-ready for exactly this design.
+- **The investigation is a written design first, and remains stop-and-ask.** It
+  must weigh Postgres-native storage concerns before any schema or migration:
+  `BYTEA` vs large-object vs TOAST trade-offs (inline vs out-of-line, the ~2 kB
+  TOAST threshold, compression), backup size, streaming / byte-range reads for
+  partial-segment access, retention and downsampling tiers (e.g. raw → decimated
+  rollups with bounded retention), and multi-tenant isolation. No full-night /
+  compressed-segment storage, schema, loader, or persistence change is made now;
+  **event-window storage stays the production default.** (See
+  `docs/sleeplab_2_crimson_structure_review.md` §7–§9.)
+- Absence of high-rate samples beyond event windows is surfaced through
+  import-run diagnostics (`resmed_waveform_absent`) and capability state, never a
+  fabricated zero.
 
 ## Known alpha limitations
 
@@ -312,8 +332,10 @@ intentional, documented limitation — not a hidden bug or a silent gap.
 
 ## Next milestone
 
-Validate ResMed waveform/full-night storage and BRP/SA2 channel inventory,
-sample rates, retention, and query performance. This should precede
-Lowenstein persistence because the current ResMed path deliberately stores
-event-window waveform samples. Lowenstein read-only conformance through the
-same normalized model follows.
+Investigate a future **compressed waveform segment/BLOB design** (modeled on
+OSCAR's `event_lists`/`event_data`, see "Waveform storage scope" above) rather
+than a row-per-sample full-night table, alongside BRP/SA2 channel inventory,
+sample rates, retention, and query performance. This investigation is a written
+design first and stays stop-and-ask; the current ResMed path deliberately stores
+event-window waveform samples and that remains the production default. Lowenstein
+read-only conformance through the same normalized model follows.
