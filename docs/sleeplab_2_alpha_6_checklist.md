@@ -71,11 +71,28 @@ Scope = the five focus areas in the kickoff brief, mapped to docs.
 - [ ] Confirm flow + pressure at minimum (loader plan "Waveforms" section).
 
 ### 3. Downsampling, query performance, retention
-- [ ] Estimate full-night 25 Hz row counts and storage size per night/per card
-      (data-architecture "Next milestone": retention + query performance).
+- [x] **(estimate recorded — decision prep only, nothing implemented)**
+      Full-night 25 Hz row-count / size estimate, to ground the §2 event-window
+      vs full-night decision. Source facts: BRP carries `Flow.40ms` + `Press.40ms`
+      at **25 Hz** (1500 samples / 60 s record, `edf_parser.parse_brp`);
+      `session_waveform` (migration 013) stores **one row per timestamp** with
+      both `flow NUMERIC(7,4)` and `pressure NUMERIC(6,2)` columns, so 25 rows/s.
+      - Full-night: 25 rows/s × 3600 = **90,000 rows/hour**; an 8 h night ≈
+        **720,000 rows**; a 30-night card ≈ **~21.6 M rows** — for *one*
+        machine, flow+pressure only. Adding more high-rate channels multiplies
+        this. This is the cost the current design deliberately avoids.
+      - Current event-window: `db.replace_session_waveform` stores only merged
+        windows of **120 s before / 180 s after** each scored event, clipped to
+        the recorded span. Storage therefore scales with **event count**, not
+        night length, and is bounded above by the full-night figure. A night with
+        few scored events stores a small fraction of 720k rows.
+      - Implication: full-night storage is ~1–2 orders of magnitude larger and
+        needs a deliberate downsampling/retention design (below) before it can
+        become a default. **No storage change is made here.**
 - [ ] Benchmark `session_waveform` read queries used by the Event Inspector /
       charts; record the current index (`idx_session_waveform_session_id_ts`)
-      behavior under a multi-night load.
+      behavior under a multi-night load. *(Needs Postgres + a realistic dataset;
+      deferred — measurement, not an Alpha 6 code change.)*
 - [ ] Draft (do not yet implement) downsampling + retention options; capture
       trade-offs. Implementation of a new storage scheme is *later alpha / beta*.
 
