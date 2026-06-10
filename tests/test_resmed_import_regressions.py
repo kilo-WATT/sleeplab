@@ -344,6 +344,60 @@ def test_upsert_session_reimport_is_idempotent(db, test_user):
         assert total_ahi_events == 13
 
 
+def test_normalized_signal_inventory_classifies_brp_and_pld_channels():
+    """Alpha 6 item 1: pin the native ResMed BRP/PLD channel inventory.
+
+    ``_normalized_signal`` is the single place that maps a source EDF label to a
+    normalized channel name, classifies it as ``waveform`` vs ``low_rate`` by
+    sample rate, and tags leak semantics. This locks the inventory the
+    ``signal_channels`` table is populated from so a parser/label change can't
+    silently reclassify a channel.
+    """
+    # High-rate BRP waveform channels (Flow.40ms / Press.40ms ~ 25 Hz).
+    assert importer_db._normalized_signal("Flow.40ms", 25.0) == ("flow", "waveform", None)
+    assert importer_db._normalized_signal("Press.40ms", 25.0) == ("pressure", "waveform", None)
+
+    # Low-rate PLD channels (.2s ~ 0.5 Hz). Leak carries unintentional semantics.
+    assert importer_db._normalized_signal("Leak.2s", 0.5) == ("leak", "low_rate", "unintentional")
+    assert importer_db._normalized_signal("Press.2s", 0.5) == ("pressure", "low_rate", None)
+    assert importer_db._normalized_signal("RespRate.2s", 0.5) == ("respiratory_rate", "low_rate", None)
+    assert importer_db._normalized_signal("MaskPress.2s", 0.5) == ("mask_pressure", "low_rate", None)
+
+
+def test_normalized_signal_classification_boundary_is_5hz():
+    """The waveform/low-rate split is sample_rate >= 5 Hz; absence stays low-rate.
+
+    Guards the exact threshold used by ``replace_signal_channels`` so a channel
+    sitting on the boundary (or with an unknown rate) is classified
+    deterministically rather than by accident.
+    """
+    assert importer_db._normalized_signal("Press.2s", 5.0)[1] == "waveform"
+    assert importer_db._normalized_signal("Press.2s", 4.999)[1] == "low_rate"
+    # An unknown/absent sample rate must not be treated as high-rate.
+    assert importer_db._normalized_signal("Press.2s", None)[1] == "low_rate"
+
+
+def test_normalized_signal_unknown_channel_is_flagged_not_silently_mapped():
+    """Alpha 6 absence diagnostics: unknown channels surface, never get aliased.
+
+    The loader-plan invariant is "never silently map an unknown channel to a
+    known one". SA2/SAD oximetry labels (SpO2, Pulse) are not yet in the native
+    inventory, so they must come back with the explicit ``unknown:`` sentinel
+    rather than being folded into a known normalized name. This documents the
+    known SA2 oximetry inventory gap as a visible diagnostic instead of a
+    silent mislabel.
+    """
+    spo2 = importer_db._normalized_signal("SpO2", 1.0)
+    assert spo2 == ("unknown:SpO2", "low_rate", None)
+
+    pulse = importer_db._normalized_signal("Pulse.1s", 1.0)
+    assert pulse[0] == "unknown:Pulse.1s"
+    assert pulse[0].startswith("unknown:")
+    # The sentinel preserves the raw source label, so a missing mapping is
+    # diagnosable from the persisted channel row rather than lost.
+    assert importer_db._normalized_signal("Totally.Novel", 12.0) == ("unknown:Totally.Novel", "waveform", None)
+
+
 def test_dedupe_events_preserves_zero_duration_arousal():
     events = [
         (10.0, 0.0, "Arousal"),
