@@ -201,6 +201,36 @@ counts and hashes. Duplicate verification compares stable persisted UUID sets;
 incremental verification adds an authorized or synthetic newer night and
 checks that existing identities remain unchanged.
 
+## Waveform storage scope (Alpha 6 decision)
+
+Alpha 6 deliberately keeps **event-window waveform storage** as the production
+default and does **not** implement full-night waveform storage. This is an
+intentional, documented limitation — not a hidden bug or a silent gap.
+
+- **Current production storage:** high-rate BRP `flow`/`pressure` samples are
+  persisted to `session_waveform` only within merged windows around scored
+  events (120 s before / 180 s after, clipped to the recorded span;
+  `db.replace_session_waveform`, `persist._write_session_waveform`). Storage
+  therefore scales with event count, not night length. Low-rate PLD metrics are
+  stored full-resolution in `session_metrics`; channel metadata in
+  `signal_channels`.
+- **Full-night waveform storage is not implemented in Alpha 6.** No schema,
+  loader, or persistence change toward whole-night high-rate storage is made
+  this milestone.
+- **Alpha 6 adds measurement support** to ground the eventual decision: the
+  row-count estimate is codified in tested, pure helpers
+  (`importer/waveform_estimate.py`; `tests/test_waveform_estimate.py`) — ~90k
+  rows/hour, ~720k for an 8 h night, ~21.6 M for a 30-night card (one machine,
+  flow+pressure only), with the event-window scheme bounded above by that
+  full-night figure. See checklist §3.
+- **Future work (later alpha/beta), before full-night can become a default,
+  must decide:** storage layout (and any downsampling/rollups), retention and
+  backup implications, query performance under multi-night load (the
+  `idx_session_waveform_session_id_ts` index on a realistic dataset), and the
+  UI/API exposure of full-night vs event-window data. Absence of full-night
+  high-rate samples is surfaced through import-run diagnostics
+  (`resmed_waveform_absent`) and capability state, never a fabricated zero.
+
 ## Known alpha limitations
 
 - STR parsing has evidence from one AirSense 10 card and synthetic fixtures;
@@ -209,7 +239,8 @@ checks that existing identities remain unchanged.
   not confidently established.
 - Three malformed PLD headers on the restricted card report `num_records=-1`;
   valid data imports and the run is correctly marked partial.
-- BRP waveform samples remain event-window-focused rather than full-night.
+- BRP waveform samples remain event-window-focused rather than full-night — an
+  intentional Alpha 6 decision (see "Waveform storage scope" above), not a bug.
 - Non-ResMed adapters are detection/planning only.
 - Import cancellation and proactive worker heartbeats are not implemented;
   stale-run recovery prevents permanent `running` state.

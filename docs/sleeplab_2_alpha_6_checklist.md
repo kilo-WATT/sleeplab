@@ -61,10 +61,14 @@ Scope = the five focus areas in the kickoff brief, mapped to docs.
       misclassifies.
 
 ### 2. Full-night waveform storage validation
-- [ ] Measure stored vs. recorded coverage: today only event-windowed BRP is
-      stored. Decide and document the Alpha 6 target (still event-windowed, or
-      a validated full-night option behind a flag) — do not silently change the
-      default.
+- [x] **(decided)** Measure stored vs. recorded coverage and decide the Alpha 6
+      target. **Decision: Alpha 6 stays event-window waveform storage only;
+      full-night storage is not implemented and is deferred to a later
+      alpha/beta behind a deliberate storage-layout / downsampling / retention /
+      query-performance / UI-API decision.** This is an intentional limitation,
+      not a hidden bug; the default is unchanged. Recorded in
+      `docs/sleeplab_2_data_architecture.md` → "Waveform storage scope (Alpha 6
+      decision)", grounded by the codified row-count estimate (§3).
 - [ ] Validate segment start/end, sample counts, and missing spans against the
       decoded EDF for at least one detailed night (`WaveformSegment` semantics
       from the loader plan).
