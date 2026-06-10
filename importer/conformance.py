@@ -179,7 +179,7 @@ def validate_manifest_metadata(fixture_dir: str | Path) -> list[str]:
 
 
 def validate_import(
-    fixture_dir: str | Path, *, conn: Any = None, run: Any = None
+    fixture_dir: str | Path, *, conn: Any = None, run: Any = None, machine_id: str | None = None
 ) -> ImportConformanceResult:
     """Import-level conformance entry point.
 
@@ -203,8 +203,9 @@ def validate_import(
       injected via ``run=`` or parsed from the fixture source when
       ``cpap-parser``/``cpap-py`` are installed. When no run can be obtained the
       block is skipped with the acquisition reason.
-    * DB blocks run only when ``conn`` is supplied; otherwise they skip with
-      ``"no database connection"``.
+    * DB blocks run only when ``conn`` **and** ``machine_id`` are supplied;
+      otherwise they skip with ``"no database connection"`` or
+      ``"no machine scope"`` respectively.
     * An unrecognized sub-block is surfaced as a skip so a manifest typo is
       visible.
 
@@ -216,6 +217,10 @@ def validate_import(
         run: Optional pre-computed normalized ``ImportRun`` to compare against. If
             omitted, one is parsed from the fixture source when the parser is
             installed; otherwise parse-observable checks are skipped.
+        machine_id: Optional ``cpap_machines.id`` scoping the DB identity-hash
+            checks to one persisted machine. Required (with ``conn``) for
+            ``identity_hashes``; absent → that block skips. ``validate_import``
+            only *reads* persisted state — it never writes or commits.
     """
 
     root = Path(fixture_dir)
@@ -271,11 +276,18 @@ def validate_import(
             skipped.append(
                 f"expected.import.{block}: skipped — no database connection"
             )
-        else:
+            continue
+        if machine_id is None:
             skipped.append(
-                f"expected.import.{block}: skipped — persisted check not implemented "
-                "yet (later plan step)"
+                f"expected.import.{block}: skipped — no machine scope "
+                "(pass machine_id= to compare persisted identities)"
             )
+            continue
+        block_failures, block_skips = _compare_identity_hashes(
+            import_expected[block], conn, machine_id
+        )
+        failures.extend(block_failures)
+        skipped.extend(block_skips)
 
     # An unrecognized sub-block has no checker; surface it as a skip (not a
     # silent ignore) so a manifest typo or a future block is visible today.
@@ -609,6 +621,107 @@ def _compare_oscar_reference(
         else "numeric parity needs a normalized run (none available)"
     )
     skips.append(f"expected.import.oscar_reference.parity: skipped — {parity_reason}")
+    return failures, skips
+
+
+def _hash_identity_keys(keys: list[str]) -> str:
+    """sha256 of a newline-joined, sorted key set.
+
+    Hashing **derived, pseudonymous keys** (``source_session_key`` /
+    ``source_block_key`` — date/index-scoped strings) keeps the manifest free of
+    raw serials or PHI (plan §11). An empty set hashes deterministically too, so
+    "nothing persisted" is a distinct, comparable value rather than a crash.
+    """
+
+    joined = "\n".join(sorted(keys))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def persisted_identity_snapshot(conn: Any, *, machine_id: str) -> dict[str, Any]:
+    """Read-only snapshot of one machine's persisted stable identities.
+
+    Returns the sorted ``source_session_key`` and ``source_block_key`` sets for
+    ``machine_id``, their sha256 hashes, and counts. These derived keys are the
+    identities that must stay stable across a duplicate re-import and grow only
+    by the new nights on an incremental import.
+
+    Read-only: issues ``SELECT``s only — never writes, and never commits. Safe to
+    call inside a caller-owned (e.g. rolled-back test) transaction.
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_session_key
+            FROM sessions
+            WHERE machine_id = %s AND source_session_key IS NOT NULL
+            """,
+            (machine_id,),
+        )
+        session_keys = sorted(row[0] for row in cur.fetchall())
+        cur.execute(
+            """
+            SELECT b.source_block_key
+            FROM session_blocks b
+            JOIN sessions s ON s.id = b.session_id
+            WHERE s.machine_id = %s AND b.source_block_key IS NOT NULL
+            """,
+            (machine_id,),
+        )
+        block_keys = sorted(row[0] for row in cur.fetchall())
+
+    return {
+        "session_keys": tuple(session_keys),
+        "block_keys": tuple(block_keys),
+        "sessions": _hash_identity_keys(session_keys),
+        "blocks": _hash_identity_keys(block_keys),
+        "session_count": len(session_keys),
+        "block_count": len(block_keys),
+    }
+
+
+def _compare_identity_hashes(
+    expected_block: dict, conn: Any, machine_id: str
+) -> tuple[list[str], list[str]]:
+    """Compare ``expected.import.identity_hashes`` against persisted DB state.
+
+    Supported keys (read-only, parser-free given a ``conn``):
+
+    * ``sessions`` / ``blocks`` — sha256 (optionally ``sha256:``-prefixed) of the
+      persisted ``source_session_key`` / ``source_block_key`` set for the machine.
+    * ``session_count`` / ``block_count`` — integer counts.
+    * ``algorithm`` — metadata; only ``sha256`` is supported (else a skip).
+
+    Other keys (e.g. ``machine``, ``incremental_night``) are deferred and skipped
+    — never silently passed. The duplicate/incremental *stability* property is
+    asserted by DB-gated tests using :func:`persisted_identity_snapshot`.
+    """
+
+    failures: list[str] = []
+    skips: list[str] = []
+    snapshot = persisted_identity_snapshot(conn, machine_id=machine_id)
+
+    algorithm = expected_block.get("algorithm")
+    if algorithm is not None and str(algorithm).strip().lower() != "sha256":
+        skips.append(
+            f"expected.import.identity_hashes.algorithm: skipped — only 'sha256' is "
+            f"supported, got {algorithm!r}"
+        )
+
+    for key in ("sessions", "blocks"):
+        if key in expected_block:
+            expected_hex = str(expected_block[key]).split(":", 1)[-1].strip().lower()
+            _expect(failures, f"expected.import.identity_hashes.{key}", snapshot[key], expected_hex)
+    for key in ("session_count", "block_count"):
+        if key in expected_block:
+            _expect(failures, f"expected.import.identity_hashes.{key}", snapshot[key], expected_block[key])
+
+    handled = {"sessions", "blocks", "session_count", "block_count", "algorithm"}
+    for key in sorted(set(expected_block) - handled):
+        skips.append(
+            f"expected.import.identity_hashes.{key}: skipped — not implemented yet "
+            "(later plan step)"
+        )
     return failures, skips
 
 

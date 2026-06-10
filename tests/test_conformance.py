@@ -3,13 +3,16 @@
 import hashlib
 import json
 import shutil
-from datetime import datetime
+import uuid
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import importer.conformance as conformance
+import importer.db as importer_db
 from importer.conformance import (
     ImportConformanceResult,
+    persisted_identity_snapshot,
     validate_fixture,
     validate_import,
     validate_manifest_metadata,
@@ -878,3 +881,267 @@ def test_oximetry_files_coverage_is_observable_and_checked(tmp_path):
     assert any("coverage.oximetry_files" in failure for failure in result.failures), (
         f"expected an oximetry-coverage failure, got {result.failures}"
     )
+
+
+# ---------------------------------------------------------------------------
+# expected.import.identity_hashes (DB-gated; skips cleanly without a database)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_import_identity_hashes_skips_without_conn(tmp_path):
+    """Plan Step 4: identity_hashes skips clearly when no connection is supplied.
+
+    Runs with no database — pins the backward-compatible default that the DB
+    block is gated, not silently passed.
+    """
+    fixture = _write_import_manifest(tmp_path, {"identity_hashes": {"sessions": "x"}})
+
+    result = validate_import(fixture)  # conn=None
+
+    assert result.passed
+    assert any(
+        "expected.import.identity_hashes" in s and "no database connection" in s
+        for s in result.skipped
+    ), result.skipped
+
+
+def test_validate_import_identity_hashes_skips_without_machine_scope(tmp_path):
+    """Plan Step 4: with a conn but no machine_id there is nothing to scope to.
+
+    Uses a dummy non-None ``conn`` (never touched, since the block skips before
+    any query) so this stays a pure no-DB unit test.
+    """
+    fixture = _write_import_manifest(tmp_path, {"identity_hashes": {"sessions": "x"}})
+
+    result = validate_import(fixture, conn=object(), machine_id=None)
+
+    assert result.passed
+    assert any(
+        "expected.import.identity_hashes" in s and "no machine scope" in s
+        for s in result.skipped
+    ), result.skipped
+
+
+# -- DB-gated tests below. The db/test_user fixtures pytest.skip when no
+# -- TEST_DATABASE_URL is configured, so these never require a live database for
+# -- the normal local suite. They mirror the persistence pattern in
+# -- tests/test_resmed_import_regressions.py and read identities back read-only.
+
+
+def _db_session_row(**overrides):
+    """Minimal ``upsert_session`` payload for identity-hash DB tests."""
+    row = {
+        "session_id": "sess",
+        "folder_date": date(2026, 6, 1),
+        "block_index": 0,
+        "start_datetime": datetime(2026, 6, 1, 22, 0, tzinfo=UTC),
+        "pld_start_datetime": datetime(2026, 6, 1, 22, 0, tzinfo=UTC),
+        "duration_seconds": 3600,
+        "device_serial": "SN-FIXTURE",
+        "ahi": 1.0,
+        "central_apnea_count": 0,
+        "obstructive_apnea_count": 0,
+        "hypopnea_count": 0,
+        "apnea_count": 0,
+        "arousal_count": 0,
+        "total_ahi_events": 0,
+        "avg_pressure": None,
+        "p95_pressure": None,
+        "avg_leak": None,
+        "avg_resp_rate": None,
+        "avg_tidal_vol": None,
+        "avg_min_vent": None,
+        "avg_snore": None,
+        "avg_flow_lim": None,
+        "has_spo2": False,
+        "therapy_mode": None,
+        "mask_type": None,
+        "humidity_level": None,
+        "temperature_c": None,
+        "machine_tz": "UTC",
+        "manufacturer": "ResMed",
+        "provenance_status": "native_resmed_cpap_parser",
+    }
+    row.update(overrides)
+    return row
+
+
+def _new_machine_and_run(raw_conn, *, user_id, serial):
+    """Reconcile a machine and open an import_run; return ``(machine_id, run_id)``."""
+    machine_id = importer_db.reconcile_machine(
+        raw_conn,
+        user_id=user_id,
+        adapter_id="resmed-native-v2",
+        manufacturer="ResMed",
+        serial_number=serial,
+    )
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO import_runs (
+                user_id, machine_id, adapter_id, source_type, source_fingerprint,
+                status, validation_status, started_at
+            ) VALUES (%s, %s, 'resmed-native-v2', 'directory', %s, 'running', 'partial', NOW())
+            RETURNING id::text
+            """,
+            (user_id, machine_id, f"idhash-{uuid.uuid4().hex}"),
+        )
+        run_id = cur.fetchone()[0]
+    return machine_id, run_id
+
+
+def _persist_nights(raw_conn, *, user_id, machine_id, import_run_id, nights):
+    """Persist ``nights`` = list of ``(session_key, session_id, [block_keys])``.
+
+    Uses the same idempotent upserts as the production persist path, so calling
+    it twice with the same nights is a duplicate re-import (no new rows).
+    """
+    for session_key, session_id, block_keys in nights:
+        session_db_id = importer_db.upsert_session(
+            raw_conn,
+            _db_session_row(
+                user_id=user_id,
+                machine_id=machine_id,
+                import_run_id=import_run_id,
+                source_session_key=session_key,
+                session_id=session_id,
+            ),
+        )
+        for bk in block_keys:
+            importer_db.upsert_session_block(
+                raw_conn,
+                session_db_id=str(session_db_id),
+                import_run_id=import_run_id,
+                source_block_key=bk,
+                start_datetime=datetime(2026, 6, 1, 22, 0, tzinfo=UTC),
+                end_datetime=datetime(2026, 6, 1, 23, 0, tzinfo=UTC),
+                source_file_ids=[],
+                source_kind="resmed_str_mask_interval",
+                therapy_duration_seconds=3600,
+            )
+
+
+def test_validate_import_identity_hashes_match_persisted(db, test_user, tmp_path):
+    """Plan Step 4: persisted session/block identity hashes + counts are compared."""
+    raw_conn = db.connection().connection.driver_connection
+    machine_id, run_id = _new_machine_and_run(raw_conn, user_id=test_user["id"], serial="ID-HASH-MATCH")
+    _persist_nights(
+        raw_conn,
+        user_id=test_user["id"],
+        machine_id=machine_id,
+        import_run_id=run_id,
+        nights=[("resmed:IDM:2026-06-01", "idm_20260601", ["resmed:IDM:2026-06-01:0", "resmed:IDM:2026-06-01:1"])],
+    )
+    snap = persisted_identity_snapshot(raw_conn, machine_id=machine_id)
+
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "identity_hashes": {
+                "algorithm": "sha256",
+                "sessions": f"sha256:{snap['sessions']}",  # prefix tolerated
+                "blocks": snap["blocks"],                  # bare hex tolerated
+                "session_count": 1,
+                "block_count": 2,
+            }
+        },
+    )
+
+    result = validate_import(fixture, conn=raw_conn, machine_id=machine_id)
+
+    assert result.passed, result.failures
+    # The block was actually checked (no bare block-level skip).
+    assert not any(s.startswith("expected.import.identity_hashes:") for s in result.skipped)
+
+
+def test_validate_import_identity_hashes_mismatch_fails(db, test_user, tmp_path):
+    """Plan Step 4: a wrong persisted-identity hash is a real failure."""
+    raw_conn = db.connection().connection.driver_connection
+    machine_id, run_id = _new_machine_and_run(raw_conn, user_id=test_user["id"], serial="ID-HASH-MISMATCH")
+    _persist_nights(
+        raw_conn,
+        user_id=test_user["id"],
+        machine_id=machine_id,
+        import_run_id=run_id,
+        nights=[("resmed:IDX:2026-06-01", "idx_20260601", ["resmed:IDX:2026-06-01:0"])],
+    )
+
+    fixture = _write_import_manifest(tmp_path, {"identity_hashes": {"sessions": "0" * 64}})
+
+    result = validate_import(fixture, conn=raw_conn, machine_id=machine_id)
+
+    assert not result.passed
+    assert any(
+        "expected.import.identity_hashes.sessions" in f for f in result.failures
+    ), result.failures
+
+
+def test_validate_import_identity_hashes_stable_across_duplicate_import(db, test_user):
+    """Plan Step 4: a duplicate re-import leaves persisted identities unchanged.
+
+    Persist a night, snapshot its identity hashes, then re-import the *same*
+    night via the idempotent upserts. The session/block source-key sets, their
+    hashes, and counts must be byte-for-byte identical — no duplicate rows.
+    """
+    raw_conn = db.connection().connection.driver_connection
+    machine_id, run_id = _new_machine_and_run(raw_conn, user_id=test_user["id"], serial="ID-HASH-DUP")
+    nights = [("resmed:DUP:2026-06-01", "dup_20260601", ["resmed:DUP:2026-06-01:0", "resmed:DUP:2026-06-01:1"])]
+
+    _persist_nights(raw_conn, user_id=test_user["id"], machine_id=machine_id, import_run_id=run_id, nights=nights)
+    snap1 = persisted_identity_snapshot(raw_conn, machine_id=machine_id)
+
+    # Duplicate import of the identical night.
+    _persist_nights(raw_conn, user_id=test_user["id"], machine_id=machine_id, import_run_id=run_id, nights=nights)
+    snap2 = persisted_identity_snapshot(raw_conn, machine_id=machine_id)
+
+    assert snap1 == snap2, "duplicate import must not change persisted identities"
+    assert snap1["session_count"] == 1
+    assert snap1["block_count"] == 2
+
+
+def test_validate_import_identity_hashes_incremental_preserves_first_night(db, test_user):
+    """Plan Step 4: adding a newer night leaves the first night's identity intact.
+
+    Persist night A, snapshot; then import a card containing A *and* a newer
+    night B. A's source key must still be present, A's session row id unchanged,
+    and only B's session/block added (counts +1 each). The combined set hash
+    necessarily grows, which is the expected incremental behavior — not churn.
+    """
+    raw_conn = db.connection().connection.driver_connection
+    machine_id, run_id = _new_machine_and_run(raw_conn, user_id=test_user["id"], serial="ID-HASH-INC")
+
+    night_a = ("resmed:INC:2026-06-01", "inc_20260601", ["resmed:INC:2026-06-01:0"])
+    night_b = ("resmed:INC:2026-06-02", "inc_20260602", ["resmed:INC:2026-06-02:0"])
+
+    _persist_nights(raw_conn, user_id=test_user["id"], machine_id=machine_id, import_run_id=run_id, nights=[night_a])
+    snap_a = persisted_identity_snapshot(raw_conn, machine_id=machine_id)
+
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM sessions WHERE machine_id = %s AND source_session_key = %s",
+            (machine_id, "resmed:INC:2026-06-01"),
+        )
+        a_id_before = cur.fetchone()[0]
+
+    # Incremental re-import: the card now contains both nights.
+    _persist_nights(
+        raw_conn, user_id=test_user["id"], machine_id=machine_id, import_run_id=run_id, nights=[night_a, night_b]
+    )
+    snap_b = persisted_identity_snapshot(raw_conn, machine_id=machine_id)
+
+    # A's identity is preserved and only B was added.
+    assert "resmed:INC:2026-06-01" in snap_b["session_keys"]
+    assert set(snap_a["session_keys"]).issubset(set(snap_b["session_keys"]))
+    assert snap_b["session_count"] == snap_a["session_count"] + 1
+    assert snap_b["block_count"] == snap_a["block_count"] + 1
+
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM sessions WHERE machine_id = %s AND source_session_key = %s",
+            (machine_id, "resmed:INC:2026-06-01"),
+        )
+        a_id_after = cur.fetchone()[0]
+    assert a_id_after == a_id_before, "first night's session row id must be stable"
+
+    # The combined-set hash grows (B added) — expected, not churn.
+    assert snap_b["sessions"] != snap_a["sessions"]
