@@ -89,6 +89,14 @@ Scope = the five focus areas in the kickoff brief, mapped to docs.
       - Implication: full-night storage is ~1–2 orders of magnitude larger and
         needs a deliberate downsampling/retention design (below) before it can
         become a default. **No storage change is made here.**
+      - **(codified)** These numbers are now pinned by pure, tested estimators in
+        `importer/waveform_estimate.py` (`full_night_row_count`,
+        `event_window_row_count`; `BRP_RATE_HZ`/window constants mirror the
+        storage path) so the estimate cannot silently drift —
+        `tests/test_waveform_estimate.py` asserts 90k rows/h, 720k/8 h-night,
+        ~21.6 M/30-night card, and that the event-window count scales with event
+        count and is bounded above by the full-night figure. Measurement only;
+        still no storage change.
 - [ ] Benchmark `session_waveform` read queries used by the Event Inspector /
       charts; record the current index (`idx_session_waveform_session_id_ts`)
       behavior under a multi-night load. *(Needs Postgres + a realistic dataset;
