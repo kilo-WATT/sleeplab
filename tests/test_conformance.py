@@ -1,5 +1,6 @@
 """Tests for manifest-driven importer conformance scaffolding."""
 
+import hashlib
 import json
 import shutil
 from datetime import datetime
@@ -700,6 +701,80 @@ def test_validate_import_mixed_blocks_check_and_skip_together(tmp_path):
 
     assert result.passed, result.failures
     assert any("expected.import.settings.2026-06-01.therapy_mode" in s for s in result.skipped)
+
+
+# ---------------------------------------------------------------------------
+# expected.import.oscar_reference (reference-file hash verification)
+# ---------------------------------------------------------------------------
+
+
+def _write_reference_csv(fixture, content: bytes, rel="oscar_reference/summary.csv"):
+    """Write a reference export under the fixture and return ``(rel, sha256hex)``."""
+    path = fixture / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return rel, hashlib.sha256(content).hexdigest()
+
+
+def test_validate_import_oscar_reference_hash_matches(tmp_path):
+    """Plan Step 3: a matching reference hash verifies (parser-free); parity skips."""
+    content = b"Date,AHI,Total Time\n2026-06-01,1.0,08:00:00\n"
+    rel = "oscar_reference/summary.csv"
+    digest = hashlib.sha256(content).hexdigest()
+    fixture = _write_import_manifest(
+        tmp_path, {"oscar_reference": {"export_hash": f"sha256:{digest}", "summary_csv": rel}}
+    )
+    # Create the reference file inside the (already-copied) fixture tree.
+    _write_reference_csv(fixture, content, rel)
+
+    result = validate_import(fixture)  # no run/parser needed for the hash check
+
+    assert result.passed, result.failures
+    assert not any("oscar_reference.export_hash" in f for f in result.failures)
+    # Numeric parity is deferred and reported as a skip, never a silent pass.
+    assert any("oscar_reference.parity" in s for s in result.skipped)
+
+
+def test_validate_import_oscar_reference_hash_mismatch_fails(tmp_path):
+    """Plan Step 3: a wrong reference hash is a real failure."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {"oscar_reference": {"export_hash": "sha256:" + "0" * 64, "summary_csv": "oscar_reference/summary.csv"}},
+    )
+    _write_reference_csv(fixture, b"Date,AHI\n2026-06-01,1.0\n")
+
+    result = validate_import(fixture)
+
+    assert not result.passed
+    assert any("oscar_reference.export_hash" in f for f in result.failures), result.failures
+
+
+def test_validate_import_oscar_reference_missing_file_fails(tmp_path):
+    """Plan Step 3: a declared reference file that is absent is a failure, not a skip."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {"oscar_reference": {"export_hash": "sha256:" + "0" * 64, "summary_csv": "oscar_reference/missing.csv"}},
+    )
+
+    result = validate_import(fixture)
+
+    assert not result.passed
+    assert any(
+        "oscar_reference" in f and "reference file not found" in f for f in result.failures
+    ), result.failures
+
+
+def test_validate_import_oscar_reference_hash_without_path_skips(tmp_path):
+    """Plan Step 3: an ``export_hash`` with no file path has nothing to verify → skip."""
+    fixture = _write_import_manifest(tmp_path, {"oscar_reference": {"export_hash": "sha256:abc"}})
+
+    result = validate_import(fixture)
+
+    assert result.passed, result.failures
+    assert any(
+        "oscar_reference.export_hash" in s and "no reference file path" in s
+        for s in result.skipped
+    ), result.skipped
 
 
 def test_validate_import_surfaces_unknown_import_block(tmp_path):
