@@ -542,6 +542,100 @@ def test_detailed_night_does_not_emit_summary_only_absence_warning():
     assert "resmed_summary_only_day" not in {w.code for w in session.warnings}
 
 
+def _detailed_session(*, flow_rate, set_pressure, **overrides):
+    """Build a fake cpap-py file-session for ``_build_session`` waveform tests.
+
+    ``flow_rate`` is the high-rate BRP channel; ``set_pressure`` is a low-rate
+    PLD channel. ``leak`` is left empty so large-leak derivation is skipped.
+    """
+    from types import SimpleNamespace
+
+    timeseries = SimpleNamespace(
+        flow_rate=flow_rate,
+        pressure=[],
+        mask_pressure=[],
+        set_pressure=set_pressure,
+        epr_pressure=[],
+        leak=[],
+        tidal_volume=[],
+        minute_ventilation=[],
+        respiratory_rate=[],
+        snore=[],
+        flow_limitation=[],
+        timestamps_low=[0.0, 2.0],
+    )
+    return SimpleNamespace(
+        start_time=datetime(2026, 6, 1, 22, 0),
+        end_time=datetime(2026, 6, 2, 6, 0),
+        file_type="PLD",
+        events=[],
+        sample_rate=25.0,
+        timeseries=timeseries,
+        **overrides,
+    )
+
+
+def _waveform_summary():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        date=date(2026, 6, 1),
+        has_detailed_data=True,
+        summary_reported_usage=8.0,
+        computed_usage=8.0,
+        recording_span=8.0,
+        ahi=1.0,
+    )
+
+
+def test_detailed_night_without_brp_waveform_emits_waveform_absent_diagnostic():
+    """Alpha 6: a detailed night with PLD/session data but no BRP waveform.
+
+    The night is real (has detailed DATALOG/PLD data) but ships no high-rate
+    BRP samples. The loader must flag ``resmed_waveform_absent`` — affecting
+    waveform availability, not the session's existence — and must NOT fabricate
+    high-rate samples to make the night look complete.
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    detailed = [_detailed_session(flow_rate=[], set_pressure=[10.0, 11.0])]
+
+    session = ResMedNativeLoader()._build_session(
+        _waveform_summary(),
+        detailed=detailed,
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=[],
+    )
+
+    warning = next(w for w in session.warnings if w.code == "resmed_waveform_absent")
+    assert warning.severity == "warning"  # gap, not parse failure -> not forced partial
+    assert warning.affects == ("waveforms",)
+    assert warning.relative_path == "DATALOG"
+    # Session still exists; this is a summary/low-rate night, not a ghost night.
+    assert "resmed_summary_only_day" not in {w.code for w in session.warnings}
+    # No fabricated high-rate samples: no flow_rate/pressure segment was created.
+    assert not ResMedNativeLoader._has_high_rate_waveform(session.waveforms)
+
+
+def test_detailed_night_with_brp_waveform_has_no_absence_diagnostic():
+    """A detailed night that ships BRP high-rate samples is not flagged absent."""
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    detailed = [_detailed_session(flow_rate=[1.0, 2.0, 3.0], set_pressure=[10.0, 11.0])]
+
+    session = ResMedNativeLoader()._build_session(
+        _waveform_summary(),
+        detailed=detailed,
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=[],
+    )
+
+    assert "resmed_waveform_absent" not in {w.code for w in session.warnings}
+    assert ResMedNativeLoader._has_high_rate_waveform(session.waveforms)
+
+
 def test_dedupe_events_preserves_zero_duration_arousal():
     events = [
         (10.0, 0.0, "Arousal"),

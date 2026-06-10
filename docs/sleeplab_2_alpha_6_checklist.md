@@ -108,9 +108,16 @@ Items:
       `resmed_summary_only_day` warning for a night with no detailed DATALOG
       waveform/metric source — kept and flagged, not silently empty
       (`tests/test_resmed_import_regressions.py`).
-- [ ] Extend the same diagnostic to a detailed night that is *missing only its
-      BRP waveform* (PLD present, BRP absent/malformed) — currently no explicit
-      "waveform absent" warning fires in that case.
+- [x] **(done)** The native loader distinguishes a detailed night that is
+      *missing only its BRP waveform* (PLD/session data present, BRP
+      absent/malformed) by emitting `resmed_waveform_absent`
+      (severity `warning`, `affects=("waveforms",)`, `relative_path="DATALOG"`).
+      It flags waveform availability without questioning the session's
+      existence, keeps the run from being forced partial (gap, not parse
+      failure), and fabricates no high-rate samples. Tested in
+      `tests/test_resmed_import_regressions.py`. The four ResMed waveform tiers
+      are now diagnosable: summary-only night, detailed-without-BRP, detailed
+      event-window waveform, and (future) full-night storage.
 
 ### 5. Conformance manifest expansion
 Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:

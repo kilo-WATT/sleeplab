@@ -337,7 +337,39 @@ class ResMedNativeLoader(LoaderAdapter):
             session.events.extend(self._large_leak_events(detailed))
         if include_waveforms:
             session.signals, session.waveforms = self._session_waveforms(detailed, machine_key, local_date)
+            # Distinguish a detailed night that simply lacks high-rate BRP
+            # waveform samples from one that has them. Low-rate/session data may
+            # still be present and the session is still valid; we record *why*
+            # the waveform view is empty rather than letting an absent or
+            # malformed BRP file look like a complete night. Severity stays
+            # "warning" (not "error") so the run is not forced partial — absence
+            # of high-rate samples is a coverage gap, not a parse failure.
+            if detailed and not self._has_high_rate_waveform(session.waveforms):
+                session.warnings.append(
+                    ImportWarning(
+                        code="resmed_waveform_absent",
+                        severity="warning",
+                        message=(
+                            "Detailed night has session/PLD data but no BRP "
+                            "high-rate waveform samples; the waveform view is "
+                            "empty (no samples were fabricated)."
+                        ),
+                        relative_path="DATALOG",
+                        affects=("waveforms",),
+                    )
+                )
         return session
+
+    @staticmethod
+    def _has_high_rate_waveform(waveforms: list[WaveformSegment]) -> bool:
+        """True if any persisted segment is a high-rate BRP channel.
+
+        High-rate channel keys (``flow_rate``/``pressure``) are unique to BRP;
+        low-rate PLD channels use distinct keys (``mask_pressure`` etc.), so a
+        low-rate-only night reports no high-rate waveform here.
+        """
+        high_rate_keys = {channel for channel, _unit in _HIGH_RATE_CHANNELS}
+        return any(segment.channel_key in high_rate_keys for segment in waveforms)
 
     @staticmethod
     def _summary_derived_values(summary, has_detailed_data: bool) -> list[DerivedValue]:
