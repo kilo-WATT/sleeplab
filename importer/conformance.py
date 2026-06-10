@@ -331,6 +331,61 @@ def validate_import(
     )
 
 
+def _message_belongs_to_block(message: str, block: str) -> bool:
+    """True when a failure/skip string is scoped to ``expected.import.<block>``.
+
+    Messages are scoped as ``expected.import.<block>.<...>`` (a sub-key) or
+    ``expected.import.<block>: <reason>`` (the whole block). Matching on the
+    ``block`` followed by ``.`` or ``:`` avoids a false hit on a different block
+    that merely shares a prefix (e.g. ``settings`` vs a future ``settings_x``).
+    """
+
+    return message.startswith(f"expected.import.{block}.") or message.startswith(
+        f"expected.import.{block}:"
+    )
+
+
+def summarize_import_blocks(
+    fixture_dir: str | Path, result: ImportConformanceResult
+) -> dict[str, str]:
+    """Per-block status for a :func:`validate_import` result: passed/skipped/failed.
+
+    A reviewer cannot tell from an :class:`ImportConformanceResult` alone whether a
+    requested ``expected.import`` block was *checked and passed* (it then appears in
+    neither ``failures`` nor ``skipped``) or simply absent. This read-only helper
+    reads the manifest's requested block names and classifies each against the
+    result, so a green-and-checked block is visibly distinct from a green-but-gated
+    one.
+
+    States, per block present in ``manifest["expected"]["import"]``:
+
+    * ``"failed"``  — at least one failure references the block.
+    * ``"skipped"`` — no failure, but at least one of its sub-checks was gated to a
+      skip (fully or partially). E.g. ``oscar_reference`` reports ``"skipped"`` even
+      when its hash verifies, because the deferred numeric-parity sub-check always
+      skips — the label means "not every sub-check ran", which is accurate.
+    * ``"passed"``  — present with no failure and no skip: every requested
+      sub-check ran and passed.
+
+    Pure and dependency-free: it re-reads the manifest and inspects the result
+    strings only. No parser, no database, and no production import behavior.
+    """
+
+    root = Path(fixture_dir)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    import_expected = manifest.get("expected", {}).get("import") or {}
+
+    statuses: dict[str, str] = {}
+    for block in import_expected:
+        if any(_message_belongs_to_block(f, block) for f in result.failures):
+            statuses[block] = "failed"
+        elif any(_message_belongs_to_block(s, block) for s in result.skipped):
+            statuses[block] = "skipped"
+        else:
+            statuses[block] = "passed"
+    return statuses
+
+
 def _acquire_import_run(root: Path, manifest: dict, run: Any) -> tuple[Any, str]:
     """Return ``(run, reason)`` for the parse-observable comparisons.
 

@@ -13,6 +13,7 @@ import importer.db as importer_db
 from importer.conformance import (
     ImportConformanceResult,
     persisted_identity_snapshot,
+    summarize_import_blocks,
     validate_fixture,
     validate_import,
     validate_manifest_metadata,
@@ -1772,6 +1773,65 @@ def test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fix
     assert not any("no reference file path" in s for s in result.skipped), result.skipped
     # Numeric parity is explicitly deferred, never silently passed.
     assert any("oscar_reference.parity" in s for s in result.skipped), result.skipped
+
+
+def test_summarize_import_blocks_classifies_passed_skipped_failed(tmp_path):
+    """Phase 2 clarity: per-block status distinguishes passed / skipped / failed.
+
+    A reviewer cannot tell from the result alone whether a block was checked-and-
+    passed (absent from both failures and skipped) or simply not requested.
+    ``summarize_import_blocks`` reads the requested blocks from the manifest and
+    labels each: ``warnings`` passes, a bare-key ``settings`` is gated to a skip,
+    and a wrong ``session_blocks.block_count`` fails.
+    """
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "warnings": {"codes": ["resmed_summary_only_day"]},
+            "settings": {"2026-06-01": {"therapy_mode": "apap"}},  # bare key → skip
+            "session_blocks": {"2026-06-01": {"block_count": 9}},  # wrong → fail
+        },
+    )
+    run = _fake_run(
+        warnings=[ImportWarning(code="resmed_summary_only_day", severity="info", message="x")],
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[_block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0))],
+            )
+        ],
+    )
+
+    result = validate_import(fixture, run=run)
+    statuses = summarize_import_blocks(fixture, result)
+
+    assert statuses == {
+        "warnings": "passed",
+        "settings": "skipped",
+        "session_blocks": "failed",
+    }
+
+
+def test_summarize_import_blocks_oscar_reference_skipped_when_parity_deferred():
+    """Phase 2 clarity: oscar_reference reads 'skipped' even when its hash verifies.
+
+    On the committed AirSense 10 fixture the export-hash check passes (no failure),
+    but the deferred numeric-parity sub-check always skips — so the block-level
+    label is the honest ``"skipped"`` ("not every sub-check ran"), never ``"failed"``.
+    """
+    result = validate_import(AIRSENSE10_FIXTURE, run=SimpleNamespace(warnings=[], sessions=[]))
+    statuses = summarize_import_blocks(AIRSENSE10_FIXTURE, result)
+
+    assert statuses == {"oscar_reference": "skipped"}
+    assert result.passed, result.failures
+
+
+def test_summarize_import_blocks_empty_without_import_block():
+    """Phase 2 clarity: a fixture with no expected.import yields an empty summary."""
+    fixture = FIXTURE_ROOT / "synthetic-resmed-minimal"
+
+    result = validate_import(fixture)
+    assert summarize_import_blocks(fixture, result) == {}
 
 
 def test_validate_import_surfaces_unknown_import_block(tmp_path):
