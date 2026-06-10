@@ -12,4 +12,4 @@ reportlab==4.5.1
 sleephq-client @ git+https://github.com/frohoff/sleephq-client.git
 # Pinned to kilo-WATT/cpap-parser fix/resmed-four-bugs (GitHub mirror) — awaiting upstream MR !12
 # [resmed] extra pulls in cpap-py (the ResMed EDF reader), which in turn hard-depends on pyedflib + numpy/pandas.
-cpap-parser[resmed] @ git+https://github.com/kilo-WATT/cpap-parser.git@b6edce077f129eadb8a1b8be3746d820380a1a58
+cpap-parser[resmed] @ git+https://github.com/kilo-WATT/cpap-parser.git@6e015c4c95317683f68027099d7e998e36131eb2

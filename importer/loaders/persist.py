@@ -34,15 +34,12 @@ than silently dropping or inventing data we record the gaps here:
 * **Summary statistics** (``avg_pressure``, ``p95_pressure``, ``avg_leak`` and the
   per-channel averages) are computed by the loader from the decoded timeseries
   (``ResMedNativeLoader._signal_metrics``), carried as DerivedValues, and mapped
-  onto the ``sessions`` columns here. AHI, event counts and the three usage
-  semantics are carried through as before.
+  onto the ``sessions`` columns here. ``avg_pressure``/``p95_pressure`` use the
+  device's set pressure (``Press.2s``), the same channel the old path used. AHI,
+  event counts and the three usage semantics are carried through as before.
 
 Remaining gaps (genuinely unavailable from cpap-py, written ``NULL``):
 
-* ``sessions.avg_pressure``/``p95_pressure`` and ``session_metrics.pressure`` use
-  the measured ``MaskPress.2s`` channel; the old path's ``Press.2s`` *set*
-  pressure is not decoded by cpap-py. ``session_metrics.epr_pressure``
-  (``EprPress.2s``) is likewise unavailable.
 * Oximetry (``session_spo2``, ``has_spo2``) is not mapped yet.
 """
 
@@ -316,8 +313,7 @@ def _session_row(
         # Per-channel summary statistics are derived by the loader from the
         # decoded timeseries (see ResMedNativeLoader._signal_metrics) and carried
         # here as DerivedValues. ``avg_pressure``/``p95_pressure`` come from the
-        # measured mask-pressure channel (the old path's ``Press.2s`` set-pressure
-        # is not exposed by cpap-py — documented gap).
+        # device set pressure (``Press.2s``), matching the old path.
         "avg_pressure": _derived_scalar(derived, "avg_pressure", default=None),
         "p95_pressure": _derived_scalar(derived, "p95_pressure", default=None),
         "avg_leak": _derived_scalar(derived, "avg_leak", default=None),
@@ -556,15 +552,14 @@ def _write_session_metrics(
     cpap-py field -> ``session_metrics`` column
     -------------------------------------------
     * ``mask_pressure``       -> ``mask_pressure`` (``MaskPress.2s``)
+    * ``set_pressure``        -> ``pressure``      (``Press.2s``)
+    * ``epr_pressure``        -> ``epr_pressure``  (``EprPress.2s``)
     * ``leak``                -> ``leak``          (``Leak.2s``)
     * ``respiratory_rate``    -> ``resp_rate``     (``RespRate.2s``)
     * ``tidal_volume``        -> ``tidal_vol``     (``TidVol.2s``)
     * ``minute_ventilation``  -> ``min_vent``      (``MinVent.2s``)
     * ``snore``               -> ``snore``         (``Snore.2s``)
     * ``flow_limitation``     -> ``flow_lim``      (``FlowLim.2s``)
-
-    GAP: ``pressure`` (``Press.2s`` set pressure) and ``epr_pressure``
-    (``EprPress.2s``) are not decoded by cpap-py and are written ``NULL``.
     """
     import psycopg2.extras
 
@@ -576,9 +571,13 @@ def _write_session_metrics(
         timeseries = cpap_session.timeseries
         if timeseries is None:
             continue
-        # Columns in INSERT order; ``pressure``/``epr_pressure`` are absent (gap).
+        # Tracks in ``session_metrics`` column order. ``set_pressure`` (Press.2s)
+        # is the therapy pressure column; ``mask_pressure`` (MaskPress.2s) and
+        # ``epr_pressure`` (EprPress.2s) are distinct measured/EPR pressures.
         tracks = (
             timeseries.mask_pressure,
+            timeseries.set_pressure,
+            timeseries.epr_pressure,
             timeseries.leak,
             timeseries.respiratory_rate,
             timeseries.tidal_volume,
@@ -593,24 +592,7 @@ def _write_session_metrics(
         start = _localize(cpap_session.start_time, machine_tz)
         for index in range(sample_count):
             ts = start + timedelta(seconds=index * epoch)
-            mask_pressure, leak, resp_rate, tidal_vol, min_vent, snore, flow_lim = (
-                _sample(track, index) for track in tracks
-            )
-            rows.append(
-                (
-                    session_db_id,
-                    ts,
-                    mask_pressure,  # mask_pressure
-                    None,  # pressure (Press.2s) — not exposed by cpap-py
-                    None,  # epr_pressure (EprPress.2s) — not exposed by cpap-py
-                    leak,
-                    resp_rate,
-                    tidal_vol,
-                    min_vent,
-                    snore,
-                    flow_lim,
-                )
-            )
+            rows.append((session_db_id, ts, *(_sample(track, index) for track in tracks)))
 
     if not rows:
         return 0

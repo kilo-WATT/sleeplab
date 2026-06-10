@@ -88,6 +88,8 @@ _HIGH_RATE_CHANNELS: tuple[tuple[str, str], ...] = (
 #: Low-rate (PLD) signal channels and their units, in emit order.
 _LOW_RATE_CHANNELS: tuple[tuple[str, str], ...] = (
     ("mask_pressure", "cmH2O"),
+    ("set_pressure", "cmH2O"),  # Press.2s — commanded therapy pressure
+    ("epr_pressure", "cmH2O"),  # EprPress.2s — EPR-adjusted exhale pressure
     ("leak", "L/min"),
     ("tidal_volume", "mL"),
     ("minute_ventilation", "L/min"),
@@ -404,13 +406,11 @@ class ResMedNativeLoader(LoaderAdapter):
 
         cpap-py signal label -> ``sessions`` summary column mapping
         ----------------------------------------------------------
-        * ``timeseries.mask_pressure`` (``MaskPress.2s``) -> ``avg_pressure`` /
-          ``p95_pressure``. NOTE: the *old* path used ``Press.2s`` (the device's
-          *set* pressure). cpap-py's ``PLD_SIGNAL_MAP`` has no entry for
-          ``Press.2s`` so it is dropped during decode; ``mask_pressure``
-          (measured) is the closest available low-rate pressure channel and
-          differs only marginally (~1-2% on the validation fixture). The exact
-          ``Press.2s`` set-pressure channel is a documented gap.
+        * ``timeseries.set_pressure`` (``Press.2s``) -> ``avg_pressure`` /
+          ``p95_pressure``. This is the device's *set* therapy pressure, exactly
+          the channel the old path used. (The patched ``PLD_SIGNAL_MAP`` now
+          decodes ``Press.2s`` into ``set_pressure``; before that it was dropped
+          and we fell back to ``mask_pressure``.)
         * ``timeseries.leak`` (``Leak.2s``)               -> ``avg_leak``
         * ``timeseries.respiratory_rate`` (``RespRate.2s``) -> ``avg_resp_rate``
         * ``timeseries.tidal_volume`` (``TidVol.2s``)     -> ``avg_tidal_vol``
@@ -423,7 +423,7 @@ class ResMedNativeLoader(LoaderAdapter):
         / flow-limitation are averaged as-is.
         """
         channels: dict[str, list[float]] = {
-            "mask_pressure": [],
+            "set_pressure": [],
             "leak": [],
             "respiratory_rate": [],
             "tidal_volume": [],
@@ -447,7 +447,7 @@ class ResMedNativeLoader(LoaderAdapter):
             ordered = sorted(values)
             return round(ordered[int(pct * len(ordered))], 2)
 
-        positive_pressure = [v for v in channels["mask_pressure"] if v > 0]
+        positive_pressure = [v for v in channels["set_pressure"] if v > 0]
         resp_rate = [v for v in channels["respiratory_rate"] if v > 0]
         tidal_volume = [v for v in channels["tidal_volume"] if v > 0]
         minute_ventilation = [v for v in channels["minute_ventilation"] if v > 0]
