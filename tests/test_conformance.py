@@ -47,3 +47,68 @@ def test_waveform_coverage_absence_is_detected(tmp_path):
     assert any("coverage.waveform_files" in failure for failure in result.failures), (
         f"expected a waveform-coverage failure, got {result.failures}"
     )
+
+
+def test_manifest_without_diagnostics_field_still_passes():
+    """Alpha 6 §5: ``expected.diagnostics`` is optional/backward-compatible.
+
+    The committed synthetic manifest carries no ``diagnostics`` block, so it must
+    keep passing unchanged after the manifest schema gains expected-diagnostics
+    support. This pins backward compatibility for older fixtures.
+    """
+    fixture = FIXTURE_ROOT / "synthetic-resmed-minimal"
+
+    manifest = json.loads((fixture / "manifest.json").read_text(encoding="utf-8"))
+    assert "diagnostics" not in manifest["expected"], "fixture must stay diagnostics-free"
+    assert validate_fixture(fixture).passed
+
+
+def test_manifest_expected_diagnostics_fails_when_warning_code_absent(tmp_path):
+    """Alpha 6 §5: a manifest asserting an absent warning code must fail.
+
+    The synthetic fixture ships ``STR.edf``, so the plan surfaces no diagnostics;
+    a manifest that requires a warning code which is not present must produce an
+    explicit ``diagnostics.warning_codes`` failure rather than passing silently.
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["diagnostics"] = {"warning_codes": ["resmed_missing_str"]}
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = validate_fixture(fixture)
+
+    assert not result.passed
+    assert any(
+        failure.startswith("diagnostics.warning_codes") and "resmed_missing_str" in failure
+        for failure in result.failures
+    ), f"expected a diagnostics.warning_codes failure, got {result.failures}"
+
+
+def test_manifest_expected_diagnostics_passes_when_warning_code_present(tmp_path):
+    """Alpha 6 §5: a manifest asserting a present warning code passes that check.
+
+    Removing ``STR.edf`` makes the planning layer surface the structured
+    ``resmed_missing_str`` diagnostic. The ``expected.diagnostics`` sub-check must
+    then pass. We isolate the feature by asserting no ``diagnostics.warning_codes``
+    failure appears — removing STR also shifts other expected fields, which is
+    irrelevant to whether the diagnostics assertion itself holds.
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+    (fixture / "source" / "STR.edf").unlink()
+
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["diagnostics"] = {"warning_codes": ["resmed_missing_str"]}
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = validate_fixture(fixture)
+
+    assert not any(
+        failure.startswith("diagnostics.warning_codes") for failure in result.failures
+    ), f"diagnostics check should pass when the code is present, got {result.failures}"

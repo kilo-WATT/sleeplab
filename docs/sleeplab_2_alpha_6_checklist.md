@@ -149,6 +149,19 @@ Items:
 
 ### 5. Conformance manifest expansion
 Extend the manifest/`importer.conformance` contract (roadmap item 2) to cover:
+- [x] **(started)** expected diagnostics: optional
+      `expected.diagnostics.warning_codes` asserts that specific structured
+      warning codes are surfaced by the plan (e.g. `resmed_missing_str`).
+      `validate_fixture` collects codes from inspection- and device-level
+      warnings (`_plan_diagnostic_codes`) and fails when an expected code is
+      absent. Backward-compatible: fixtures without the block are unaffected.
+      Tested (backward-compat, present, absent) in `tests/test_conformance.py`.
+      *Scope note:* only detection/planning diagnostics are observable here;
+      import-time codes (`resmed_summary_only_day`/`resmed_waveform_absent`)
+      need the cpap-parser execution path and are asserted in
+      `tests/test_resmed_import_regressions.py` instead — extending the manifest
+      to cover those is a later subtask once an import-run conformance path
+      exists.
 - [ ] persisted settings snapshots (mode, pressures, EPR, ramp, humidification,
       mask) — compared, with "missing ≠ off";
 - [ ] interval boundaries (session-block start/end, mask-on/off);

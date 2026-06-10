@@ -65,6 +65,22 @@ def validate_fixture(fixture_dir: str | Path) -> ConformanceResult:
         for field, expected_value in expected_coverage.items():
             _expect(failures, f"coverage.{field}", getattr(coverage, field), expected_value)
 
+    # Optional, backward-compatible diagnostics expectations. A manifest may
+    # assert that specific structured warning codes are surfaced by the plan
+    # (e.g. ``resmed_missing_str``). Fixtures without an ``expected.diagnostics``
+    # block are unaffected. Only detection/planning diagnostics are observable
+    # here; import-time codes (``resmed_summary_only_day``/``resmed_waveform_absent``)
+    # require the cpap-parser execution path and are checked elsewhere.
+    expected_diagnostics = expected.get("diagnostics", {})
+    expected_codes = expected_diagnostics.get("warning_codes", [])
+    if expected_codes:
+        present = _plan_diagnostic_codes(plan)
+        for code in expected_codes:
+            if code not in present:
+                failures.append(
+                    f"diagnostics.warning_codes: expected {code!r} present, got {sorted(present)}"
+                )
+
     return ConformanceResult(
         fixture_id=manifest["fixture_id"],
         passed=not failures,
@@ -98,6 +114,26 @@ def validate_manifest_metadata(fixture_dir: str | Path) -> list[str]:
     if not manifest.get("anonymization", {}).get("reviewed"):
         failures.append("anonymization.reviewed must be true")
     return failures
+
+
+def _plan_diagnostic_codes(plan: Any) -> set[str]:
+    """Collect structured warning codes surfaced by an import plan.
+
+    Gathers ``code`` from both the inspection-level warnings and each detected
+    device's warnings. Entries without a ``code`` (or non-dict entries) are
+    ignored so the collector tolerates older/looser diagnostic shapes.
+    """
+
+    codes: set[str] = set()
+    inspection = plan.inspection
+    for warning in inspection.get("warnings", []):
+        if isinstance(warning, dict) and warning.get("code"):
+            codes.add(warning["code"])
+    for device in inspection.get("devices", []):
+        for warning in device.get("warnings", []):
+            if isinstance(warning, dict) and warning.get("code"):
+                codes.add(warning["code"])
+    return codes
 
 
 def _expect(failures: list[str], field: str, actual: object, expected: object) -> None:
