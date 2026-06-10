@@ -5,7 +5,12 @@ import shutil
 from pathlib import Path
 
 import importer.conformance as conformance
-from importer.conformance import validate_fixture, validate_manifest_metadata
+from importer.conformance import (
+    ImportConformanceResult,
+    validate_fixture,
+    validate_import,
+    validate_manifest_metadata,
+)
 from importer.loaders.planning import CoverageSummary
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "conformance"
@@ -181,22 +186,115 @@ def test_unknown_coverage_field_reports_failure_not_crash(tmp_path):
     ), f"expected an unknown-coverage-field failure, got {result.failures}"
 
 
-def test_validate_import_entrypoint_is_design_only():
-    """Alpha 6 §6: ``validate_import`` is designed but NOT yet implemented.
+def test_validate_import_is_importable():
+    """Plan Step 1: ``validate_import`` + ``ImportConformanceResult`` exist.
 
-    The import-level conformance path
-    (``docs/sleeplab_2_import_level_conformance_plan.md``) is design-only this
-    milestone — building it touches parsing and the database and is an explicit
-    stop-and-ask change. Pin that ``importer.conformance`` still exposes only the
-    planning-only ``validate_fixture`` so the "not built yet" claim cannot
-    silently drift into a half-built entry point. When step 1 of the plan lands,
-    this test is the one that should be deliberately updated.
+    The import-level conformance scaffold is now built (Step 1 of
+    ``docs/sleeplab_2_import_level_conformance_plan.md``), so the entry point and
+    its result type must be importable from ``importer.conformance`` alongside
+    the planning-only ``validate_fixture``. This replaces the earlier
+    design-only boundary test.
     """
     assert hasattr(conformance, "validate_fixture")
-    assert not hasattr(conformance, "validate_import"), (
-        "validate_import appears implemented; update the import-level conformance "
-        "design doc/checklist §6 to reflect that it is no longer design-only."
-    )
+    assert hasattr(conformance, "validate_import")
+    assert hasattr(conformance, "ImportConformanceResult")
+    # The result type is small and explicit: exactly these four fields.
+    assert set(ImportConformanceResult.__dataclass_fields__) == {
+        "fixture_id",
+        "passed",
+        "failures",
+        "skipped",
+    }
+
+
+def test_validate_import_passes_and_skips_when_import_block_absent():
+    """Plan Step 1: a manifest without ``expected.import`` runs nothing, cleanly.
+
+    The committed synthetic fixture carries no ``expected.import`` block, so
+    ``validate_import`` must pass with no failures and a single clear skip reason
+    — the backward-compatible default that keeps the new entry point inert for
+    every existing fixture.
+    """
+    fixture = FIXTURE_ROOT / "synthetic-resmed-minimal"
+
+    manifest = json.loads((fixture / "manifest.json").read_text(encoding="utf-8"))
+    assert "import" not in manifest["expected"], "fixture must stay import-block-free"
+
+    result = validate_import(fixture)
+
+    assert isinstance(result, ImportConformanceResult)
+    assert result.fixture_id == "synthetic-resmed-minimal"
+    assert result.passed
+    assert result.failures == ()
+    assert len(result.skipped) == 1
+    assert "expected.import absent" in result.skipped[0]
+
+
+def test_validate_import_skips_clearly_when_no_parser_or_db(tmp_path):
+    """Plan Step 1: present ``expected.import`` blocks skip with clear reasons.
+
+    With ``expected.import`` present but no parser/DB execution available, the
+    scaffold must not crash and must not fabricate a pass for unchecked work: it
+    returns ``passed=True`` (nothing was actually verified) with one clearly
+    reasoned skip per requested sub-block. Parse-dependent blocks and the
+    DB-dependent ``identity_hashes`` block are each named in a skip reason, and
+    ``conn=None`` always yields a "no database connection" skip for the latter.
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["import"] = {
+        "settings": {"2026-06-01": {"therapy_mode": "apap"}},
+        "session_blocks": {"2026-06-01": {"block_count": 1}},
+        "therapy_aggregates": {"2026-06-01": {"usage_seconds": 600}},
+        "warnings": {"codes": ["resmed_summary_only_day"]},
+        "identity_hashes": {"algorithm": "sha256", "sessions": "deadbeef"},
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = validate_import(fixture, conn=None)
+
+    # Nothing was actually checked, so the run passes with no failures.
+    assert result.passed
+    assert result.failures == ()
+
+    # Every requested sub-block is named in exactly one skip reason.
+    skipped_blob = "\n".join(result.skipped)
+    for block in ("settings", "session_blocks", "therapy_aggregates", "warnings", "identity_hashes"):
+        assert f"expected.import.{block}:" in skipped_blob, (
+            f"{block} should be reported as a skip, got {result.skipped}"
+        )
+    assert len(result.skipped) == 5
+
+    # The DB-dependent block skips specifically because there is no connection.
+    db_skip = next(s for s in result.skipped if "identity_hashes" in s)
+    assert "no database connection" in db_skip
+
+
+def test_validate_import_surfaces_unknown_import_block(tmp_path):
+    """Plan Step 1: an unrecognized ``expected.import`` sub-block is visible.
+
+    A typo'd or future sub-block has no checker yet; it must be surfaced as an
+    explicit skip rather than silently ignored, so a manifest mistake is caught.
+    """
+    src = FIXTURE_ROOT / "synthetic-resmed-minimal"
+    fixture = tmp_path / "synthetic-resmed-minimal"
+    shutil.copytree(src, fixture)
+
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["import"] = {"sesion_blocks": {}}  # typo: missing 's'
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = validate_import(fixture)
+
+    assert result.passed
+    assert any(
+        "sesion_blocks" in s and "unknown import-level block" in s for s in result.skipped
+    ), f"expected an unknown-block skip, got {result.skipped}"
 
 
 def test_import_level_conformance_design_doc_is_linked():

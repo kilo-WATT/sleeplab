@@ -1,12 +1,15 @@
 # SleepLab 2.0 Import-Level Conformance Plan
 
-Status: **design / planning only — not implemented in this milestone.**
+Status: **Step 1 (scaffold) implemented; full checks still design-only.**
+The `validate_import` entry point and `ImportConformanceResult` exist and are
+dependency-safe (Step 1 below). The actual payload/DB comparisons (Steps 2–6)
+are not built yet.
 
 This document expands the design note in
 `docs/sleeplab_2_alpha_6_checklist.md` §6 ("Import-level conformance path") into
 a concrete API, manifest, and gating design. It is the next major Alpha 6 item.
-Nothing here builds a DB-backed conformance runner yet; it defines the contract
-so the *first* implementation step can be small, reviewable, and dependency-free.
+No DB-backed conformance runner is built yet; the scaffold defines the contract
+so each subsequent step stays small and reviewable.
 
 It complements — does **not** replace — the planning-only harness in
 `importer/conformance.py` (`validate_fixture`). That harness stays exactly as it
@@ -349,33 +352,34 @@ and committing it leaks no serial, no patient identifier, and no real date.
 
 ## 12. Smallest first implementation step
 
-**Docs + one dependency-free test. No `validate_import` code, no DB, no parser
-requirement.** Concretely, the first PR is *this* document plus:
-
-1. A test that pins the planning-only boundary the design rests on: assert
-   `importer.conformance` does **not** yet expose `validate_import`, so the
-   "design-only, not built" claim cannot silently drift. (Added in this change
-   as `test_validate_import_entrypoint_is_design_only` — see §"First PR".)
-2. A test (or extension of the existing manifest-metadata validation) asserting
-   that an `expected.import` block, *when present*, is shaped as documented and
-   that its absence is tolerated — exercised against a tiny in-test manifest, no
-   real source. This pins backward compatibility before any consumer exists.
-
-This keeps the first change a checklist/doc update plus a narrow test, exactly
-the cadence the Alpha 6 kickoff prescribes.
+The first code step (now **landed** — step 1 below) was the dependency-safe
+scaffold: add `ImportConformanceResult` and `validate_import`, with **no** parse
+and **no** DB access. It returns `passed=True` and records clear `skipped`
+reasons for every requested sub-block, so it is inert for existing fixtures and
+cannot crash where `cpap-parser`/Postgres are absent. Tests pin: the entry point
+is importable; an absent `expected.import` block passes-and-skips; a present
+block skips with clear reasons; an unknown sub-block is surfaced; and
+`validate_fixture` is unchanged. The next step (step 2) adds the parse-only
+comparisons behind `importorskip("cpap_parser")`.
 
 ## Implementation sequence (proposed — do not build beyond step 1 yet)
 
-Each step is a small PR; only **step 0** (this design + the boundary test) is in
-scope right now.
+Each step is a small PR. **Steps 0 and 1 are landed**; step 2 is the next
+in-scope work.
 
-0. **Design + boundary test (this PR).** This document; checklist §6 points here;
-   a test pinning that `validate_import` does not yet exist and that
-   `expected.import` is optional/backward-compatible.
-1. **`ImportConformanceResult` + `validate_import` skeleton.** Returns
+0. **[DONE] Design.** This document; checklist §6 points here. (The original
+   boundary test asserting `validate_import` did not exist was replaced when
+   step 1 landed.)
+1. **[DONE] `ImportConformanceResult` + `validate_import` scaffold.** Returns
    `passed=True` with everything in `skipped` when no `expected.import` block /
-   no parser / no `conn`. Parse-free, DB-free. Unit-tested against the synthetic
-   fixture's existing (block-less) manifest — proves backward compatibility.
+   no parser / no `conn`. Parse-free, DB-free. Implemented in
+   `importer/conformance.py`; the result type is `(fixture_id, passed, failures,
+   skipped)`. Recognized sub-blocks are gated and skipped with a clear reason
+   (`cpap-parser/cpap-py not installed`, `no database connection`, or
+   `not implemented yet`); an unrecognized sub-block is surfaced as a skip too.
+   Covered by `tests/test_conformance.py` (importable, absent-block pass/skip,
+   present-block clear skips, unknown-block visibility, and `validate_fixture`
+   backward-compat).
 2. **Parse-only checks.** `settings`, `session_blocks`, `therapy_aggregates`,
    `warnings.codes` against the normalized `ImportRun`. Gated on
    `importorskip("cpap_parser")`. Add a minimal `expected.import` block to the

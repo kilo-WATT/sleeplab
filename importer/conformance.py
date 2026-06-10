@@ -1,12 +1,40 @@
-"""Manifest-driven conformance checks for synthetic and anonymized CPAP fixtures."""
+"""Manifest-driven conformance checks for synthetic and anonymized CPAP fixtures.
+
+Two entry points live here, deliberately kept separate (see
+``docs/sleeplab_2_import_level_conformance_plan.md``):
+
+* :func:`validate_fixture` — the **planning-only** harness. Runs
+  ``create_import_plan`` and compares file-derived inspection results against a
+  checked-in ``manifest.json``. Dependency-free: no ``cpap-parser``, no Postgres.
+* :func:`validate_import` — the **import-level** harness (plan Step 1 scaffold).
+  Drives the optional ``expected.import`` manifest block. This scaffold wires up
+  the result type and the dependency/Postgres gating but does **not** parse CPAP
+  payloads or write the database yet; every present sub-block is reported as a
+  clearly-reasoned *skip*. Real checks land in later plan steps.
+"""
 
 import argparse
+import importlib.util
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from importer.loaders import create_import_plan
+
+#: ``expected.import`` sub-blocks whose (future) checks need a real parse of the
+#: card via ``cpap-parser`` + its ``cpap-py`` EDF backend.
+_PARSE_DEPENDENT_IMPORT_BLOCKS = (
+    "settings",
+    "session_blocks",
+    "therapy_aggregates",
+    "warnings",
+    "oscar_reference",
+)
+
+#: ``expected.import`` sub-blocks whose (future) checks need persisted database
+#: state (an open ``conn``), e.g. persisted-identity-hash stability.
+_DB_DEPENDENT_IMPORT_BLOCKS = ("identity_hashes",)
 
 
 @dataclass(frozen=True)
@@ -16,6 +44,23 @@ class ConformanceResult:
     fixture_id: str
     passed: bool
     failures: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ImportConformanceResult:
+    """Result of an import-level conformance run for one fixture.
+
+    Distinct from :class:`ConformanceResult` (planning-only) by its ``skipped``
+    tuple: a gated-out check (missing parser/``conn``, or a not-yet-built check)
+    is recorded as a clearly-reasoned skip rather than masquerading as a pass or
+    a failure. A run with no ``failures`` is ``passed`` even when every check was
+    skipped.
+    """
+
+    fixture_id: str
+    passed: bool
+    failures: tuple[str, ...]
+    skipped: tuple[str, ...]
 
 
 def validate_fixture(fixture_dir: str | Path) -> ConformanceResult:
@@ -125,6 +170,107 @@ def validate_manifest_metadata(fixture_dir: str | Path) -> list[str]:
     if not manifest.get("anonymization", {}).get("reviewed"):
         failures.append("anonymization.reviewed must be true")
     return failures
+
+
+def validate_import(fixture_dir: str | Path, *, conn: Any = None) -> ImportConformanceResult:
+    """Import-level conformance entry point (plan Step 1 scaffold).
+
+    Sibling of :func:`validate_fixture`, kept separate so the planning-only
+    harness stays dependency-free. This scaffold reads the optional
+    ``expected.import`` manifest block and applies the dependency/Postgres gating
+    from ``docs/sleeplab_2_import_level_conformance_plan.md`` (§2, §6–§9). It does
+    **not** parse CPAP payloads or touch the database yet: every present
+    sub-block is reported as a clearly-reasoned *skip*, never a silent pass and
+    never a crash. The real comparisons land in later plan steps.
+
+    Behavior:
+
+    * No ``expected.import`` block → ``passed=True``, ``failures=()``, a single
+      ``skipped`` reason. Fully backward compatible.
+    * ``expected.import`` present → each recognized sub-block is gated and
+      skipped (parser/``conn`` unavailable, or "not implemented yet"); an
+      unrecognized sub-block is surfaced as a skip too, so a typo is visible.
+
+    Args:
+        fixture_dir: Fixture root containing ``manifest.json`` (same shape as
+            :func:`validate_fixture`).
+        conn: Optional open ``psycopg2`` connection for the (future) DB-backed
+            identity-hash checks. ``None`` (the default) skips all DB checks; no
+            database is required to call this function.
+    """
+
+    root = Path(fixture_dir)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    fixture_id = manifest["fixture_id"]
+    import_expected = manifest.get("expected", {}).get("import")
+
+    if not import_expected:
+        return ImportConformanceResult(
+            fixture_id=fixture_id,
+            passed=True,
+            failures=(),
+            skipped=("expected.import absent — no import-level checks requested",),
+        )
+
+    failures: list[str] = []
+    skipped: list[str] = []
+    parser_available = _import_parser_available()
+
+    for block in _PARSE_DEPENDENT_IMPORT_BLOCKS:
+        if block not in import_expected:
+            continue
+        if not parser_available:
+            skipped.append(
+                f"expected.import.{block}: skipped — cpap-parser/cpap-py not installed"
+            )
+        else:
+            skipped.append(
+                f"expected.import.{block}: skipped — import-level check not implemented "
+                "yet (plan Step 1 scaffold)"
+            )
+
+    for block in _DB_DEPENDENT_IMPORT_BLOCKS:
+        if block not in import_expected:
+            continue
+        if conn is None:
+            skipped.append(
+                f"expected.import.{block}: skipped — no database connection"
+            )
+        else:
+            skipped.append(
+                f"expected.import.{block}: skipped — import-level check not implemented "
+                "yet (plan Step 1 scaffold)"
+            )
+
+    # An unrecognized sub-block has no checker; surface it as a skip (not a
+    # silent ignore) so a manifest typo or a future block is visible today.
+    recognized = set(_PARSE_DEPENDENT_IMPORT_BLOCKS) | set(_DB_DEPENDENT_IMPORT_BLOCKS)
+    for block in sorted(set(import_expected) - recognized):
+        skipped.append(
+            f"expected.import.{block}: skipped — unknown import-level block (no checker)"
+        )
+
+    return ImportConformanceResult(
+        fixture_id=fixture_id,
+        passed=not failures,
+        failures=tuple(failures),
+        skipped=tuple(skipped),
+    )
+
+
+def _import_parser_available() -> bool:
+    """True only when both ``cpap-parser`` and its ``cpap-py`` backend are present.
+
+    Uses :func:`importlib.util.find_spec` so dependency *presence* is detected
+    without importing the packages — keeping :func:`validate_import` import-safe
+    and free of parser side effects. Decoding an EDF needs the ``cpap-py``
+    backend, so both must be importable for a parse-dependent check to run.
+    """
+
+    return (
+        importlib.util.find_spec("cpap_parser") is not None
+        and importlib.util.find_spec("cpap_py") is not None
+    )
 
 
 def _plan_diagnostic_codes(plan: Any) -> set[str]:
