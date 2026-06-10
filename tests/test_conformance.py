@@ -14,10 +14,12 @@ from importer.conformance import (
     validate_manifest_metadata,
 )
 from importer.loaders.models import (
+    Confidence,
     DerivedValue,
     ImportWarning,
     Session,
     SessionBlock,
+    SettingsSnapshot,
     ValidationStatus,
 )
 from importer.loaders.planning import CoverageSummary
@@ -76,6 +78,17 @@ def _block(start, end, kind="recording"):
         end_time=end,
         block_kind=kind,
         source_file_ids=(),
+    )
+
+
+def _settings_snapshot(**settings):
+    """A minimal :class:`SettingsSnapshot`; the comparator only counts these."""
+    return SettingsSnapshot(
+        effective_at=datetime(2026, 6, 1, 22, 0),
+        settings=dict(settings),
+        source_names={},
+        source_file_ids=(),
+        confidence=Confidence.PROBABLE,
     )
 
 
@@ -421,6 +434,272 @@ def test_validate_import_warnings_absent_check(tmp_path):
 
     assert not result.passed
     assert any("expected.import.warnings.absent" in f for f in result.failures)
+
+
+# ---------------------------------------------------------------------------
+# expected.import.session_blocks
+# ---------------------------------------------------------------------------
+
+
+def test_validate_import_session_blocks_pass_on_matching_count(tmp_path):
+    """Plan Step 2: per-date block_count is compared against the normalized run."""
+    fixture = _write_import_manifest(
+        tmp_path, {"session_blocks": {"2026-06-01": {"block_count": 2}}}
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[
+                    _block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0)),
+                    _block(datetime(2026, 6, 1, 23, 15), datetime(2026, 6, 2, 0, 30)),
+                ],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+    assert not any("expected.import.session_blocks" in s for s in result.skipped)
+
+
+def test_validate_import_session_blocks_fail_on_count_mismatch(tmp_path):
+    """Plan Step 2: a wrong block_count is a real failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"session_blocks": {"2026-06-01": {"block_count": 3}}}
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[_block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0))],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.session_blocks.2026-06-01.block_count" in f for f in result.failures
+    ), f"expected a block_count failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_fail_on_missing_date(tmp_path):
+    """Plan Step 2: a requested date absent from the run is a failure, not a skip."""
+    fixture = _write_import_manifest(
+        tmp_path, {"session_blocks": {"2026-06-09": {"block_count": 1}}}
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", blocks=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.session_blocks.2026-06-09" in f and "date not found" in f
+        for f in result.failures
+    ), f"expected a missing-date failure, got {result.failures}"
+
+
+def test_validate_import_session_blocks_interval_key_is_skipped(tmp_path):
+    """Plan Step 2: interval/boundary comparison is deferred, surfaced as a skip."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {"session_blocks": {"2026-06-01": {"block_count": 1, "intervals": [{"start": "x"}]}}},
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                blocks=[_block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0))],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    # block_count still passes; only the intervals sub-key is skipped.
+    assert result.passed, result.failures
+    assert any(
+        "expected.import.session_blocks.2026-06-01.intervals" in s for s in result.skipped
+    ), f"expected an intervals skip, got {result.skipped}"
+
+
+# ---------------------------------------------------------------------------
+# expected.import.therapy_aggregates
+# ---------------------------------------------------------------------------
+
+
+def _aggregate_run(date_key="2026-06-01"):
+    """A run whose one session yields usage=8100s, span=9000s, gap=900s, 2 blocks."""
+    return _fake_run(
+        sessions=[
+            _fake_session(
+                date_key,
+                blocks=[
+                    _block(datetime(2026, 6, 1, 22, 0), datetime(2026, 6, 1, 23, 0)),
+                    _block(datetime(2026, 6, 1, 23, 15), datetime(2026, 6, 2, 0, 30)),
+                ],
+                derived={
+                    "computed_usage_hours": (2.25, "h"),  # 8100 s
+                    "recording_span_hours": (2.5, "h"),   # 9000 s
+                },
+            )
+        ]
+    )
+
+
+def test_validate_import_therapy_aggregates_pass_on_observable_fields(tmp_path):
+    """Plan Step 2: usage/wall-clock/gap/block_count derive from the normalized run."""
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "therapy_aggregates": {
+                "2026-06-01": {
+                    "usage_seconds": 8100,
+                    "wall_clock_seconds": 9000,
+                    "gap_seconds": 900,
+                    "block_count": 2,
+                }
+            }
+        },
+    )
+
+    result = validate_import(fixture, run=_aggregate_run())
+
+    assert result.passed, result.failures
+    assert not any("expected.import.therapy_aggregates" in s for s in result.skipped)
+
+
+def test_validate_import_therapy_aggregates_fail_on_usage_mismatch(tmp_path):
+    """Plan Step 2: a wrong usage value is a real failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"therapy_aggregates": {"2026-06-01": {"usage_seconds": 9999}}}
+    )
+
+    result = validate_import(fixture, run=_aggregate_run())
+
+    assert not result.passed
+    assert any(
+        "expected.import.therapy_aggregates.2026-06-01.usage_seconds" in f for f in result.failures
+    ), f"expected a usage_seconds failure, got {result.failures}"
+
+
+def test_validate_import_therapy_aggregates_skip_when_derived_absent(tmp_path):
+    """Plan Step 2: a field whose source derived value is absent is skipped, not faked."""
+    fixture = _write_import_manifest(
+        tmp_path, {"therapy_aggregates": {"2026-06-01": {"usage_seconds": 8100}}}
+    )
+    # Session has no computed_usage_hours derived value.
+    run = _fake_run(sessions=[_fake_session("2026-06-01", blocks=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+    assert any(
+        "expected.import.therapy_aggregates.2026-06-01.usage_seconds" in s
+        and "derived value absent" in s
+        for s in result.skipped
+    ), f"expected a derived-absent skip, got {result.skipped}"
+
+
+def test_validate_import_therapy_aggregates_skip_for_unobservable_field(tmp_path):
+    """Plan Step 2: a field that is not observable from the run is skipped clearly."""
+    fixture = _write_import_manifest(
+        tmp_path, {"therapy_aggregates": {"2026-06-01": {"ahi": 1.0}}}
+    )
+
+    result = validate_import(fixture, run=_aggregate_run())
+
+    assert result.passed, result.failures
+    assert any(
+        "expected.import.therapy_aggregates.2026-06-01.ahi" in s
+        and "not observable" in s
+        for s in result.skipped
+    ), f"expected an unobservable-field skip, got {result.skipped}"
+
+
+# ---------------------------------------------------------------------------
+# expected.import.settings
+# ---------------------------------------------------------------------------
+
+
+def test_validate_import_settings_count_and_presence_pass(tmp_path):
+    """Plan Step 2: settings snapshot_count and presence are observable/compared."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"snapshot_count": 2, "present": True}}}
+    )
+    run = _fake_run(
+        sessions=[
+            _fake_session(
+                "2026-06-01",
+                settings=[_settings_snapshot(therapy_mode="apap"), _settings_snapshot(ramp="auto")],
+            )
+        ]
+    )
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+
+
+def test_validate_import_settings_count_mismatch_fails(tmp_path):
+    """Plan Step 2: a wrong snapshot_count is a real failure."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"snapshot_count": 1}}}
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", settings=[])])
+
+    result = validate_import(fixture, run=run)
+
+    assert not result.passed
+    assert any(
+        "expected.import.settings.2026-06-01.snapshot_count" in f for f in result.failures
+    ), f"expected a snapshot_count failure, got {result.failures}"
+
+
+def test_validate_import_settings_value_key_is_skipped(tmp_path):
+    """Plan Step 2: a settings *value* key is deferred (loader maps no settings yet)."""
+    fixture = _write_import_manifest(
+        tmp_path, {"settings": {"2026-06-01": {"therapy_mode": "apap"}}}
+    )
+    run = _fake_run(sessions=[_fake_session("2026-06-01", settings=[])])
+
+    result = validate_import(fixture, run=run)
+
+    # Not a failure — value comparison is honestly skipped, not faked.
+    assert result.passed, result.failures
+    assert any(
+        "expected.import.settings.2026-06-01.therapy_mode" in s
+        and "value comparison not implemented" in s
+        for s in result.skipped
+    ), f"expected a settings-value skip, got {result.skipped}"
+
+
+def test_validate_import_mixed_blocks_check_and_skip_together(tmp_path):
+    """Plan Step 2: a manifest mixing observable and deferred checks behaves per-block.
+
+    warnings + session_blocks + therapy_aggregates are checked (and pass); a
+    settings *value* key is skipped. The overall run passes because nothing
+    failed, and the skip is recorded — never a silent pass.
+    """
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "warnings": {"codes": ["resmed_summary_only_day"]},
+            "session_blocks": {"2026-06-01": {"block_count": 2}},
+            "therapy_aggregates": {"2026-06-01": {"usage_seconds": 8100}},
+            "settings": {"2026-06-01": {"therapy_mode": "apap"}},
+        },
+    )
+    run = _aggregate_run()
+    run.warnings = [ImportWarning(code="resmed_summary_only_day", severity="info", message="x")]
+
+    result = validate_import(fixture, run=run)
+
+    assert result.passed, result.failures
+    assert any("expected.import.settings.2026-06-01.therapy_mode" in s for s in result.skipped)
 
 
 def test_validate_import_surfaces_unknown_import_block(tmp_path):

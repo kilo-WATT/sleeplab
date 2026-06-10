@@ -367,11 +367,181 @@ def _compare_warnings(expected_block: dict, run: Any) -> tuple[list[str], list[s
     return failures, skips
 
 
+def _sessions_by_date(run: Any) -> dict[str, list]:
+    """Group a run's sessions by ``machine_local_date`` (a ``YYYY-MM-DD`` str)."""
+
+    by_date: dict[str, list] = {}
+    for session in getattr(run, "sessions", []) or []:
+        by_date.setdefault(session.machine_local_date, []).append(session)
+    return by_date
+
+
+def _compare_session_blocks(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
+    """Compare ``expected.import.session_blocks`` against a normalized run.
+
+    Per machine-local date, only ``block_count`` (summed across that night's
+    sessions) is observable from the normalized run today. Interval start/end
+    comparison is a later plan step, so an ``intervals`` key (or any other key)
+    is reported as a skip rather than silently passed.
+    """
+
+    failures: list[str] = []
+    skips: list[str] = []
+    by_date = _sessions_by_date(run)
+
+    for date_key, expected_dict in expected_block.items():
+        if date_key not in by_date:
+            failures.append(
+                f"expected.import.session_blocks.{date_key}: date not found in normalized output "
+                f"(present: {sorted(by_date)})"
+            )
+            continue
+        block_count = sum(len(session.blocks) for session in by_date[date_key])
+        if "block_count" in expected_dict:
+            _expect(
+                failures,
+                f"expected.import.session_blocks.{date_key}.block_count",
+                block_count,
+                expected_dict["block_count"],
+            )
+        for key in sorted(set(expected_dict) - {"block_count"}):
+            skips.append(
+                f"expected.import.session_blocks.{date_key}.{key}: skipped — "
+                "interval/boundary comparison not implemented yet (later plan step)"
+            )
+    return failures, skips
+
+
+def _observable_aggregates(session: Any) -> dict[str, int | None]:
+    """Therapy-aggregate fields observable from one normalized session.
+
+    Derived from the loader's usage ``DerivedValue``s and block list:
+
+    * ``usage_seconds``       ← ``computed_usage_hours`` × 3600
+    * ``wall_clock_seconds``  ← ``recording_span_hours`` × 3600
+    * ``gap_seconds``         ← wall-clock − usage (both must be present)
+    * ``block_count``         ← number of session blocks
+
+    A value is ``None`` when its source derived value is absent — the caller then
+    skips that field instead of comparing a fabricated number.
+    """
+
+    derived = {value.key: value.value for value in getattr(session, "derived_values", [])}
+
+    def seconds(key: str) -> int | None:
+        value = derived.get(key)
+        return round(value * 3600) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    usage_s = seconds("computed_usage_hours")
+    span_s = seconds("recording_span_hours")
+    gap_s = (span_s - usage_s) if (usage_s is not None and span_s is not None) else None
+    return {
+        "usage_seconds": usage_s,
+        "wall_clock_seconds": span_s,
+        "gap_seconds": gap_s,
+        "block_count": len(getattr(session, "blocks", [])),
+    }
+
+
+def _compare_therapy_aggregates(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
+    """Compare ``expected.import.therapy_aggregates`` against a normalized run.
+
+    Only fields genuinely observable from the normalized ``ImportRun`` are
+    compared (see :func:`_observable_aggregates`). A requested field that is not
+    observable, or whose source derived value is absent, is skipped with a clear
+    reason — never faked. ``gap_seconds`` is the wall-clock−usage difference, the
+    same definition the nightly aggregate uses.
+    """
+
+    failures: list[str] = []
+    skips: list[str] = []
+    by_date = _sessions_by_date(run)
+
+    for date_key, expected_dict in expected_block.items():
+        sessions = by_date.get(date_key)
+        if not sessions:
+            failures.append(
+                f"expected.import.therapy_aggregates.{date_key}: date not found in normalized "
+                f"output (present: {sorted(by_date)})"
+            )
+            continue
+        # A machine-local date is one normalized session in the ResMed loader;
+        # if several share a date, sum the additive fields.
+        observed = _observable_aggregates(sessions[0])
+        for extra in sessions[1:]:
+            extra_obs = _observable_aggregates(extra)
+            for key in ("usage_seconds", "wall_clock_seconds", "gap_seconds", "block_count"):
+                if observed[key] is not None and extra_obs[key] is not None:
+                    observed[key] += extra_obs[key]
+
+        for field_name, expected_value in expected_dict.items():
+            if field_name not in observed:
+                skips.append(
+                    f"expected.import.therapy_aggregates.{date_key}.{field_name}: skipped — "
+                    "field not observable from normalized ImportRun"
+                )
+            elif observed[field_name] is None:
+                skips.append(
+                    f"expected.import.therapy_aggregates.{date_key}.{field_name}: skipped — "
+                    "source derived value absent in normalized output"
+                )
+            else:
+                _expect(
+                    failures,
+                    f"expected.import.therapy_aggregates.{date_key}.{field_name}",
+                    observed[field_name],
+                    expected_value,
+                )
+    return failures, skips
+
+
+def _compare_settings(expected_block: dict, run: Any) -> tuple[list[str], list[str]]:
+    """Compare ``expected.import.settings`` against a normalized run.
+
+    The ResMed cpap-parser loader does not map settings *values* into the
+    normalized ``Session`` yet, so only presence/count is observable. Supported
+    per-date keys:
+
+    * ``snapshot_count`` — number of ``SettingsSnapshot``s for that date.
+    * ``present`` — bool: whether any snapshot exists for that date.
+
+    A per-date setting *value* key (e.g. ``therapy_mode``) is skipped with a clear
+    reason rather than silently passed — value comparison is a later plan step.
+    """
+
+    failures: list[str] = []
+    skips: list[str] = []
+    by_date = _sessions_by_date(run)
+
+    for date_key, expected_dict in expected_block.items():
+        if date_key not in by_date:
+            failures.append(
+                f"expected.import.settings.{date_key}: date not found in normalized output "
+                f"(present: {sorted(by_date)})"
+            )
+            continue
+        snapshots = [snap for session in by_date[date_key] for snap in getattr(session, "settings", [])]
+        for key, expected_value in expected_dict.items():
+            if key == "snapshot_count":
+                _expect(failures, f"expected.import.settings.{date_key}.snapshot_count", len(snapshots), expected_value)
+            elif key == "present":
+                _expect(failures, f"expected.import.settings.{date_key}.present", bool(snapshots), expected_value)
+            else:
+                skips.append(
+                    f"expected.import.settings.{date_key}.{key}: skipped — settings value "
+                    "comparison not implemented yet (loader maps no settings snapshots)"
+                )
+    return failures, skips
+
+
 #: Dispatch table of implemented parse-observable comparators. A block listed in
 #: :data:`_PARSE_DEPENDENT_IMPORT_BLOCKS` but absent here skips as
 #: "not implemented yet". Each comparator returns ``(failures, skips)``.
 _IMPORT_BLOCK_COMPARATORS = {
     "warnings": _compare_warnings,
+    "session_blocks": _compare_session_blocks,
+    "therapy_aggregates": _compare_therapy_aggregates,
+    "settings": _compare_settings,
 }
 
 
