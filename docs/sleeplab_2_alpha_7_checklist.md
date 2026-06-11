@@ -377,6 +377,21 @@ parser-free unit tests in `tests/test_resmed_import_regressions.py`. **Persisten
 unchanged** — `persist.py` still hardcodes `therapy_mode`/`mask_type`/`humidity_level`
 `None`, so the mapping is conformance-only (gap audit §11). **Still blocked:** all
 other settings fields (not in the parser schema); settings persistence (stop-and-ask);
-timestamped intervals/events. **Next safe task:** decide whether to wire the snapshot
-through `persist_import_run` (a persistence change — stop-and-ask), or move to the
-timestamp/event-vocabulary work.
+timestamped intervals/events.
+
+**Event TYPE counts — LANDED (SleepLab-normalized, not OSCAR parity):** the
+`events` coverage is extended from total `count` to per-night `types`. The
+parser-backed run's `Session.events` type tallies (raw cpap-parser labels —
+`Central Apnea`/`Obstructive Apnea`/`Hypopnea` — plus the loader-derived
+`Large Leak`) are stable and reconcile with the existing `count`, so the manifest
+now pins `events.<date>.types` for the 3 detailed nights, verified by
+`test_fixture_event_type_counts_match_normalized_run` (`cpap-py`-gated) and a
+parser-free guard `test_validate_import_airsense10_committed_event_types_are_checked`.
+These are **SleepLab-normalized** type counts, **not** OSCAR event-type parity —
+the raw→OSCAR enum mapping (and the v10 `central→unclassified` correction) stays
+deferred and is a stop-and-ask item (it changes event-type normalization used by
+import/persistence). No loader/routing/schema/persistence change. **Next safe
+task:** either tackle the raw→OSCAR event-type vocabulary parity (stop-and-ask), or
+decide whether to wire the `therapy_mode` snapshot through `persist_import_run` (a
+persistence change — stop-and-ask). Exact event/block timestamps and durations
+stay deferred.

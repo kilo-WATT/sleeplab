@@ -125,7 +125,7 @@ anonymized reference CSVs in fixture #2.
 | therapy aggregates (computed usage) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_computed_usage_matches_oscar_for_detailed_nights` vs OSCAR total time, abs=0.1 h |
 | summary-only / ghost nights | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ghost_nights_flagged_not_deleted` (kept + `has_detailed_data is False`) |
 | OSCAR reference (export hash) | **fixture-backed (Phase 2)** | manifest pins `expected.import.oscar_reference.export_hash` for committed `oscar_reference/summary.csv` **and** (via `oscar_reference.files`) for `oscar_reference/sessions.csv`; both verified parser-free by `validate_import` in `test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fixture` and `test_validate_import_oscar_reference_sessions_csv_hash_pinned_on_committed_airsense10_fixture` |
-| `expected.import` **warnings / session_blocks.block_count / therapy_aggregates / events.count** | **fixture-backed (Phase 2, value-level, `cpap-py`-gated)** | manifest pins these authored-from-the-real-run values; `validate_import(run=...)` verifies them against the normalized `ImportRun` in `test_fixture_semantic_expected_import_matches_normalized_run` (parsed in Linux/Docker; skips where `cpap-py` absent). First committed *value-level* import coverage on a real card |
+| `expected.import` **warnings / session_blocks.block_count / therapy_aggregates / events.count + events.types** | **fixture-backed (Phase 2, value-level, `cpap-py`-gated)** | manifest pins these authored-from-the-real-run values; `validate_import(run=...)` verifies them against the normalized `ImportRun` in `test_fixture_semantic_expected_import_matches_normalized_run` (parsed in Linux/Docker; skips where `cpap-py` absent). `events.types` are **SleepLab-normalized** per-type counts (raw cpap-parser labels + loader `Large Leak`), **not** OSCAR parity — see gap audit §12. First committed *value-level* import coverage on a real card |
 | `expected.import` **settings.snapshot_count / present / values.therapy_mode** | **fixture-backed (Phase 2, value-level, `cpap-py`-gated)** | loader now maps `pressure_mode` → `therapy_mode` (only); manifest pins `snapshot_count: 1`/`present: true`/`values: {therapy_mode: "APAP"}` for the 3 detailed nights, verified by `test_fixture_semantic_expected_import_matches_normalized_run` + `test_fixture_settings_snapshot_maps_only_therapy_mode` (gap audit §11) |
 | settings values (other fields) | **cannot — not in parser schema** | min/max/set pressure, EPR, ramp, humidifier, mask_type are absent from cpap-parser; only `therapy_mode` exists (see §3) |
 | `expected.import` identity_hashes | **not committed** | DB-gated, synthetic only |
@@ -133,13 +133,15 @@ anonymized reference CSVs in fixture #2.
 
 - **Now fixture-backed (value-level):** `warnings`, `session_blocks.block_count`,
   `therapy_aggregates` (usage/wall-clock/gap seconds), `events.count` (gap audit
-  §9.2), and **`settings.therapy_mode`** (gap audit §11) — all authored from and
-  verified against the real normalized `ImportRun`.
+  §9.2), **`events.types`** (SleepLab-normalized per-type counts — gap audit §12),
+  and **`settings.therapy_mode`** (gap audit §11) — all authored from and verified
+  against the real normalized `ImportRun`.
 - **Cannot validate yet:** `settings.values` *beyond* `therapy_mode` (the other
-  fields are not in the cpap-parser schema); exact `session_blocks.intervals` /
-  ordered timestamped `events` (anonymization-calendar split + event-type
-  vocabulary — deferred, no timestamps authored); persisted DB identity hashes for
-  this card.
+  fields are not in the cpap-parser schema); raw→OSCAR event-type **parity** (the
+  pinned `events.types` are SleepLab-normalized, not OSCAR); exact
+  `session_blocks.intervals` / ordered timestamped `events` / event `duration_seconds`
+  (anonymization-calendar split + event-type vocabulary — deferred, no timestamps
+  authored); persisted DB identity hashes for this card.
 - **Privacy concerns / unknowns:** anonymized real card. Do **not** expose real
   values; do **not** overwrite the data files. Safe, already-committed summary
   facts (from `README.md`/`oscar_reference`): 40 summary nights, 3 detailed
@@ -216,10 +218,12 @@ What stays blocked, and why:
   on the AirSense 10 fixture for **both** the per-day `summary.csv` and the
   per-session `sessions.csv` (parser-free hash checks; see §2.2).
 - **`validate_import.warnings` (`codes`/`absent`), `session_blocks.block_count`,
-  `therapy_aggregates` (usage/wall-clock/gap seconds), `events.count`** — now
-  committed-fixture-backed on the AirSense 10 fixture, authored from and verified
-  against the real normalized `ImportRun` (`cpap-py`-gated, parsed in Linux/Docker;
-  see §2.2 and gap audit §9.2). First *value-level* committed import coverage.
+  `therapy_aggregates` (usage/wall-clock/gap seconds), `events.count` + `events.types`**
+  — now committed-fixture-backed on the AirSense 10 fixture, authored from and
+  verified against the real normalized `ImportRun` (`cpap-py`-gated, parsed in
+  Linux/Docker; see §2.2 and gap audit §9.2, §12). `events.types` are
+  SleepLab-normalized per-type counts, not OSCAR parity. First *value-level*
+  committed import coverage.
 - **`validate_import.settings` (`snapshot_count`/`present`/`values.therapy_mode`)** —
   now committed-fixture-backed on the AirSense 10 fixture: the loader maps
   `pressure_mode` → `therapy_mode` (only), pinned as `"APAP"` (`cpap-py`-gated; see
@@ -230,8 +234,9 @@ injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
 
 - `validate_import.session_blocks.intervals` (timestamped — deferred; only
   `block_count` is committed-fixture-backed, above)
-- `validate_import.events` `types` / ordered timestamped `events` (only `count` is
-  committed-fixture-backed, above)
+- `validate_import.events` ordered timestamped `events` / `duration_seconds`, and
+  raw→OSCAR event-type **parity** (both `count` and per-type `types` are now
+  committed-fixture-backed as SleepLab-normalized counts, above)
 - `validate_import.settings.values` for fields **other than** `therapy_mode`
   (min/max/set pressure, EPR, ramp, humidifier, mask_type — absent from the
   cpap-parser schema)

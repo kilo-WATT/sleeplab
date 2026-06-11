@@ -290,7 +290,12 @@ Parse-only, no database — these compare the **pre-persistence** `ImportRun`
   mismatch, malformed expected event, invalid timestamp, or naive-vs-tz-aware
   start is a clear failure. The OSCAR event-type enum / `central→unclassified`
   mapping (checklist §3) is the intended `type` vocabulary; this comparator is
-  vocabulary-agnostic and asserts whatever the normalized run emits.
+  vocabulary-agnostic and asserts whatever the normalized run emits. **Fixture-backed
+  status:** on the AirSense 10 card, `count` **and** per-type `types` are now
+  committed-fixture-backed (gap audit §12) — but as **SleepLab-normalized** counts
+  (raw cpap-parser labels + loader `Large Leak`), **not** OSCAR event-type parity;
+  ordered `events`, timestamps, and durations stay deferred, and the raw→OSCAR
+  vocabulary mapping is a separate stop-and-ask change.
 - `oscar_reference` — **[deferred, Step 3]** comparison against checked-in CSVs
   and the manifest hash assertion. No DB; needs only the reference files (and a
   normalized side).

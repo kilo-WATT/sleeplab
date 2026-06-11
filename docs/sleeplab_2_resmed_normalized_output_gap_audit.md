@@ -423,3 +423,46 @@ and `test_fixture_settings_snapshot_maps_only_therapy_mode`
   production import behavior).
 - Support status is **not** upgraded to "validated" beyond this single,
   conservatively-confident field.
+
+## 12. Event TYPE counts — SleepLab normalized, fixture-backed (this phase)
+
+The `events` coverage is extended from total `count` to per-night **type** counts.
+An audit of the parser-backed run (default `ImportOptions`, the options
+`_acquire_import_run` uses) found `Session.events` carries:
+
+| date | `events.types` (fixture-backed) | total |
+|---|---|---|
+| 2024-12-14 | `Central Apnea: 1`, `Large Leak: 1` | 2 |
+| 2024-12-25 | `Central Apnea: 1`, `Hypopnea: 1`, `Obstructive Apnea: 1`, `Large Leak: 1` | 4 |
+| 2025-01-05 | `Central Apnea: 1`, `Obstructive Apnea: 4` | 5 |
+
+Per-type tallies are **stable** across re-parses and reconcile exactly with the
+already-pinned `events.count`. They are committed to
+`expected.import.events.<date>.types` and verified against the real run by
+`tests/conformance/test_resmed_airsense10.py::test_fixture_event_type_counts_match_normalized_run`
+(and the broader `test_fixture_semantic_expected_import_matches_normalized_run`);
+a parser-free guard,
+`tests/test_conformance.py::test_validate_import_airsense10_committed_event_types_are_checked`,
+proves the committed `types` are actually evaluated (a wrong injected run fails).
+
+**Crucial framing — these are NOT OSCAR event-type parity.** The labels are the
+**SleepLab normalized `event_type`** values as the loader emits them today: the raw
+cpap-parser strings (`"Central Apnea"` / `"Obstructive Apnea"` / `"Hypopnea"`) plus
+the loader-derived `"Large Leak"` (a leak-signal threshold band, present because the
+default `ImportOptions.include_waveforms` is `True`). Pinning these *normalized*
+counts deliberately does **not** require the raw→OSCAR enum mapping; it only pins
+what the loader produces. We do **not** claim the committed OSCAR reference CSVs
+agree on the same vocabulary/tallies.
+
+**Still deferred (unchanged).**
+
+- **Raw→OSCAR event-type vocabulary parity** (e.g. `"Obstructive Apnea"` → OSCAR
+  enum `0`, the v10 `central→unclassified` correction): not done; would be required
+  before any *OSCAR parity* claim, and would change the normalized vocabulary
+  (stop-and-ask — it touches event-type normalization used by import/persistence).
+- **Exact event timestamps and ordered `events` lists**: not authored (anonymized
+  shifted timestamps + calendar split).
+- **Event `duration_seconds`**: observed but not pinned (e.g. one `Hypopnea` has
+  `duration_seconds == 0.0`, which is shape-fragile to pin as a value); left for a
+  later, separate decision.
+- Persistence, routing, schema: untouched.
