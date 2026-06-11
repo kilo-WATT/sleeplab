@@ -251,6 +251,35 @@ weighted/time-based summaries, settings-value loader mapping **beyond
 Lowenstein persistence, ResMed `cpap-parser` production cutover, full-night /
 compressed-segment waveform storage, device-time-correction implementation.
 
+### 4.1 AirSense 10 semantic coverage ladder (at a glance)
+
+Where each `expected.import` rung stands on the committed AirSense 10 fixture, so
+the next safe step is obvious. "Done" = committed + value-verified against the real
+normalized run (`cpap-py`-gated); "deferred/blocked" rows say why.
+
+| Rung | Status | Note |
+|---|---|---|
+| `oscar_reference` export-hash (summary + sessions csv) | ✅ done | parser-free hash pins |
+| `warnings.codes` / `warnings.absent` | ✅ done | §9.2 |
+| `session_blocks.block_count` | ✅ done | §9.2 |
+| `session_blocks.intervals` (timestamps) | ⛔ deferred | anonymization-calendar split; no timestamps authored |
+| `therapy_aggregates` (usage/wall-clock/gap seconds) | ✅ done | §9.2 |
+| `events.count` | ✅ done | §9.2 |
+| `events.types` (per-type counts) | ✅ done | §12 — **SleepLab-normalized, not OSCAR parity** |
+| `events.types` raw→OSCAR **parity** | ⛔ deferred | needs raw→OSCAR enum mapping (stop-and-ask: changes event-type normalization) |
+| `events` ordered list / start times / `duration_seconds` | ⛔ deferred | timestamps + duration shape not authored |
+| `settings.present` / `snapshot_count` / `values.therapy_mode` | ✅ done | §11 |
+| `settings.values` other fields (pressure/EPR/ramp/humidifier/mask) | ⛔ blocked | absent from cpap-parser schema |
+| `settings` **persistence** (sessions columns) | ⛔ blocked | `persist.py` hardcodes `None` — stop-and-ask |
+| `identity_hashes` | ⛔ deferred | DB-gated; synthetic rows only |
+| `oscar_reference` numeric **parity** | ⛔ deferred | designed (plan §13), not implemented |
+
+Smallest likely-safe next rungs: none remain that are purely additive and
+non-stop-and-ask on this fixture — the remaining rungs each need either a deferred
+timestamp/vocabulary decision, a schema-absent field, or a stop-and-ask
+(persistence / raw→OSCAR normalization / numeric parity). New *fixtures* (a second
+ResMed model, oximetry, or a safe Lowenstein sample) are the next breadth step.
+
 ## 5. Recommended Phase 2 order (conservative)
 
 1. **DONE — Pin the airsense10 OSCAR `export_hash`** for `summary.csv` and add a
