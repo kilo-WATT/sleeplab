@@ -912,6 +912,116 @@ def test_run_warnings_persist_as_structured_diagnostics():
     assert summary_only["relative_path"] == "STR.edf"
 
 
+# ---------------------------------------------------------------------------
+# ResMed normalized-output gap documentation (Phase 2).
+#
+# These pin the *current shape* of ``ResMedNativeLoader``'s normalized output so
+# the gap audit (``docs/sleeplab_2_resmed_normalized_output_gap_audit.md``) stays
+# honest: which ``expected.import`` blocks the loader can already feed, and which
+# it cannot. They drive ``_build_session`` directly with the same parser-free
+# fakes the absence-diagnostic tests use, so they run with no ``cpap-py`` backend.
+# ---------------------------------------------------------------------------
+
+
+def test_build_session_emits_no_settings_snapshot_documents_values_gap():
+    """Loader gap: no ``SettingsSnapshot`` is built, so ``settings.values`` can't pass.
+
+    ``validate_import``'s ``settings.values`` comparator is implemented and
+    unit-tested, but against a real card it has nothing to compare: the ResMed
+    loader never populates ``Session.settings``. This pins that gap — the only
+    honest committed assertion for this card today is ``settings.present: false``
+    — so a future loader change that maps STR settings into a ``SettingsSnapshot``
+    will visibly flip this test.
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    detailed = [_detailed_session(flow_rate=[1.0, 2.0], set_pressure=[10.0, 11.0])]
+
+    session = ResMedNativeLoader()._build_session(
+        _waveform_summary(),
+        detailed=detailed,
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=[],
+    )
+
+    # The deepest blocker for fixture-backed settings.values: empty, not faked.
+    assert session.settings == []
+
+
+def test_build_session_emits_therapy_aggregate_derived_values():
+    """The ``therapy_aggregates`` comparator's source values ARE emitted.
+
+    ``_observable_aggregates`` reads ``computed_usage_hours`` (→ usage_seconds),
+    ``recording_span_hours`` (→ wall_clock_seconds), and the block count. This
+    documents that a detailed night already carries those derived values, so a
+    fixture-backed ``therapy_aggregates`` block is gated only on obtaining a run
+    (parser + manifest block), not on a loader change.
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    detailed = [_detailed_session(flow_rate=[1.0, 2.0], set_pressure=[10.0, 11.0])]
+
+    session = ResMedNativeLoader()._build_session(
+        _waveform_summary(),  # computed_usage=8.0, recording_span=8.0
+        detailed=detailed,
+        machine_key="SN-TEST",
+        include_waveforms=True,
+        run_warnings=[],
+    )
+
+    derived = {dv.key: dv.value for dv in session.derived_values}
+    assert derived["computed_usage_hours"] == 8.0
+    assert derived["recording_span_hours"] == 8.0
+    # gap_seconds in the comparator = wall_clock - usage; both are present here.
+    assert "summary_reported_usage_hours" in derived
+
+
+def test_build_session_emits_blocks_and_events_for_detailed_night():
+    """A detailed night emits ``Session.blocks`` and ``Session.events``.
+
+    Documents that ``session_blocks`` (count) and ``events`` (count/types) have a
+    real loader source — block start/end from each file-session, events from
+    ``CPAPSession.events`` — so those blocks are gated on a run + manifest block,
+    not a loader change. (The ordered ``intervals``/``events`` lists additionally
+    embed timestamps; see the audit for why those are deferred.)
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    event = SimpleNamespace(
+        event_type="Obstructive Apnea",
+        timestamp_sec=120.0,
+        duration_sec=12.0,
+    )
+    # Built inline (not via ``_detailed_session``, which hardcodes ``events=[]``)
+    # so a scored event is present for ``_session_events`` to map.
+    detailed = [
+        SimpleNamespace(
+            start_time=datetime(2026, 6, 1, 22, 0),
+            end_time=datetime(2026, 6, 2, 6, 0),
+            file_type="BRP",
+            events=[event],
+            sample_rate=25.0,
+            timeseries=None,
+        )
+    ]
+
+    session = ResMedNativeLoader()._build_session(
+        _waveform_summary(),
+        detailed=detailed,
+        machine_key="SN-TEST",
+        include_waveforms=False,  # exclude derived large-leak events for a clean count
+        run_warnings=[],
+    )
+
+    assert len(session.blocks) == 1
+    assert session.blocks[0].start_time == datetime(2026, 6, 1, 22, 0)
+    # The scored event survives with its raw cpap-parser type string (not yet
+    # mapped to the OSCAR enum — a documented vocabulary gap in the audit).
+    assert [e.event_type for e in session.events] == ["Obstructive Apnea"]
+    assert session.events[0].start_time == datetime(2026, 6, 1, 22, 2)  # start + 120s
+
+
 def test_dedupe_events_preserves_zero_duration_arousal():
     events = [
         (10.0, 0.0, "Arousal"),
