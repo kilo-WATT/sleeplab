@@ -1775,6 +1775,95 @@ def test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fix
     assert any("oscar_reference.parity" in s for s in result.skipped), result.skipped
 
 
+def test_validate_import_oscar_reference_sessions_csv_hash_pinned_on_committed_airsense10_fixture():
+    """Phase 2: the committed AirSense 10 manifest also pins its sessions.csv hash.
+
+    ``summary.csv`` (per-day) was the first committed-fixture-backed
+    ``oscar_reference`` pin; its twin ``sessions.csv`` (per-session) is now pinned
+    too, via the manifest's ``files`` list. ``validate_import`` verifies the sha256
+    of the *committed* ``oscar_reference/sessions.csv`` parser-free — an integrity
+    pin over a redistributable, anonymized export, not a capability-``validated``
+    claim. A trivial run is injected so the check never depends on ``cpap-parser`` /
+    ``cpap-py``; numeric parity stays a skip.
+    """
+    manifest = json.loads((AIRSENSE10_FIXTURE / "manifest.json").read_text(encoding="utf-8"))
+    files = manifest["expected"]["import"]["oscar_reference"]["files"]
+    sessions_pin = next(f for f in files if f["file"] == "oscar_reference/sessions.csv")
+    assert sessions_pin["export_hash"].startswith("sha256:"), "sessions.csv must pin a sha256"
+
+    result = validate_import(AIRSENSE10_FIXTURE, run=SimpleNamespace(warnings=[], sessions=[]))
+
+    assert result.passed, result.failures
+    # Both committed reference files were hash-verified — no oscar_reference failure
+    # and no "reference file not found" / "no reference file path" skip.
+    assert not any("oscar_reference" in f for f in result.failures), result.failures
+    assert not any("no reference file path" in s for s in result.skipped), result.skipped
+    assert not any("reference file not found" in f for f in result.failures), result.failures
+
+
+def test_validate_import_oscar_reference_additional_files_hash_mismatch_fails(tmp_path):
+    """Phase 2: a wrong hash in the ``files`` list is a real failure, like the legacy pin.
+
+    Proves the additional-reference path is verified, not merely accepted: the
+    top-level ``summary_csv`` matches, but a bogus ``files`` entry hash for
+    ``sessions.csv`` must fail the whole block.
+    """
+    summary = b"Date,AHI\n2026-06-01,1.0\n"
+    sessions = b"Date,Session,AHI\n2026-06-01,1,1.0\n"
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "oscar_reference": {
+                "summary_csv": "oscar_reference/summary.csv",
+                "export_hash": "sha256:" + hashlib.sha256(summary).hexdigest(),
+                "files": [
+                    {
+                        "file": "oscar_reference/sessions.csv",
+                        "export_hash": "sha256:" + "0" * 64,
+                    }
+                ],
+            }
+        },
+    )
+    _write_reference_csv(fixture, summary, "oscar_reference/summary.csv")
+    _write_reference_csv(fixture, sessions, "oscar_reference/sessions.csv")
+
+    result = validate_import(fixture)
+
+    assert not result.passed
+    assert any(
+        "oscar_reference.export_hash" in f and "sessions.csv" in f for f in result.failures
+    ), result.failures
+
+
+def test_validate_import_oscar_reference_additional_files_missing_file_fails(tmp_path):
+    """Phase 2: a ``files`` entry naming an absent reference file is a failure, not a skip."""
+    summary = b"Date,AHI\n2026-06-01,1.0\n"
+    fixture = _write_import_manifest(
+        tmp_path,
+        {
+            "oscar_reference": {
+                "summary_csv": "oscar_reference/summary.csv",
+                "export_hash": "sha256:" + hashlib.sha256(summary).hexdigest(),
+                "files": [
+                    {
+                        "file": "oscar_reference/sessions.csv",
+                        "export_hash": "sha256:" + "0" * 64,
+                    }
+                ],
+            }
+        },
+    )
+    _write_reference_csv(fixture, summary, "oscar_reference/summary.csv")  # sessions.csv absent
+
+    result = validate_import(fixture)
+
+    assert not result.passed
+    assert any(
+        "reference file not found" in f and "sessions.csv" in f for f in result.failures
+    ), result.failures
+
+
 def test_summarize_import_blocks_classifies_passed_skipped_failed(tmp_path):
     """Phase 2 clarity: per-block status distinguishes passed / skipped / failed.
 

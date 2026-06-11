@@ -1107,7 +1107,10 @@ def _compare_oscar_reference(
       is a *failure*, not a skip — a declared reference that cannot be verified is
       a real problem (plan §9). Hashing a redistributable, anonymized export
       exposes no PHI (plan §11). If only one of the two is given, the check is
-      skipped with a reason (nothing to verify against).
+      skipped with a reason (nothing to verify against). Additional committed
+      reference files (e.g. a per-session ``sessions.csv`` alongside the per-day
+      ``summary.csv``) may be pinned via an optional ``files`` list, each entry a
+      ``{"file": ..., "export_hash": ...}`` mapping verified the same way.
     * **Numeric parity (needs a normalized run).** Comparing parsed nightly values
       against the OSCAR rows is a later plan step; it is always skipped here, with
       the reason noting whether a run was even available.
@@ -1115,34 +1118,45 @@ def _compare_oscar_reference(
 
     failures: list[str] = []
     skips: list[str] = []
-    export_hash = expected_block.get("export_hash")
-    ref_rel = expected_block.get("summary_csv") or expected_block.get("file")
 
-    if export_hash and ref_rel:
-        ref_path = fixture_root / ref_rel
-        if not ref_path.is_file():
-            failures.append(
-                f"expected.import.oscar_reference: reference file not found: {ref_rel}"
-            )
-        else:
-            actual = hashlib.sha256(ref_path.read_bytes()).hexdigest()
-            # Accept an optional ``sha256:`` algorithm prefix; compare hex only.
-            expected_hex = export_hash.split(":", 1)[-1].strip().lower()
-            if actual != expected_hex:
+    # Collect every (path, export_hash) reference-file pin: the legacy single-file
+    # form (``summary_csv``/``file`` + top-level ``export_hash``) plus any entries
+    # in the optional ``files`` list. Each is verified parser-free and identically.
+    pins: list[tuple[str | None, str | None]] = [
+        (
+            expected_block.get("summary_csv") or expected_block.get("file"),
+            expected_block.get("export_hash"),
+        )
+    ]
+    for entry in expected_block.get("files", []):
+        pins.append((entry.get("file"), entry.get("export_hash")))
+
+    for ref_rel, export_hash in pins:
+        if export_hash and ref_rel:
+            ref_path = fixture_root / ref_rel
+            if not ref_path.is_file():
                 failures.append(
-                    f"expected.import.oscar_reference.export_hash: expected {expected_hex!r}, "
-                    f"got {actual!r} for {ref_rel}"
+                    f"expected.import.oscar_reference: reference file not found: {ref_rel}"
                 )
-    elif export_hash and not ref_rel:
-        skips.append(
-            "expected.import.oscar_reference.export_hash: skipped — no reference file path "
-            "('summary_csv'/'file') to hash against"
-        )
-    elif ref_rel and not export_hash:
-        skips.append(
-            "expected.import.oscar_reference: skipped — reference file given without "
-            "'export_hash' to verify"
-        )
+            else:
+                actual = hashlib.sha256(ref_path.read_bytes()).hexdigest()
+                # Accept an optional ``sha256:`` algorithm prefix; compare hex only.
+                expected_hex = export_hash.split(":", 1)[-1].strip().lower()
+                if actual != expected_hex:
+                    failures.append(
+                        f"expected.import.oscar_reference.export_hash: expected {expected_hex!r}, "
+                        f"got {actual!r} for {ref_rel}"
+                    )
+        elif export_hash and not ref_rel:
+            skips.append(
+                "expected.import.oscar_reference.export_hash: skipped — no reference file path "
+                "('summary_csv'/'file') to hash against"
+            )
+        elif ref_rel and not export_hash:
+            skips.append(
+                "expected.import.oscar_reference: skipped — reference file given without "
+                "'export_hash' to verify"
+            )
 
     parity_reason = (
         "numeric parity vs OSCAR export not implemented yet (later plan step)"

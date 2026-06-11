@@ -24,6 +24,13 @@
       "oscar_reference": {
         "summary_csv": "oscar_reference/summary.csv",
         "export_hash": "sha256:ca58f40de4748f07a5359733ebdabe643ff24393433b44554266a3067cc11d90",
+        "files": [
+          {
+            "file": "oscar_reference/sessions.csv",
+            "export_hash": "sha256:94c0e9b18b3360105a73b3893d33fafa2a89156e4c42a7f22d7018a1ddedeece",
+            "note": "Integrity pin for the committed, anonymized per-session OSCAR export (twin of summary.csv). sha256 of a redistributable file exposes no serial/PHI."
+          }
+        ],
         "note": "Integrity pin for the committed, anonymized OSCAR export. sha256 of the redistributable summary.csv exposes no serial/PHI (plan section 11). Verified parser-free by validate_import's oscar_reference hash check; numeric parity stays a skip until a normalized run is available."
       }
     }
