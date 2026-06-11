@@ -288,9 +288,17 @@ def test_db_parity_harness(db, test_user):
     # harness is a real guard, then require that every divergence is documented.
     assert parser_snap is not None
 
-    # (a) Observable P0 drop: legacy persists STR settings snapshots, parser none.
+    # (a) therapy_mode now persists on the parser side. The snapshot comparison
+    # includes keys/values and flattened-column coverage so matching row counts
+    # cannot falsely imply full settings parity.
     assert legacy_snap["settings_snapshots"]["row_count"] > 0
-    assert parser_snap["settings_snapshots"]["row_count"] == 0
+    assert parser_snap["settings_snapshots"]["row_count"] > 0
+    assert parser_snap["settings_snapshots"]["therapy_mode_values"] == ["APAP"]
+    assert parser_snap["settings_snapshots"]["session_therapy_mode_count"] > 0
+    assert parser_snap["settings_snapshots"]["session_mask_type_count"] == 0
+    assert parser_snap["settings_snapshots"]["session_humidity_level_count"] == 0
+    assert parser_snap["settings_snapshots"]["session_temperature_c_count"] == 0
+    assert parser_snap["settings_snapshots"]["setting_keys"] == ["therapy_mode"]
     assert report["settings_snapshots"]["category"] == cp.EXPECTED_DIFFERENCE
 
     # (b) Granularity split is visible: legacy has per-PLD-block session rows

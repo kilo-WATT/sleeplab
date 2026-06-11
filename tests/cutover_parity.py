@@ -79,8 +79,9 @@ KNOWN_DIFFERENCES: dict[str, str] = {
         "blocks; cpap-parser: cpap-py file-session blocks) — audit P1 #5"
     ),
     "settings_snapshots": (
-        "legacy persists STR settings snapshots; cpap-parser path persists none "
-        "(and ignores the loader's therapy_mode snapshot) — audit P0 #4"
+        "cpap-parser now persists loader-provided therapy_mode snapshots, but "
+        "legacy STR snapshots contain additional settings fields that cpap-parser "
+        "does not expose; full settings parity remains partial — audit P0 #4"
     ),
     "session_spo2": (
         "legacy parses SA2/SAD oximetry into session_spo2; cpap-parser path drops "
@@ -209,6 +210,57 @@ def snapshot_parity_tables(conn: Any, *, machine_id: str, import_run_id: str) ->
     snap["settings_snapshots"] = {
         "row_count": _scalar(
             _safe_row(conn, "SELECT COUNT(*) FROM settings_snapshots WHERE machine_id = %s", m)
+        ),
+        # Distinct setting *names* (not values) across all snapshots — safe category
+        # labels. Row counts can match while the persisted setting set differs
+        # (legacy persists the full STR settings; the parser path only therapy_mode),
+        # so this keeps the verdict honest rather than a false "equal".
+        "setting_keys": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(array_agg(DISTINCT k ORDER BY k), '{}') "
+                "FROM settings_snapshots s, jsonb_object_keys(s.normalized_settings) AS k "
+                "WHERE s.machine_id = %s",
+                m,
+            )
+        ),
+        "therapy_mode_values": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(array_agg(DISTINCT normalized_settings->>'therapy_mode' "
+                "ORDER BY normalized_settings->>'therapy_mode'), '{}') "
+                "FROM settings_snapshots WHERE machine_id = %s "
+                "AND normalized_settings->>'therapy_mode' IS NOT NULL",
+                m,
+            )
+        ),
+        "session_therapy_mode_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM sessions WHERE machine_id = %s AND therapy_mode IS NOT NULL",
+                m,
+            )
+        ),
+        "session_mask_type_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM sessions WHERE machine_id = %s AND mask_type IS NOT NULL",
+                m,
+            )
+        ),
+        "session_humidity_level_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM sessions WHERE machine_id = %s AND humidity_level IS NOT NULL",
+                m,
+            )
+        ),
+        "session_temperature_c_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM sessions WHERE machine_id = %s AND temperature_c IS NOT NULL",
+                m,
+            )
         ),
     }
     snap["session_events"] = {
