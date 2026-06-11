@@ -92,8 +92,9 @@ KNOWN_DIFFERENCES: dict[str, str] = {
         "normalized ImportRun.signals) — audit P1 #8"
     ),
     "import_source_files": (
-        "legacy maps every source file to import_source_files; cpap-parser path "
-        "persists no source manifest — audit P1 #7"
+        "both uploaded-root paths start with the same persisted source manifest, "
+        "but legacy resolves real relative paths and links/marks files used while "
+        "cpap-parser emits synthetic source ids that cannot be mapped safely — audit P1 #7"
     ),
     "derived_values": (
         "derived-value key vocabulary and granularity differ (legacy: per-PLD-block "
@@ -354,6 +355,74 @@ def snapshot_parity_tables(conn: Any, *, machine_id: str, import_run_id: str) ->
     snap["import_source_files"] = {
         "row_count": _scalar(
             _safe_row(conn, "SELECT COUNT(*) FROM import_source_files WHERE import_run_id = %s", (import_run_id,))
+        ),
+        "used_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM import_source_files "
+                "WHERE import_run_id = %s AND disposition = 'used'",
+                (import_run_id,),
+            )
+        ),
+        "unknown_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM import_source_files "
+                "WHERE import_run_id = %s AND disposition = 'unknown'",
+                (import_run_id,),
+            )
+        ),
+        "skipped_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM import_source_files "
+                "WHERE import_run_id = %s AND disposition = 'skipped'",
+                (import_run_id,),
+            )
+        ),
+        "roles": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(array_agg(DISTINCT parser_role ORDER BY parser_role), '{}') "
+                "FROM import_source_files WHERE import_run_id = %s",
+                (import_run_id,),
+            )
+        ),
+        "linked_blocks": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(DISTINCT sf.id) FROM import_source_files sf "
+                "JOIN session_blocks b ON sf.id = ANY(b.source_file_ids) "
+                "WHERE sf.import_run_id = %s",
+                (import_run_id,),
+            )
+        ),
+        "linked_events": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(DISTINCT sf.id) FROM import_source_files sf "
+                "JOIN session_events e ON e.source_file_id = sf.id "
+                "WHERE sf.import_run_id = %s",
+                (import_run_id,),
+            )
+        ),
+        "linked_channels": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(DISTINCT sf.id) FROM import_source_files sf "
+                "JOIN signal_channels c ON c.source_file_id = sf.id "
+                "WHERE sf.import_run_id = %s",
+                (import_run_id,),
+            )
+        ),
+        "linked_settings": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(DISTINCT sf.id) FROM import_source_files sf "
+                "JOIN settings_snapshots s ON sf.id = ANY(s.source_file_ids) "
+                "WHERE sf.import_run_id = %s",
+                (import_run_id,),
+            )
         ),
     }
     snap["nightly_therapy_aggregates"] = {

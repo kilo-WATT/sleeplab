@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "importer"))
 
 import db as importer_db
 import import_sessions
-from edf_parser import read_header
+from edf_parser import parse_sa2, read_header
 from resmed_str import ResMedMaskInterval, ResMedSTRDay
 
 #: Committed, anonymized AirSense 10 fixture (serial replaced, timestamps shifted).
@@ -403,6 +403,28 @@ def test_normalized_signal_maps_sa2_oximetry_channels():
     # Classification still follows the sample-rate rule, not the channel name:
     # an oximetry label arriving at high rate would be a waveform.
     assert importer_db._normalized_signal("SpO2.1s", 25.0)[1] == "waveform"
+
+
+def test_airsense10_fixture_sad_files_contain_no_usable_oximetry():
+    """The committed SAD files prove metadata presence, not SpO2 sample behavior.
+
+    All six files advertise Pulse/SpO2 channels, but every SpO2 sample is the
+    ResMed missing sentinel (``-1``). ``parse_sa2`` therefore returns ``None``,
+    which is why the legacy importer writes no ``session_spo2`` rows and leaves
+    ``sessions.has_spo2`` false. A future oximetry parity test needs a safely
+    redistributable fixture with real, non-missing samples.
+    """
+    import pytest
+
+    paths = sorted(_AIRSENSE10_DATALOG.glob("**/*_SAD.edf"))
+    if not paths:
+        pytest.skip("AirSense 10 fixture SAD EDF files not present")
+
+    assert len(paths) == 6
+    for path in paths:
+        header, oximetry = parse_sa2(str(path))
+        assert [signal.label for signal in header.signals[:2]] == ["Pulse.1s", "SpO2.1s"]
+        assert oximetry is None, f"{path.name} unexpectedly contains usable SpO2 samples"
 
 
 def test_normalized_signal_unknown_channel_is_flagged_not_silently_mapped():

@@ -26,13 +26,16 @@ proxy so its writes stay inside that transaction. Snapshots are aggregate-only
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import uuid
 from datetime import date
 from pathlib import Path
 
+import psycopg2.extras
 import pytest
 
+from importer.loaders.planning import _source_role
 from tests import cutover_parity as cp
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -159,6 +162,48 @@ def _new_machine_and_run(raw_conn, *, user_id, serial, adapter_id):
     return machine_id, run_id
 
 
+def _register_source_manifest(raw_conn, *, run_id: str, fixture_root: Path) -> int:
+    """Mirror ``create_import_run`` source-manifest persistence inside the harness."""
+    rows = []
+    for path in sorted(
+        (path for path in fixture_root.rglob("*") if path.is_file()),
+        key=lambda item: item.as_posix(),
+    ):
+        rows.append(
+            (
+                run_id,
+                path.relative_to(fixture_root).as_posix(),
+                path.stat().st_size,
+                f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
+                _source_role(path),
+            )
+        )
+    with raw_conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO import_source_files (
+                import_run_id, relative_path, size_bytes, content_hash, parser_role
+            ) VALUES %s
+            """,
+            rows,
+        )
+    return len(rows)
+
+
+def _finalize_source_manifest(raw_conn, *, run_id: str) -> None:
+    """Mirror the source-disposition part of ``finish_import_run``."""
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE import_source_files
+            SET disposition = 'skipped'
+            WHERE import_run_id = %s AND disposition = 'unknown'
+            """,
+            (run_id,),
+        )
+
+
 def _run_legacy(real_conn, *, fixture_root: Path, user_id: str, machine_id: str, run_id: str):
     """Drive the legacy ``import_sessions`` path into the test transaction.
 
@@ -237,10 +282,12 @@ def test_db_parity_harness(db, test_user):
     # --- Legacy path (host-runnable; pure-Python EDF parser) -------------------
     legacy_snap = None
     ml, rl = _new_machine_and_run(raw, user_id=user_id, serial="PARITY-LEGACY", adapter_id=_LEGACY_ADAPTER)
+    manifest_count = _register_source_manifest(raw, run_id=rl, fixture_root=_FIXTURE)
     with raw.cursor() as cur:
         cur.execute("SAVEPOINT legacy_sp")
     try:
         _run_legacy(raw, fixture_root=_FIXTURE, user_id=user_id, machine_id=ml, run_id=rl)
+        _finalize_source_manifest(raw, run_id=rl)
         legacy_snap = cp.snapshot_parity_tables(raw, machine_id=ml, import_run_id=rl)
     except Exception as exc:  # noqa: BLE001 — record, never crash the harness
         with raw.cursor() as cur:
@@ -258,10 +305,12 @@ def test_db_parity_harness(db, test_user):
 
     if has_parser:
         mp, rp = _new_machine_and_run(raw, user_id=user_id, serial="PARITY-PARSER", adapter_id=_CPAP_PARSER_ADAPTER)
+        assert _register_source_manifest(raw, run_id=rp, fixture_root=_FIXTURE) == manifest_count
         with raw.cursor() as cur:
             cur.execute("SAVEPOINT parser_sp")
         try:
             _run_parser(raw, fixture_root=_FIXTURE, user_id=user_id, machine_id=mp, run_id=rp)
+            _finalize_source_manifest(raw, run_id=rp)
             parser_snap = cp.snapshot_parity_tables(raw, machine_id=mp, import_run_id=rp)
         except Exception as exc:  # noqa: BLE001
             with raw.cursor() as cur:
@@ -301,18 +350,49 @@ def test_db_parity_harness(db, test_user):
     assert parser_snap["settings_snapshots"]["setting_keys"] == ["therapy_mode"]
     assert report["settings_snapshots"]["category"] == cp.EXPECTED_DIFFERENCE
 
-    # (b) Granularity split is visible: legacy has per-PLD-block session rows
+    # (b) Both paths start with the same uploaded-root source manifest. Legacy
+    # resolves and links real relative paths; parser synthetic ids are not
+    # persisted as fake UUID links.
+    legacy_sources = legacy_snap["import_source_files"]
+    parser_sources = parser_snap["import_source_files"]
+    assert legacy_sources["row_count"] == parser_sources["row_count"] == manifest_count
+    assert legacy_sources["roles"] == parser_sources["roles"]
+    assert legacy_sources["used_count"] > 0
+    assert parser_sources["used_count"] == 0
+    assert legacy_sources["skipped_count"] == manifest_count - legacy_sources["used_count"]
+    assert parser_sources["skipped_count"] == manifest_count
+    assert legacy_sources["unknown_count"] == parser_sources["unknown_count"] == 0
+    assert legacy_sources["linked_blocks"] > 0
+    assert legacy_sources["linked_events"] > 0
+    assert legacy_sources["linked_channels"] > 0
+    assert legacy_sources["linked_settings"] > 0
+    assert parser_sources["linked_blocks"] == 0
+    assert parser_sources["linked_events"] == 0
+    assert parser_sources["linked_channels"] == 0
+    assert parser_sources["linked_settings"] == 0
+    assert report["import_source_files"]["category"] == cp.EXPECTED_DIFFERENCE
+
+    # (c) This fixture cannot exercise oximetry samples: all SAD SpO2 values are
+    # missing sentinels (pinned parser-free in test_resmed_import_regressions).
+    # Keep the observed 0/0 result explicit without treating it as support parity.
+    assert legacy_snap["session_spo2"]["row_count"] == 0
+    assert parser_snap["session_spo2"]["row_count"] == 0
+    assert legacy_snap["sessions"]["has_spo2_count"] == 0
+    assert parser_snap["sessions"]["has_spo2_count"] == 0
+    assert report["session_spo2"]["category"] == cp.EQUAL
+
+    # (d) Granularity split is visible: legacy has per-PLD-block session rows
     # (max_block_index >= 1); the cpap-parser path is one row per night (== 0).
     assert legacy_snap["sessions"]["max_block_index"] >= 1
     assert parser_snap["sessions"]["max_block_index"] == 0
     assert report["sessions"]["category"] == cp.EXPECTED_DIFFERENCE
 
-    # (c) Genuine parity also exists — the harness is not all-noise. Low-rate
+    # (e) Genuine parity also exists — the harness is not all-noise. Low-rate
     # metrics, scored events, and the nightly view agree exactly on this fixture.
     assert report["session_metrics"]["category"] == cp.EQUAL
     assert report["session_events"]["category"] == cp.EQUAL
     assert report["nightly_therapy_aggregates"]["category"] == cp.EQUAL
 
-    # (d) First-version guarantee: nothing surfaces as an undocumented divergence.
+    # (f) First-version guarantee: nothing surfaces as an undocumented divergence.
     unexpected = {t: v for t, v in report.items() if v["category"] == cp.UNEXPECTED_DIFFERENCE}
     assert not unexpected, f"undocumented DB divergence(s): {unexpected}"
