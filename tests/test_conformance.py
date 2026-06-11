@@ -2288,3 +2288,63 @@ def test_validate_import_identity_hashes_incremental_preserves_first_night(db, t
 
     # The combined-set hash grows (B added) — expected, not churn.
     assert snap_b["sessions"] != snap_a["sessions"]
+
+
+def test_cli_import_flag_synthetic_fixture_reports_empty_import_section(capsys):
+    """Phase 2 ergonomics: ``--import`` surfaces an import section the CLI lacked.
+
+    On the standard synthetic fixture, planning validation passes and the
+    import-block-free manifest yields an empty ``blocks`` map (``passed`` with no
+    requested ``expected.import`` checks) — exit 0. Without ``--import`` the prior
+    behavior is preserved (no import section).
+    """
+    fixture = FIXTURE_ROOT / "synthetic-resmed-minimal"
+
+    rc = conformance.main([str(fixture), "--import"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["passed"] is True  # planning validation works on the standard fixture
+    assert payload["import"]["passed"] is True
+    assert payload["import"]["blocks"] == {}
+
+    # Backward compatibility: no flag → no import section at all.
+    rc_plain = conformance.main([str(fixture)])
+    plain = json.loads(capsys.readouterr().out)
+    assert rc_plain == 0
+    assert "import" not in plain
+
+
+def test_cli_import_flag_reports_oscar_reference_for_airsense10(capsys):
+    """Phase 2 ergonomics: ``--import`` reports the committed AirSense 10 pins.
+
+    The AirSense 10 fixture is *non-standard* (no ``source/`` tree), so the
+    planning-level harness cannot run it — the CLI now reports that as a clean
+    failure string instead of an uncaught traceback, and still emits the
+    import-level section. There the committed ``oscar_reference`` hashes verify
+    (no failure) while numeric parity stays a deferred skip, so the block reads
+    ``"skipped"``. A reviewer sees the committed coverage without the test source.
+    """
+    rc = conformance.main([str(AIRSENSE10_FIXTURE), "--import"])
+    payload = json.loads(capsys.readouterr().out)
+
+    # Planning degraded gracefully (no crash); fixture id still recovered.
+    assert payload["fixture_id"] == "resmed_airsense10_fixture_001"
+    assert any("planning validation unavailable" in f for f in payload["failures"]), payload
+    assert rc == 1  # exit reflects the planning limitation, honestly
+
+    # Import-level coverage is still reported and the hash pins verified.
+    assert payload["import"]["passed"] is True
+    assert payload["import"]["blocks"] == {"oscar_reference": "skipped"}
+    assert not any("oscar_reference" in f for f in payload["import"]["failures"])
+
+
+def test_cli_handles_nonstandard_fixture_without_traceback(capsys):
+    """Robustness: the plain CLI no longer tracebacks on a non-standard fixture."""
+    rc = conformance.main([str(AIRSENSE10_FIXTURE)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert "import" not in payload
+    assert payload["fixture_id"] == "resmed_airsense10_fixture_001"
+    assert any("planning validation unavailable" in f for f in payload["failures"]), payload

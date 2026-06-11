@@ -1320,15 +1320,64 @@ def _expect(failures: list[str], field: str, actual: object, expected: object) -
         failures.append(f"{field}: expected {expected!r}, got {actual!r}")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate a SleepLab CPAP conformance fixture")
     parser.add_argument("fixture_dir")
-    args = parser.parse_args()
-    metadata_failures = validate_manifest_metadata(args.fixture_dir)
-    result = validate_fixture(args.fixture_dir)
-    failures = [*metadata_failures, *result.failures]
-    print(json.dumps({"fixture_id": result.fixture_id, "passed": not failures, "failures": failures}, indent=2))
-    return 0 if not failures else 1
+    parser.add_argument(
+        "--import",
+        dest="import_level",
+        action="store_true",
+        help=(
+            "also report import-level conformance: per-block passed/skipped/failed "
+            "status (parser-free; no run or DB), so fixture-backed expected.import "
+            "coverage is visible without reading the test source"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    # The planning-level harness assumes a standard fixture layout (a ``source/``
+    # tree). Non-standard fixtures (e.g. the anonymized AirSense 10 card, whose
+    # DATALOG lives at the root) make it raise — surface that as a failure string
+    # rather than an uncaught traceback, so import-level reporting can still run.
+    fixture_id = "unknown"
+    try:
+        metadata_failures = list(validate_manifest_metadata(args.fixture_dir))
+        result = validate_fixture(args.fixture_dir)
+        fixture_id = result.fixture_id
+        failures = [*metadata_failures, *result.failures]
+    except Exception as exc:  # noqa: BLE001 — CLI boundary: report, never crash
+        try:
+            manifest = json.loads(
+                (Path(args.fixture_dir) / "manifest.json").read_text(encoding="utf-8")
+            )
+            fixture_id = manifest.get("fixture_id", "unknown")
+        except Exception:  # noqa: BLE001 — best-effort id only
+            pass
+        failures = [f"planning validation unavailable: {type(exc).__name__}: {exc}"]
+
+    output: dict[str, Any] = {
+        "fixture_id": fixture_id,
+        "passed": not failures,
+        "failures": failures,
+    }
+
+    exit_failed = bool(failures)
+    if args.import_level:
+        # Parser-free: no run/conn is passed, so parse-observable and DB blocks
+        # skip cleanly with their reasons; only reference-file integrity pins
+        # (e.g. oscar_reference hashes) actually run. summarize_import_blocks gives
+        # the per-block passed/skipped/failed labels a reviewer otherwise can't see.
+        import_result = validate_import(args.fixture_dir)
+        output["import"] = {
+            "passed": import_result.passed,
+            "blocks": summarize_import_blocks(args.fixture_dir, import_result),
+            "failures": list(import_result.failures),
+            "skipped": list(import_result.skipped),
+        }
+        exit_failed = exit_failed or not import_result.passed
+
+    print(json.dumps(output, indent=2))
+    return 0 if not exit_failed else 1
 
 
 if __name__ == "__main__":
