@@ -29,6 +29,7 @@ from importer.loaders.models import (
     ValidationStatus,
 )
 from importer.loaders.planning import CoverageSummary
+from importer.loaders.resmed_native import ResMedNativeLoader
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent / "fixtures" / "conformance"
 DOCS_ROOT = Path(__file__).resolve().parent.parent / "docs"
@@ -1864,34 +1865,60 @@ def test_validate_import_oscar_reference_additional_files_missing_file_fails(tmp
     ), result.failures
 
 
+def test_validate_import_airsense10_source_directory_points_at_committed_root():
+    """Setup path: the committed manifest's ``source_directory`` resolves to the card.
+
+    The AirSense 10 fixture is **non-standard** — ``DATALOG/``/``STR.edf`` live at
+    the fixture **root**, not under a ``source/`` subdir. ``_acquire_import_run``
+    (and ``validate_fixture``) resolve the source as
+    ``root / manifest.get("source_directory", "source")``, so without an explicit
+    pointer they would look in a non-existent ``source/`` and find no device — the
+    second of the two setup blockers recorded in the gap audit §8.
+
+    The manifest now pins ``"source_directory": "."`` so that resolution lands on
+    the committed fixture root. This asserts the fix **parser-free**: structural
+    detection (no ``cpap-py``) finds exactly one ResMed device at the resolved
+    source root. It does not parse EDF or assert any private value — it only proves
+    the auto-parse path will resolve to the right directory once the ``cpap-py``
+    backend is available.
+    """
+    manifest = json.loads((AIRSENSE10_FIXTURE / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest.get("source_directory") == ".", (
+        "fixture must point source_directory at its committed root"
+    )
+
+    source_root = AIRSENSE10_FIXTURE / manifest["source_directory"]
+    detected = ResMedNativeLoader().detect(source_root)
+
+    assert detected, "structural detection must find the ResMed card at the resolved source root"
+    assert detected[0].source_root.resolve() == AIRSENSE10_FIXTURE.resolve()
+
+
 def test_validate_import_airsense10_semantic_block_gated_until_parser_backend(tmp_path):
-    """Phase 2: AirSense 10 *semantic* expected.import blocks stay gated, never faked.
+    """Phase 2: AirSense 10 *semantic* expected.import blocks are never faked.
 
     The committed AirSense 10 manifest pins only the parser-free
     ``oscar_reference`` hashes. The loader-ready *semantic* candidates
     (``warnings.codes`` / ``session_blocks.block_count`` / ``therapy_aggregates`` /
-    ``events.count``) cannot be authored with real values until a normalized
-    ``ImportRun`` can be obtained from the committed card, which needs **both**
-    ``cpap-parser`` and its ``cpap-py`` EDF backend (``_import_parser_available``).
-    This pins the honest contract end-to-end on the *committed* fixture: with a
-    semantic block present but no injected ``run``, ``validate_import`` must
-    **skip** it with a clear acquisition reason — never fabricate a pass — while
-    the parser-free ``oscar_reference`` hash pin still verifies.
+    ``events.count``) need a normalized ``ImportRun``, obtained via
+    ``_acquire_import_run`` from the fixture source. With the manifest now pinning
+    ``"source_directory": "."`` the source resolves to the card, so the *only*
+    remaining run-acquisition gate is whether both ``cpap-parser`` and its
+    ``cpap-py`` EDF backend are importable (``_import_parser_available``).
 
-    Two distinct, currently-recorded blockers can produce that skip, and the
-    assertion accepts either so the test is honest in every environment:
+    The honest contract holds in **both** environments:
 
-    * the ``cpap-py`` backend is absent (the CI/dev default here) →
-      ``"cpap-parser/cpap-py not installed"``; or
-    * the backend is present but ``_acquire_import_run`` looks under the default
-      ``source/`` subdir, which this non-standard fixture does not have (its
-      ``DATALOG``/``STR.edf`` live at the fixture root and the manifest carries no
-      ``source_directory`` pointer) → ``"no ResMed device detected in fixture
-      source"``.
+    * **Backend absent** (the CI/dev default here): no run is obtainable, so an
+      injected semantic block **skips** with ``"cpap-parser/cpap-py not
+      installed"`` — never a fabricated pass — while the parser-free
+      ``oscar_reference`` hash pin still verifies.
+    * **Backend present**: the run is now acquirable, so the block is *actually
+      compared* against the normalized run (status ``passed``/``failed``), no
+      longer acquisition-gated. This test does not assert the real value (that is
+      the parser-backed test module's job) — only that the block is no longer
+      skipped for a missing run.
 
-    Either way nothing is value-asserted, so a green run here is a *gated* green,
-    not evidence of semantic parity. See
-    ``docs/sleeplab_2_resmed_normalized_output_gap_audit.md`` §8 and
+    See ``docs/sleeplab_2_resmed_normalized_output_gap_audit.md`` §8 and
     ``docs/sleeplab_2_fixture_validation_matrix.md`` §2.2.
     """
     # Copy the committed fixture (manifest + oscar_reference files) so the
@@ -1904,31 +1931,31 @@ def test_validate_import_airsense10_semantic_block_gated_until_parser_backend(tm
     manifest["expected"]["import"]["warnings"] = {"codes": ["resmed_summary_only_day"]}
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    # No run injected: the only way to a run is the gated auto-parse path.
+    # No run injected: the only way to a run is the auto-parse path.
     result = validate_import(fixture)
 
-    # The committed, parser-free oscar_reference hash pin still verifies (the
-    # semantic block must not regress the integrity pin).
+    # The committed, parser-free oscar_reference hash pin still verifies regardless
+    # of backend availability (the semantic block must not regress the integrity pin).
     assert not any("oscar_reference" in f for f in result.failures), result.failures
 
     statuses = summarize_import_blocks(fixture, result)
-    assert statuses["warnings"] == "skipped", statuses
-    # Nothing was value-asserted, so the run passes purely on gated skips.
-    assert result.passed, result.failures
-
-    warnings_skip = next(
-        (s for s in result.skipped if "expected.import.warnings:" in s), None
-    )
-    assert warnings_skip is not None, result.skipped
-    # The skip is one of the honest run-acquisition reasons, never a silent pass.
-    assert any(
-        reason in warnings_skip
-        for reason in (
-            "cpap-parser/cpap-py not installed",
-            "no ResMed device detected in fixture source",
-            "could not parse fixture source",
+    if not conformance._import_parser_available():
+        # Backend absent: the block is gated to a skip, never a fabricated pass.
+        assert statuses["warnings"] == "skipped", statuses
+        assert result.passed, result.failures
+        warnings_skip = next(
+            (s for s in result.skipped if "expected.import.warnings:" in s), None
         )
-    ), warnings_skip
+        assert warnings_skip is not None, result.skipped
+        assert "cpap-parser/cpap-py not installed" in warnings_skip, warnings_skip
+    else:
+        # Backend present: source_directory makes the run acquirable, so the block
+        # is actually compared (passed/failed), no longer skipped for a missing run.
+        assert statuses["warnings"] in {"passed", "failed"}, statuses
+        assert not any(
+            "expected.import.warnings:" in s and "not installed" in s
+            for s in result.skipped
+        ), result.skipped
 
 
 def test_summarize_import_blocks_classifies_passed_skipped_failed(tmp_path):

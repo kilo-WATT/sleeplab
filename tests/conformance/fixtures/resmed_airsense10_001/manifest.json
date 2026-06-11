@@ -8,6 +8,7 @@
     "note": "All EDF timestamps shifted by a fixed offset. Real serial replaced with fixture placeholder. No real patient data is identifiable."
   },
   "source": "contributor_owned_card",
+  "source_directory": ".",
   "redistribution": "permitted",
   "bugs_covered": [
     "waveform_timestamps_at_epoch",

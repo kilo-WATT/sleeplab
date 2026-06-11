@@ -400,3 +400,47 @@ def test_fixture_computed_usage_matches_oscar_for_detailed_nights():
                 f"{night}: computed_usage={actual_hours!r}h vs OSCAR total={expected_hours:.4f}h"
             )
     assert not mismatches, "usage disagreements with OSCAR:\n" + "\n".join(mismatches)
+
+
+def test_fixture_normalized_import_run_acquired_via_loader():
+    """Setup path: ``ResMedNativeLoader`` yields a normalized ``ImportRun`` from the card.
+
+    This is the loader-level (vendor-neutral) twin of the raw-adapter tests above:
+    it proves the exact path ``validate_import``'s ``_acquire_import_run`` takes —
+    resolve the source via the manifest's ``source_directory`` (now ``"."``),
+    structurally ``detect`` the ResMed device, then ``import_data_with_directory``
+    to build an :class:`~importer.loaders.models.ImportRun`. It establishes only
+    that the *setup* path works; it deliberately asserts **no** semantic
+    ``expected.import`` values (those stay un-authored until verified — see the gap
+    audit §8), and exposes no private values.
+
+    Two-tier gating, like the OSCAR-numeric tests above: detection is parser-free,
+    but building the run decodes EDF via the ``cpap-py`` backend, so this
+    ``importorskip``s ``cpap_py`` and skips with a visible reason when it is absent.
+    """
+    from importer.loaders.models import ImportOptions
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    # Resolve the source exactly as _acquire_import_run does, via the manifest.
+    source_directory = _manifest().get("source_directory", "source")
+    source_root = _FIXTURE_DIR / source_directory
+
+    loader = ResMedNativeLoader()
+    detected = loader.detect(source_root)
+    assert detected, "structural detection must find the ResMed card at the resolved source root"
+
+    # Decoding STR.edf/DATALOG needs the cpap-py backend; skip cleanly without it.
+    pytest.importorskip(
+        "cpap_py",
+        reason="cpap-py EDF backend not installed; STR.edf/DATALOG cannot be decoded",
+    )
+
+    run, directory = loader.import_data_with_directory(detected[0], ImportOptions())
+
+    # Prove the normalized run was produced — shape only, never private values.
+    assert run is not None
+    assert run.machine is not None, "ImportRun must carry a resolved machine identity"
+    assert run.sessions, "ImportRun must contain at least one normalized session"
+    assert run.adapter_id == loader.adapter_id
+    # The raw directory is handed back alongside the run (single parse, two outputs).
+    assert directory is not None
