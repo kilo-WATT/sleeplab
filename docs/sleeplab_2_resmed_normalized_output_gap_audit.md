@@ -198,30 +198,84 @@ semantic `warnings`/`session_blocks.block_count`/`therapy_aggregates`/
    skips. Decoding `STR.edf`/`DATALOG` to build a normalized `ImportRun` needs the
    backend, so the EDF payload cannot be decoded here.
 
-2. **Fixture layout vs `source_directory` default.** Even with the backend
-   installed, `_acquire_import_run` parses `root / manifest.get("source_directory",
-   "source")`. The AirSense 10 fixture is **non-standard**: `DATALOG/` and
-   `STR.edf` live at the fixture **root**, and the manifest carries **no**
-   `source_directory` key. So the default `source/` path is empty —
-   `ResMedNativeLoader().detect(<root>/source)` returns `[]` (auto-parse would skip
-   with `"no ResMed device detected in fixture source"`), whereas
-   `detect(<root>)` *does* find the device. Closing this is a one-line manifest
-   addition (`"source_directory": "."`), but it is only worth taking together with
-   (1) and an authored block — adding it alone would not enable any check.
+2. **Fixture layout vs `source_directory` default — NOW CLOSED.** Even with the
+   backend installed, `_acquire_import_run` parses `root /
+   manifest.get("source_directory", "source")`. The AirSense 10 fixture is
+   **non-standard**: `DATALOG/` and `STR.edf` live at the fixture **root**. The
+   manifest previously carried no `source_directory` key, so the default `source/`
+   path was empty — `ResMedNativeLoader().detect(<root>/source)` returned `[]`
+   (auto-parse skipped with `"no ResMed device detected in fixture source"`),
+   whereas `detect(<root>)` finds the device. **Fixed this phase:** the manifest now
+   pins `"source_directory": "."`, so the source resolves to the committed fixture
+   root. Verified parser-free by
+   `tests/test_conformance.py::test_validate_import_airsense10_source_directory_points_at_committed_root`
+   (structural `detect` finds exactly one ResMed device at the resolved root) and
+   by the detection half of
+   `tests/conformance/test_resmed_airsense10.py::test_fixture_normalized_import_run_acquired_via_loader`.
 
-**What this means.** Current committed fixture-backed coverage for this card
-remains the parser-free `oscar_reference` hash pins (§2.1). The loader-ready
-semantic candidates stay **injected-only** until a `cpap-py`-equipped dev/CI
-environment exists *and* the fixture exposes its source via `source_directory`.
-The honest gated contract is pinned parser-free by
+**What this means.** With blocker (2) closed, the **only** remaining gate on a
+normalized run for this card is blocker (1) — the `cpap-py` EDF backend. Current
+committed fixture-backed coverage stays the parser-free `oscar_reference` hash
+pins (§2.1); the loader-ready semantic candidates stay **injected-only** until a
+`cpap-py`-equipped dev/CI environment exists. The honest gated contract is pinned
+in both environments by
 `tests/test_conformance.py::test_validate_import_airsense10_semantic_block_gated_until_parser_backend`:
-a semantic block injected into a copy of the committed manifest **skips** with one
-of the acquisition reasons above (never a fabricated pass) while the
-`oscar_reference` hash still verifies.
+backend-absent → a semantic block injected into a copy of the committed manifest
+**skips** with `"cpap-parser/cpap-py not installed"` (never a fabricated pass);
+backend-present → the run is now acquirable, so the block is *actually compared*,
+no longer acquisition-gated. The `oscar_reference` hash still verifies throughout.
 
-**Next action (unchanged, now precise):** in a `cpap-py`-equipped environment,
-(a) add `"source_directory": "."` to the AirSense 10 manifest (or pass an injected
-run), (b) obtain the normalized `ImportRun`, (c) read the safe aggregate facts
-(warning codes, per-night block counts, usage/span/gap seconds, event counts), and
-(d) author those `expected.import` blocks from the verified run. Do **not**
+**Next action (now down to one blocker):** in a `cpap-py`-equipped environment
+(see §9 for the install path), (a) run
+`test_fixture_normalized_import_run_acquired_via_loader` to confirm the normalized
+`ImportRun` is produced, (b) read the safe aggregate facts (warning codes,
+per-night block counts, usage/span/gap seconds, event counts) from that run, and
+(c) author those `expected.import` blocks from the verified run. Do **not**
 fabricate any value while the backend is unavailable.
+
+## 9. `cpap-py` dependency: source and install path
+
+Audited this phase to answer "why is `cpap_parser` importable but `cpap_py` not?"
+
+- **What `cpap_py` is.** A Python package — the **ResMed EDF reader** — pulled in
+  by the `[resmed]` *extra* of `cpap-parser`. It hard-depends on `pyedflib` +
+  `numpy`/`pandas` (see the comment in root `requirements.txt`). It is **not** the
+  Rust extension module: importing `cpap_parser` prints "Rust extension module not
+  available; Lowenstein/Yuwell adapter disabled", which is a *separate* optional
+  native backend for other vendors and unrelated to the ResMed EDF path.
+- **Distribution vs import name.** Installed via the extra `cpap-parser[resmed]`;
+  the import name is `cpap_py` (distribution `cpap-py`).
+- **Where it comes from.** The pinned ResMed fork
+  `git+https://github.com/kilo-WATT/cpap-parser.git@6e015c4c…` (root
+  `requirements.txt`, "awaiting upstream MR !12").
+- **Is it in the lock file?** **No.** `uv.lock` contains no `cpap-parser` /
+  `cpap-py` / `pyedflib` / `pandas` entries (the only `numpy` rows are matplotlib's
+  transitive dep). So `cpap_py` is *absent by design* from the uv environment — not
+  "present but failing to build". The base `cpap_parser` currently in `.venv` was
+  installed out-of-band **without** the `[resmed]` extra, which is exactly why
+  `cpap_parser` imports but `cpap_py` does not.
+- **Production vs test treatment.** The project already treats
+  `cpap-parser[resmed]` as a **production** dependency for the import path: the
+  `Dockerfile` installs root `requirements.txt` (lines 27–30, "the importer's
+  git-sourced deps … that the API base set omits but the upload/import path
+  needs"). But **CI/test** installs with `uv sync --group dev` (`.github/workflows/
+  ci.yml`), which uses `pyproject.toml`/`uv.lock` **only** and deliberately
+  excludes the parser. The two are intentionally split: heavy, git-sourced,
+  native-building deps stay out of the locked test closure.
+- **Decision — dependency files unchanged this phase.** Adding
+  `cpap-parser[resmed]` to `pyproject.toml`/`uv.lock` would change CI's dependency
+  closure: `uv sync --group dev` would then build `pyedflib`/`pandas` from a git
+  source on every CI run and would *activate* the three currently-skipped
+  `cpap-py`-gated tests (which must then pass). That is git-sourced, platform-
+  sensitive, and CI-destabilizing — not "low-risk" — so per the task guardrails it
+  was **not** done, and a direct install was likewise not performed (git-sourced
+  external code requires explicit operator authorization).
+- **Recommended install path (operator-authorized).** To enable parser-backed
+  fixture validation in a dev/CI environment, install the same pinned spec already
+  in `requirements.txt`, e.g. `uv pip install -r requirements.txt` (or, minimally,
+  the `cpap-parser[resmed] @ git+…@6e015c4c…` line). This brings `cpap_py` +
+  `pyedflib` + `numpy`/`pandas`. After that, the `cpap-py`-gated tests in
+  `tests/conformance/test_resmed_airsense10.py` — including
+  `test_fixture_normalized_import_run_acquired_via_loader` — will run instead of
+  skip. Only then author semantic `expected.import` values, sourced from the
+  verified normalized run.

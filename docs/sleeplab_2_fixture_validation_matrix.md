@@ -150,20 +150,31 @@ anonymized reference CSVs in fixture #2.
   generalization (support a `files` list), never the anonymized data files. Next
   candidates remain gated: a standard `expected.import` block (parse-dependent) and
   `settings.values` (loader gap).
-- **Parser-backed semantic coverage — blocked by two verified setup gaps (this
-  phase).** Authoring the first parser-gated semantic `expected.import` values
+- **Parser-backed semantic coverage — setup path, one blocker remaining.**
+  Authoring the first parser-gated semantic `expected.import` values
   (`warnings`/`session_blocks.block_count`/`therapy_aggregates`/`events.count`)
-  for this card needs a normalized `ImportRun`, which is gated by **(1)** the
-  `cpap-py` EDF backend being **absent** here (`cpap_parser` imports, `cpap_py`
-  does not, so `_import_parser_available()` is `False` and auto-parse skips with
-  `"cpap-parser/cpap-py not installed"`); and **(2)** this fixture's **non-standard
-  layout** — `DATALOG/`/`STR.edf` at the root with **no** `source_directory` key,
-  so `_acquire_import_run`'s default `source/` path finds no device even with the
-  backend installed (closable by a one-line `"source_directory": "."` manifest
-  addition, only worth taking together with (1) and an authored block). No semantic
-  values were added; the gated contract is pinned parser-free by
-  `tests/test_conformance.py::test_validate_import_airsense10_semantic_block_gated_until_parser_backend`.
-  Full detail in `docs/sleeplab_2_resmed_normalized_output_gap_audit.md` §8.
+  for this card needs a normalized `ImportRun`. Two setup gaps were identified; one
+  is now closed:
+  - **(1) `cpap-py` EDF backend — still absent (the remaining blocker).**
+    `cpap_parser` imports but `cpap_py` does not, so `_import_parser_available()`
+    is `False` and auto-parse skips with `"cpap-parser/cpap-py not installed"`.
+    `cpap_py` is the ResMed EDF reader pulled by the `cpap-parser[resmed]` extra
+    (pinned git fork in root `requirements.txt`; a production dep via the
+    Dockerfile, deliberately absent from `pyproject.toml`/`uv.lock` and CI's
+    `uv sync --group dev`). Dependency files were **not** changed (adding it would
+    rebuild git-sourced native deps in CI and activate the gated tests — not
+    low-risk); see the gap audit §9 for the operator-authorized install path.
+  - **(2) Fixture `source_directory` — FIXED this phase.** The manifest now pins
+    `"source_directory": "."` so `_acquire_import_run` resolves the source to the
+    committed fixture root (the card's `DATALOG/`/`STR.edf` live there, not under a
+    `source/` subdir). Verified parser-free by
+    `test_validate_import_airsense10_source_directory_points_at_committed_root`
+    (`tests/test_conformance.py`) and by the detection half of
+    `test_fixture_normalized_import_run_acquired_via_loader`
+    (`tests/conformance/test_resmed_airsense10.py`, the run half `cpap-py`-gated).
+  No semantic values were added. The gated contract holds in both environments via
+  `test_validate_import_airsense10_semantic_block_gated_until_parser_backend`.
+  Full detail in `docs/sleeplab_2_resmed_normalized_output_gap_audit.md` §8–§9.
 
 ## 3. The settings-value loader gap (why `settings.values` stays injected-only)
 
@@ -239,9 +250,9 @@ compressed-segment waveform storage, device-time-correction implementation.
    only on a run + an authored manifest block), whereas `settings.values` is
    blocked by the loader gap (no `SettingsSnapshot` is constructed) and the
    timestamped `intervals`/`events` lists by the anonymization-calendar split.
-   For the AirSense 10 card specifically, obtaining a run is **additionally**
-   gated by the two setup gaps verified this phase (the absent `cpap-py` backend
-   and the missing `source_directory` pointer) — see §2.2 and the gap audit §8.
+   For the AirSense 10 card specifically, the `source_directory` setup gap is now
+   **closed** (`"source_directory": "."` pinned), so obtaining a run is gated only
+   by the absent `cpap-py` backend — see §2.2 and the gap audit §8–§9.
 
 ## 6. Inspecting fixture-backed status (reporting)
 

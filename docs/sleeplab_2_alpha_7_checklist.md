@@ -305,18 +305,29 @@ loader, routing, schema, or persistence change). The current loader output shape
 is pinned parser-free by the `test_build_session_emits_*` tests in
 `tests/test_resmed_import_regressions.py`.
 
-**Parser-backed setup gap (verified this phase, no semantic values added):**
-attempting that next task confirmed two concrete blockers, now recorded in the
-gap audit §8. (1) `cpap-py` is **absent** in this environment (`cpap_parser`
-imports, `cpap_py` does not), so `validate_import` auto-parse skips with
-`"cpap-parser/cpap-py not installed"`. (2) The AirSense 10 fixture is
-non-standard (`DATALOG`/`STR.edf` at the root, **no** `source_directory` key), so
-even with the backend `_acquire_import_run`'s default `source/` path finds no
-device — closable by a one-line `"source_directory": "."` manifest addition, only
-worth taking with (1) and an authored block. Committed coverage therefore stays
-the parser-free `oscar_reference` hash pins; the honest gated contract is pinned
-by `test_validate_import_airsense10_semantic_block_gated_until_parser_backend`
-(`tests/test_conformance.py`): a semantic block on a copy of the committed
-manifest **skips** with the acquisition reason, never a fabricated pass, while the
-`oscar_reference` hash still verifies. No values were fabricated while the backend
-is unavailable.
+**Parser-backed setup path (this phase — one blocker closed, one remaining; no
+semantic values added):** the two setup blockers recorded in gap audit §8 were
+worked. **(2) `source_directory` — FIXED:** the AirSense 10 manifest now pins
+`"source_directory": "."`, so `_acquire_import_run` resolves the source to the
+committed fixture root (its `DATALOG`/`STR.edf` live there, not under `source/`).
+Verified parser-free by
+`test_validate_import_airsense10_source_directory_points_at_committed_root` and the
+detection half of `test_fixture_normalized_import_run_acquired_via_loader`.
+**(1) `cpap-py` backend — still absent (remaining blocker):** `cpap_parser`
+imports but `cpap_py` does not, so auto-parse skips with
+`"cpap-parser/cpap-py not installed"`. Audited its source (gap audit §9):
+`cpap_py` is the ResMed EDF reader from the `cpap-parser[resmed]` extra (pinned git
+fork in root `requirements.txt`; a production dep via the Dockerfile, but
+deliberately absent from `pyproject.toml`/`uv.lock` and CI's
+`uv sync --group dev`). **Dependency files were not changed** — adding the extra
+would rebuild git-sourced native deps in CI and activate the gated tests, which is
+not low-risk; the operator-authorized install path is documented instead. Committed
+coverage therefore stays the parser-free `oscar_reference` hash pins; the gated
+contract holds in both environments via
+`test_validate_import_airsense10_semantic_block_gated_until_parser_backend`, and a
+new `cpap-py`-gated `test_fixture_normalized_import_run_acquired_via_loader` proves
+the normalized-run acquisition path (skips cleanly until the backend is installed).
+No values were fabricated while the backend is unavailable. **Next safe task:**
+install `cpap-parser[resmed]` per §9, confirm the run-acquisition test passes, then
+author `warnings`/`block_count`/`therapy_aggregates`/`events.count` from the
+verified run.
