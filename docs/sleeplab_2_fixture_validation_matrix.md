@@ -121,6 +121,7 @@ anonymized reference CSVs in fixture #2.
 |---|---|---|
 | identity (serial) | **fixture-backed** (parser, no `cpap-py`) | `test_fixture_serial_parsed_from_identity_tgt` (scrubbed serial; never `"Unknown"`) |
 | signal channel inventory | **fixture-backed** (pure-Python, normal suite) | `test_airsense10_fixture_channel_inventory_matches_classification` (13 channels decoded; `>=5 Hz → waveform` classification, no misclassification) |
+| oximetry payload suitability | **fixture-backed negative evidence** (pure-Python) | six SAD files have Pulse/SpO2 channel headers, but every SpO2 sample is missing (`-1`); `test_airsense10_fixture_sad_files_contain_no_usable_oximetry` proves this card cannot validate `session_spo2` persistence |
 | events (AHI parity) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ahi_matches_oscar_summary` vs `oscar_reference/summary.csv`, detailed nights, abs=0.05 |
 | therapy aggregates (computed usage) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_computed_usage_matches_oscar_for_detailed_nights` vs OSCAR total time, abs=0.1 h |
 | summary-only / ghost nights | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ghost_nights_flagged_not_deleted` (kept + `has_detailed_data is False`) |
@@ -130,6 +131,7 @@ anonymized reference CSVs in fixture #2.
 | settings values (other fields) | **cannot — not in parser schema** | min/max/set pressure, EPR, ramp, humidifier, mask_type are absent from cpap-parser; only `therapy_mode` exists (see §3) |
 | `expected.import` identity_hashes | **not committed** | DB-gated, synthetic only |
 | DB identity hashes | **not via this fixture** | exercised only by synthetic DB-row tests |
+| DB source-file provenance | **fixture-backed (`cpap-py` + DB gated)** | parity harness seeds the production-style 53-file manifest on both paths; legacy finalizes 25 used / 28 skipped and links block/event/channel/settings rows, parser finalizes 0 used / 53 skipped and links none |
 
 - **Now fixture-backed (value-level):** `warnings`, `session_blocks.block_count`,
   `therapy_aggregates` (usage/wall-clock/gap seconds), `events.count` (gap audit
@@ -141,7 +143,9 @@ anonymized reference CSVs in fixture #2.
   pinned `events.types` are SleepLab-normalized, not OSCAR); exact
   `session_blocks.intervals` / ordered timestamped `events` / event `duration_seconds`
   (anonymization-calendar split + event-type vocabulary — deferred, no timestamps
-  authored); persisted DB identity hashes for this card.
+  authored); persisted DB identity hashes for this card; oximetry sample
+  persistence (`session_spo2`/`has_spo2`) because all committed SAD samples are
+  missing sentinels.
 - **Privacy concerns / unknowns:** anonymized real card. Do **not** expose real
   values; do **not** overwrite the data files. Safe, already-committed summary
   facts (from `README.md`/`oscar_reference`): 40 summary nights, 3 detailed
@@ -246,7 +250,8 @@ injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
 **Blocked / deferred:** OSCAR numeric parity (`oscar_reference.parity`),
 weighted/time-based summaries, settings-value loader mapping **beyond
 `therapy_mode`** (the rest are absent from the cpap-parser schema), full settings
-parity beyond the persisted therapy mode,
+parity beyond the persisted therapy mode, oximetry until a usable safe fixture
+exists, parser source-file linkage until real source paths survive normalization,
 Lowenstein persistence, ResMed `cpap-parser` production cutover, full-night /
 compressed-segment waveform storage, device-time-correction implementation.
 

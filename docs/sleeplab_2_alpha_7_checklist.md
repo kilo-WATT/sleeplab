@@ -414,3 +414,15 @@ while broader settings remain an `expected_difference` (legacy 14 keys vs parser
 (cutover audit §5a). No routing/default/schema/dependency change. Remaining cutover work includes
 oximetry, source-file provenance, session granularity, and settings beyond the
 single field exposed by cpap-parser.
+
+**ResMed oximetry/provenance audit — LANDED (test/docs only):** the committed
+AirSense 10 fixture cannot prove oximetry persistence. Its six SAD files advertise
+Pulse/SpO2 channels, but every SpO2 value is the `-1` missing sentinel, so legacy
+`parse_sa2` returns `None`; both DB paths produce 0 `session_spo2` rows and 0
+`has_spo2` sessions. A parser-free regression test pins that negative evidence.
+The fallback provenance audit now seeds the parity harness with the same 53-file
+manifest production creates before execution. Legacy finalizes 25 used / 28
+skipped and links block/event/channel/settings rows; parser finalizes 0 used / 53
+skipped and links none because its normalized source ids are synthetic and
+cpap-parser exposes no real source path.
+No routing, schema, default, dependency, or production persistence change.

@@ -49,11 +49,11 @@ parity/polish. "Evidence" = what proves it today (or its absence).
 |---|---|---|---|---|---|---|
 | 1 | **Persistence tests** | exercised indirectly by import | synthetic DB tests cover settings snapshot/session projection and idempotency; parser-backed parity covers the real fixture | Core bridge persistence is exercised, though broader execution/routing tests remain useful | **P2** | `test_conformance.py`; parser-backed parity harness |
 | 2 | **Legacy↔parser row diff** | n/a (oracle) | implemented | Automated redacted aggregate diff exists and classifies documented vs unexpected differences | **Done** | `tests/cutover_parity.py`; `tests/test_resmed_cutover_db_parity.py` |
-| 3 | **Oximetry (SpO2)** | parses `SA2`→`replace_session_spo2`; `has_spo2 = data is not None` (`import_sessions.py:287,303,415`) | `has_spo2=False` hardcoded; no `session_spo2` writes (`persist.py:326`, docstring §"Remaining gaps") | New path drops oximetry entirely | **P0** | persist docstring + code |
+| 3 | **Oximetry (SpO2)** | parses SA2/SAD; writes `session_spo2` and sets `has_spo2` only when SpO2 samples are not all missing (`-1`) | `has_spo2=False` hardcoded; no `session_spo2` writes | New path has an oximetry save-path gap, but the committed card cannot prove it: all six SAD files contain only missing SpO2 sentinels, so both paths correctly produce 0 rows | **P0 (data-blocked evidence)** | parser-free SAD payload test + DB parity (0/0) |
 | 4 | **Settings snapshots** | `replace_resmed_str_day`→`upsert_settings_snapshot` writes full STR-derived `settings_snapshots` | persists loader-provided snapshots and flattens `therapy_mode` onto `sessions`; currently only `therapy_mode` is available | Therapy-mode persistence is closed, but full settings parity remains partial because cpap-parser exposes no mask/humidifier/temperature/pressure/EPR/ramp settings | **P1** | parser-backed DB parity harness; gap audit §11 |
 | 5 | **STR mask-interval blocks** | `replace_resmed_str_day` emits `resmed_str_mask_interval` blocks from STR.edf (`data_architecture.md:61-64`) | blocks come from cpap-parser file-sessions but are **labeled** `source_kind="resmed_str_mask_interval"` (`persist.py:208`); no real STR intervals | Block provenance is mislabeled and the STR mask-on/off intervals are absent | **P1** | `persist.py:208` vs architecture doc |
 | 6 | **Session granularity** | one `sessions` row **per PLD recording** (`block_index` loop, `import_sessions.py:292-329`); "PLD files remain durable source sessions" (`data_architecture.md:61`) | one `sessions` row **per night** (`persist.py:154`, one per `daily_summary`), `block_index=0` | Table shape + meaning of "a session" changes; diverges from documented model | **P1** | code + architecture doc |
-| 7 | **Source-file provenance** | maps every file → `import_source_files`, links blocks/events/channels/derived (`import_sessions.py:331-404`) | `run.source_files=[]`; block `source_file_ids=[]`; event/channel `source_file_id=None` (`persist.py:207,221,386`) | No persisted source manifest/lineage on the new path | **P1** | persist code + comments |
+| 7 | **Source-file provenance** | uses the upload-created manifest, resolves real relative paths, marks files used, and links blocks/events/channels/settings | receives the same upload-created manifest, but normalized source ids are synthetic and raw parser sessions expose no source path; persistence therefore leaves all row links empty | Manifest creation works; parser-side source identity/linkage is the gap | **P1** | parser-backed DB parity: same 53 rows, legacy 25 used vs parser 0 |
 | 8 | **Signal-channel source** | from raw EDF header `replace_signal_channels(header=…)` (`import_sessions.py:388`) | from `ImportRun.signals` metadata (`persist.py:343`) | Different source; channel set/units/rates parity unproven | **P1** | both code paths |
 | 9 | **Event-type vocabulary** | raw labels; AHI counts via `_AHI_EVENT_TYPES` | same raw labels + loader-derived `Large Leak` rows; **not** OSCAR enum | Persisted `session_events.event_type` vocabulary is SleepLab-normalized, not OSCAR parity; `Large Leak` becomes an event row | **P1** | gap audit §12; `persist.py:66,214` |
 | 10 | **`leak_unit` label** | `'L/s'` (`import_sessions.py:302`) | `'L/min'` (`persist.py:304`) | Direct metadata mismatch between paths (plan criterion: "leak unit/kind … match") | **P2** | both code paths |
@@ -96,11 +96,14 @@ Each step is small and safe on its own; persistence/routing/dependency steps are
    `persist_import_run` now uses `upsert_settings_snapshot`, preserves normalized
    settings/source names with conservative confidence, and flattens real values
    onto `sessions`. Missing/`"Unknown"` values are not persisted or fabricated.
-4. **Map oximetry (SA2 SpO2/pulse)** into the new path (P0 #3). `cpap-py` exposes
-   `spo2`/`pulse` on `timeseries`; write `session_spo2` + `has_spo2`. **Stop-and-ask**.
-5. **Persist source-file provenance** (P1 #7). Requires the loader to expose a
-   source manifest (`run.source_files`) and the bridge to populate
-   `import_source_files` + link blocks/events/channels. Larger; **stop-and-ask**.
+4. **Acquire usable oximetry evidence** before implementing (P0 #3). The current
+   six SAD files contain channel metadata but every SpO2 sample is `-1`; both
+   paths therefore write 0 rows. A safely redistributable fixture with real
+   SpO2/pulse samples is required to prove `session_spo2` + `has_spo2`.
+5. **Map source-file identity into normalized/parser rows** (P1 #7). The upload
+   flow already creates `import_source_files`; do not duplicate it. The blocker is
+   that cpap-parser's merged sessions expose no real source path and the loader
+   emits synthetic ids. Fix upstream/at the loader boundary before linking UUIDs.
 6. **Reconcile parity polish** (P2 #8,#10,#12): `leak_unit`, signal-channel
    set/units/rates, TZ/DST + cross-midnight — each as a parity assertion in the
    harness; fix the cheap mismatches (e.g. `leak_unit`).
@@ -163,8 +166,8 @@ requirements.txt`), exactly the pattern used for the parser-backed conformance t
 | `signal_channels` | expected_difference | 54 rows; units incl. `L/s` | 33 rows; units incl. `L/min` |
 | `derived_values` | expected_difference | 90 rows, event-count+stat keys | 520 rows, usage-semantics keys |
 | `session_waveform` | expected_difference | 81 485 | 81 410 (~0.1%) |
-| `session_spo2` | equal (not exercised) | 0 | 0 |
-| `import_source_files` | equal (not exercised) | 0 | 0 |
+| `session_spo2` | equal (**not usable evidence**) | 0; all SAD SpO2 samples missing | 0; no oximetry persistence |
+| `import_source_files` | **expected_difference (linkage)** | 53 rows; 25 used / 28 skipped; file links present | 53 rows; 0 used / 53 skipped; no row links |
 
 Honest reads from the first run:
 - **Strong parity already exists** where it matters most: low-rate `session_metrics`
@@ -175,10 +178,16 @@ Honest reads from the first run:
   14 setting keys and non-null mask/humidity/temperature values; parser has only
   `therapy_mode`, with those unavailable fields left `NULL`.
 - The **granularity split is visible** (per-PLD-block vs per-night; 43/72 vs 40/7).
-- **Oximetry (#3) and source-file provenance (#7) are NOT exercised by this
-  fixture** — both sides are 0 (`session_spo2`: this card's SAD carries no usable
-  SpO2; `import_source_files`: the in-transaction harness registers no upload files).
-  The code gap is still real; it just needs a fixture/flow that exercises it.
+- **Oximetry is not provable with this fixture.** It contains six SAD files and
+  valid Pulse/SpO2 headers, but every SpO2 sample is the `-1` missing sentinel.
+  `parse_sa2` returns `None`, so legacy correctly writes 0 rows and keeps
+  `has_spo2=False`; parser also writes 0. Do not infer oximetry parity from 0=0.
+- **Source provenance is now exercised honestly.** The harness mirrors production
+  manifest creation: both paths receive the same 53 rows/roles. Legacy marks 25
+  files used and links source UUIDs (25 block, 3 event, 6 channel, 1 settings
+  source files), with 28 unconsumed files finalized as skipped; parser links none
+  and all 53 are finalized as skipped because its source ids are synthetic and
+  cannot be mapped safely to real relative paths.
 - `derived_values` and `session_waveform` differ as a *consequence* of granularity /
   event-window rebasing — now classified as documented `expected_difference`s, so
   the harness fails only on a genuinely **new, undocumented** divergence.
