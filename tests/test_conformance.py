@@ -1763,11 +1763,16 @@ def test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fix
     assert oscar_ref["export_hash"].startswith("sha256:"), "fixture must pin a sha256 export hash"
     assert oscar_ref["summary_csv"] == "oscar_reference/summary.csv"
 
-    # Inject a trivial run so no real parse is attempted; the oscar_reference hash
-    # check is parser-free and reads the committed file regardless.
+    # Inject a trivial (empty) run so no real parse is attempted; the
+    # oscar_reference hash check is parser-free and reads the committed file
+    # regardless. This test is scoped to oscar_reference: the committed manifest
+    # now also carries semantic blocks (warnings/session_blocks/therapy_aggregates/
+    # events) that an *empty* run cannot satisfy, so the overall result is not
+    # asserted "passed" here — those are exercised against a real parsed run in
+    # tests/conformance/test_resmed_airsense10.py. We assert only that the
+    # oscar_reference hash verified.
     result = validate_import(AIRSENSE10_FIXTURE, run=SimpleNamespace(warnings=[], sessions=[]))
 
-    assert result.passed, result.failures
     # The hash was actually verified — a mismatch/missing file would be a failure,
     # and the path-present branch means it was not skipped for "no reference file".
     assert not any("oscar_reference" in f for f in result.failures), result.failures
@@ -1792,9 +1797,11 @@ def test_validate_import_oscar_reference_sessions_csv_hash_pinned_on_committed_a
     sessions_pin = next(f for f in files if f["file"] == "oscar_reference/sessions.csv")
     assert sessions_pin["export_hash"].startswith("sha256:"), "sessions.csv must pin a sha256"
 
+    # Empty injected run; scoped to oscar_reference (the committed manifest's
+    # semantic blocks are exercised against a real parsed run elsewhere — see
+    # tests/conformance/test_resmed_airsense10.py).
     result = validate_import(AIRSENSE10_FIXTURE, run=SimpleNamespace(warnings=[], sessions=[]))
 
-    assert result.passed, result.failures
     # Both committed reference files were hash-verified — no oscar_reference failure
     # and no "reference file not found" / "no reference file path" skip.
     assert not any("oscar_reference" in f for f in result.failures), result.failures
@@ -2001,12 +2008,18 @@ def test_summarize_import_blocks_oscar_reference_skipped_when_parity_deferred():
     On the committed AirSense 10 fixture the export-hash check passes (no failure),
     but the deferred numeric-parity sub-check always skips — so the block-level
     label is the honest ``"skipped"`` ("not every sub-check ran"), never ``"failed"``.
+
+    Scoped to ``oscar_reference``: an *empty* injected run cannot satisfy the
+    committed semantic blocks (warnings/session_blocks/therapy_aggregates/events),
+    so this asserts only the oscar_reference label, not the full status dict. The
+    semantic blocks are checked against a real parsed run in
+    ``tests/conformance/test_resmed_airsense10.py``.
     """
     result = validate_import(AIRSENSE10_FIXTURE, run=SimpleNamespace(warnings=[], sessions=[]))
     statuses = summarize_import_blocks(AIRSENSE10_FIXTURE, result)
 
-    assert statuses == {"oscar_reference": "skipped"}
-    assert result.passed, result.failures
+    assert statuses.get("oscar_reference") == "skipped", statuses
+    assert not any("oscar_reference" in f for f in result.failures), result.failures
 
 
 def test_summarize_import_blocks_empty_without_import_block():
@@ -2427,9 +2440,16 @@ def test_cli_import_flag_reports_oscar_reference_for_airsense10(capsys):
     assert any("planning validation unavailable" in f for f in payload["failures"]), payload
     assert rc == 1  # exit reflects the planning limitation, honestly
 
-    # Import-level coverage is still reported and the hash pins verified.
+    # Import-level coverage is still reported and nothing failed. The CLI runs
+    # parser-free (no injected run): where cpap-parser/cpap-py are absent the
+    # semantic blocks skip; where present they auto-parse and pass. Either way the
+    # run passes (no failures), oscar_reference stays "skipped" (deferred parity),
+    # and no semantic block is ever "failed".
+    blocks = payload["import"]["blocks"]
     assert payload["import"]["passed"] is True
-    assert payload["import"]["blocks"] == {"oscar_reference": "skipped"}
+    assert blocks["oscar_reference"] == "skipped"
+    for block in ("warnings", "session_blocks", "therapy_aggregates", "events"):
+        assert blocks[block] in {"passed", "skipped"}, blocks
     assert not any("oscar_reference" in f for f in payload["import"]["failures"])
 
 

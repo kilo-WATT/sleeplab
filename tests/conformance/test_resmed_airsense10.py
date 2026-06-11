@@ -444,3 +444,56 @@ def test_fixture_normalized_import_run_acquired_via_loader():
     assert run.adapter_id == loader.adapter_id
     # The raw directory is handed back alongside the run (single parse, two outputs).
     assert directory is not None
+
+
+def test_fixture_semantic_expected_import_matches_normalized_run():
+    """Phase 2: the committed AirSense 10 semantic ``expected.import`` blocks verify.
+
+    First **committed, value-level, fixture-backed** import-level coverage on a real
+    (anonymized) card. The manifest's ``warnings`` / ``session_blocks.block_count`` /
+    ``therapy_aggregates`` / ``events.count`` blocks were authored *from* the actual
+    normalized ``ImportRun`` (default ``ImportOptions``), and this drives
+    ``validate_import`` against that same parsed run to prove they are not drifting
+    fabrications: every authored value must match the loader's real output, or the
+    test fails.
+
+    Scope guardrails baked in:
+
+    * Only non-timestamped aggregates are checked (counts, warning codes,
+      usage/wall-clock/gap seconds). No ``settings.values`` (the loader builds no
+      ``SettingsSnapshot``), no exact block-interval or event timestamps.
+    * ``oscar_reference`` stays ``"skipped"`` because its numeric-parity sub-check is
+      deferred — its hash half still verifies (no failure).
+    * ``cpap-py``-gated: skips cleanly (never fabricates a pass) where the EDF
+      backend is absent, so Windows/CI without the parser stay green by skipping.
+    """
+    from importer.conformance import summarize_import_blocks, validate_import
+    from importer.loaders.models import ImportOptions
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    pytest.importorskip(
+        "cpap_py",
+        reason="cpap-py EDF backend not installed; STR.edf/DATALOG cannot be decoded",
+    )
+
+    loader = ResMedNativeLoader()
+    detected = loader.detect(_FIXTURE_DIR / _manifest().get("source_directory", "source"))
+    assert detected, "structural detection must find the ResMed card"
+    run, _directory = loader.import_data_with_directory(detected[0], ImportOptions())
+
+    result = validate_import(_FIXTURE_DIR, run=run)
+
+    # Every authored semantic value matched the normalized run.
+    assert result.passed, result.failures
+    assert result.failures == ()
+
+    statuses = summarize_import_blocks(_FIXTURE_DIR, result)
+    # The four semantic blocks are checked-and-passed (not gated/absent).
+    for block in ("warnings", "session_blocks", "therapy_aggregates", "events"):
+        assert statuses.get(block) == "passed", (block, statuses, result.skipped)
+    # oscar_reference hash verified but parity is deferred → block reads "skipped".
+    assert statuses.get("oscar_reference") == "skipped", statuses
+    assert not any("oscar_reference" in f for f in result.failures), result.failures
+    # settings.values stays unauthored (loader emits no SettingsSnapshot) — guard
+    # against an accidental future settings block creeping in unverified.
+    assert "settings" not in statuses, statuses
