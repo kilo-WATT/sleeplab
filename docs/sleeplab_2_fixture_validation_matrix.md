@@ -20,8 +20,11 @@ It is conservative by construction:
 
 Cross-references: `docs/sleeplab_2_import_level_conformance_plan.md` (the
 `validate_import` / `expected.import` contract),
-`docs/sleeplab_2_alpha_7_checklist.md` §3 (import-level conformance depth), and
-`importer/conformance.py` (the comparators).
+`docs/sleeplab_2_alpha_7_checklist.md` §3 (import-level conformance depth),
+`docs/sleeplab_2_resmed_normalized_output_gap_audit.md` (the loader-output
+bridge: what `ResMedNativeLoader` emits per `expected.import` block and the
+per-block blocker to fixture-backed *values*), and `importer/conformance.py`
+(the comparators).
 
 ## 1. Committed fixtures
 
@@ -215,7 +218,13 @@ compressed-segment waveform storage, device-time-correction implementation.
    EDFs are confirmed `cpap-py`-decodable or the airsense10 fixture gains a
    standard `expected.import` block, and (for `settings.values`) until the loader
    maps `SettingsSnapshot`s. None can be honestly value-verified while no parser is
-   installed.
+   installed. The per-block loader-emission status and the exact blocker for each
+   parse-dependent value are audited in
+   `docs/sleeplab_2_resmed_normalized_output_gap_audit.md`: `session_blocks`
+   (count) / `therapy_aggregates` / `events` (count) are *loader-ready* (gated
+   only on a run + an authored manifest block), whereas `settings.values` is
+   blocked by the loader gap (no `SettingsSnapshot` is constructed) and the
+   timestamped `intervals`/`events` lists by the anonymization-calendar split.
 
 ## 6. Inspecting fixture-backed status (reporting)
 

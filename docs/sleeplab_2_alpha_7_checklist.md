@@ -284,3 +284,23 @@ weighted/time-based summaries, the `settings.values` loader mapping (no loader
 constructs a `SettingsSnapshot` yet — comparator stays injected-only), Lowenstein
 persistence, ResMed parser cutover, full-night/compressed-segment waveform
 storage, and device-time-correction implementation.
+
+**ResMed normalized-output gap audit (Phase 2 bridge):**
+`docs/sleeplab_2_resmed_normalized_output_gap_audit.md` inventories exactly what
+`ResMedNativeLoader` emits per `expected.import` block and pins, contract-area by
+contract-area, why the AirSense 10 fixture can pin OSCAR reference *hashes* but
+not yet assert real *values*. Summary: `warnings.codes`,
+`session_blocks.block_count`, `therapy_aggregates`, and `events.count` are
+**loader-ready** — gated only on obtaining a normalized run (`cpap-parser` **and**
+the `cpap-py` backend; the backend is **absent in CI/most envs**, so the
+auto-parse path skips) **and** on authoring those blocks in the manifest.
+`settings.values` is additionally **loader-blocked** (no `SettingsSnapshot` is
+ever built; only `present: false` is honest today). Timestamped
+`session_blocks.intervals` / ordered `events` are deferred behind the fixture's
+anonymization-calendar split (EDF shifted −508d; DATALOG dirs/OSCAR refs on the
+original calendar) and the raw-string→OSCAR event-type vocabulary. **Next safe
+task:** add fixture-backed `warnings`/`block_count`/`therapy_aggregates`/
+`events.count` assertions in an environment where `cpap-py` is installed (no
+loader, routing, schema, or persistence change). The current loader output shape
+is pinned parser-free by the `test_build_session_emits_*` tests in
+`tests/test_resmed_import_regressions.py`.

@@ -598,5 +598,10 @@ committed.
 - `importer/loaders/resmed_native.py` (`import_data_with_directory`) and
   `importer/loaders/persist.py` (`persist_import_run`) — the parse and persist
   entry points `validate_import` drives.
+- `docs/sleeplab_2_resmed_normalized_output_gap_audit.md` — per-`expected.import`-
+  block audit of what `ResMedNativeLoader` actually emits, and the precise
+  blocker (missing manifest block / absent `cpap-py` backend / loader gap /
+  anonymization-calendar split) between today's hash pins and real fixture-backed
+  value assertions.
 - `tests/test_resmed_import_regressions.py` — the idempotency/aggregate tests
   whose patterns the DB-gated checks reuse.
