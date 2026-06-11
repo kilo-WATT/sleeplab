@@ -47,10 +47,10 @@ parity/polish. "Evidence" = what proves it today (or its absence).
 
 | # | Area | Legacy (`import_sessions.py`) | cpap-parser path (`persist.py`) | Gap | Sev | Evidence today |
 |---|---|---|---|---|---|---|
-| 1 | **Persistence tests** | exercised indirectly by import | `persist_import_run` / `run_cpap_parser_import` have **no tests** (no test references either symbol) | The bridge that writes production rows is unverified end-to-end | **P0** | grep of `tests/` finds neither symbol; only normalized-`ImportRun` `validate_import` + synthetic DB `identity_hashes` exist |
-| 2 | **Legacy↔parser row diff** | n/a (oracle) | none | No automated diff of the two paths' DB rows on one fixture (plan item 10 "Parallel ResMed conformance" unbuilt) | **P0** | no parity harness in repo |
+| 1 | **Persistence tests** | exercised indirectly by import | synthetic DB tests cover settings snapshot/session projection and idempotency; parser-backed parity covers the real fixture | Core bridge persistence is exercised, though broader execution/routing tests remain useful | **P2** | `test_conformance.py`; parser-backed parity harness |
+| 2 | **Legacy↔parser row diff** | n/a (oracle) | implemented | Automated redacted aggregate diff exists and classifies documented vs unexpected differences | **Done** | `tests/cutover_parity.py`; `tests/test_resmed_cutover_db_parity.py` |
 | 3 | **Oximetry (SpO2)** | parses `SA2`→`replace_session_spo2`; `has_spo2 = data is not None` (`import_sessions.py:287,303,415`) | `has_spo2=False` hardcoded; no `session_spo2` writes (`persist.py:326`, docstring §"Remaining gaps") | New path drops oximetry entirely | **P0** | persist docstring + code |
-| 4 | **Settings snapshots** | `replace_resmed_str_day`→`upsert_settings_snapshot` writes `settings_snapshots` (`db.py:441,547`) | writes **none**; `therapy_mode`/`mask_type`/`humidity_level` hardcoded `None` (`persist.py:327`) — and **ignores** the `therapy_mode` `SettingsSnapshot` the loader now produces | New path persists no settings; a ready-to-wire field is dropped at the bridge | **P0** | `db.py` vs `persist.py`; gap audit §11 |
+| 4 | **Settings snapshots** | `replace_resmed_str_day`→`upsert_settings_snapshot` writes full STR-derived `settings_snapshots` | persists loader-provided snapshots and flattens `therapy_mode` onto `sessions`; currently only `therapy_mode` is available | Therapy-mode persistence is closed, but full settings parity remains partial because cpap-parser exposes no mask/humidifier/temperature/pressure/EPR/ramp settings | **P1** | parser-backed DB parity harness; gap audit §11 |
 | 5 | **STR mask-interval blocks** | `replace_resmed_str_day` emits `resmed_str_mask_interval` blocks from STR.edf (`data_architecture.md:61-64`) | blocks come from cpap-parser file-sessions but are **labeled** `source_kind="resmed_str_mask_interval"` (`persist.py:208`); no real STR intervals | Block provenance is mislabeled and the STR mask-on/off intervals are absent | **P1** | `persist.py:208` vs architecture doc |
 | 6 | **Session granularity** | one `sessions` row **per PLD recording** (`block_index` loop, `import_sessions.py:292-329`); "PLD files remain durable source sessions" (`data_architecture.md:61`) | one `sessions` row **per night** (`persist.py:154`, one per `daily_summary`), `block_index=0` | Table shape + meaning of "a session" changes; diverges from documented model | **P1** | code + architecture doc |
 | 7 | **Source-file provenance** | maps every file → `import_source_files`, links blocks/events/channels/derived (`import_sessions.py:331-404`) | `run.source_files=[]`; block `source_file_ids=[]`; event/channel `source_file_id=None` (`persist.py:207,221,386`) | No persisted source manifest/lineage on the new path | **P1** | persist code + comments |
@@ -92,9 +92,10 @@ Each step is small and safe on its own; persistence/routing/dependency steps are
 2. **Decide the session-granularity model** (P1 #6, #11). Per-night (new) vs
    per-PLD (legacy/architecture). Product/data decision — **stop-and-ask**. Blocks
    #5, #7, #11 framing and any migration plan for already-imported data.
-3. **Wire `therapy_mode` → `settings_snapshots`** in the bridge (P0 #4). The loader
-   already emits the `SettingsSnapshot`; persist it via `upsert_settings_snapshot`.
-   **Stop-and-ask** (persistence change) + a parity assertion in the #1 harness.
+3. **Wire `therapy_mode` → `settings_snapshots`** in the bridge (P0 #4). — **DONE.**
+   `persist_import_run` now uses `upsert_settings_snapshot`, preserves normalized
+   settings/source names with conservative confidence, and flattens real values
+   onto `sessions`. Missing/`"Unknown"` values are not persisted or fabricated.
 4. **Map oximetry (SA2 SpO2/pulse)** into the new path (P0 #3). `cpap-py` exposes
    `spo2`/`pulse` on `timeseries`; write `session_spo2` + `has_spo2`. **Stop-and-ask**.
 5. **Persist source-file provenance** (P1 #7). Requires the loader to expose a
@@ -155,7 +156,7 @@ requirements.txt`), exactly the pattern used for the parser-backed conformance t
 |---|---|---|---|
 | `sessions` | expected_difference | 43 rows, max_block_index 3 (per-PLD-block) | 40 rows, max_block_index 0 (per-night) |
 | `session_blocks` | expected_difference | 72 | 7 |
-| `settings_snapshots` | **expected_difference (P0 visible)** | **40** | **0** |
+| `settings_snapshots` | **expected_difference (partial parity)** | **40 rows; 14 keys; `therapy_mode=apap`** | **40 rows; `therapy_mode` only; `therapy_mode=APAP`** |
 | `session_events` | **equal** | 11 (CA/Hypopnea/Large Leak/Obstructive) | 11 (same types) |
 | `session_metrics` | **equal** | 34 710 | 34 710 |
 | `nightly_therapy_aggregates` | **equal** | 40 | 40 |
@@ -169,8 +170,10 @@ Honest reads from the first run:
 - **Strong parity already exists** where it matters most: low-rate `session_metrics`
   (exact), scored `session_events` (count + type set), the nightly view, and
   `total_ahi_events` (9 = 9).
-- The **settings-snapshot drop is real and observable** (40 → 0) — the most
-  actionable P0.
+- The settings row-count drop is closed (**40 → 40**) and parser sessions now
+  populate `therapy_mode` (**40/40**). Full parity is still partial: legacy has
+  14 setting keys and non-null mask/humidity/temperature values; parser has only
+  `therapy_mode`, with those unavailable fields left `NULL`.
 - The **granularity split is visible** (per-PLD-block vs per-night; 43/72 vs 40/7).
 - **Oximetry (#3) and source-file provenance (#7) are NOT exercised by this
   fixture** — both sides are 0 (`session_spo2`: this card's SAD carries no usable
@@ -185,12 +188,13 @@ Honest reads from the first run:
 The cpap-parser path is **normalized-output-validated and now DB-diffable** (the
 parity oracle exists, §5a). The first measured run shows real strengths
 (`session_metrics`/`session_events`/nightly-aggregate parity) and pins the live
-gaps: the **settings-snapshot drop** (40 → 0) is the most actionable P0; the
-**session-granularity split** needs a product decision; oximetry/source-file gaps
+gaps: **full settings parity remains partial** despite closing the 40 → 0 row-count
+drop; the **session-granularity split** needs a product decision; oximetry/source-file gaps
 are real in code but await a fixture/flow that exercises them. The remaining gating
 items — dropped persisted data, the granularity model, and the operational
 dependency/routing/soak gates — are now each a measurable row against the harness,
-not a guess. No production routing, schema, persistence, or dependency changed.
+not a guess. This phase changes only the existing cpap-parser persistence bridge;
+no production routing, schema, default, or dependency changed.
 
 ## 7. Cross-references
 

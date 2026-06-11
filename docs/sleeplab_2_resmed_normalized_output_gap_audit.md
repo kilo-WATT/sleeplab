@@ -78,7 +78,7 @@ For each vendor-neutral contract area on `Session` / `ImportRun`, what
 |---|---|---|---|---|---|---|---|
 | `ImportRun.warnings` | `warnings` | **Yes** | `_merge_identity` → `resmed_serial_absent`; `_build_session` → `resmed_summary_only_day`, `resmed_waveform_absent`, flushed to run via `run_warnings.extend` | Injected-only (`validate_import`); codes also asserted parser-free by `_build_session` regression tests | **High** (codes parser-free, no PHI) | No `expected.import.warnings` block in the AirSense 10 manifest; auto-parse needs `cpap-py` | Author a `warnings.codes`/`absent` block once a run is obtainable; codes are the safest semantic pin |
 | `Session.blocks` | `session_blocks.block_count` / `.intervals` | **Yes** | `_session_blocks` from `directory.sessions` (non-annotation file-sessions): `start_time`/`end_time`/`file_type` | Injected-only (`validate_import`); span sanity indirectly via computed-usage parity test | `block_count` **medium**; `intervals` **low** | No manifest block; `cpap-py` absent; `intervals` embed (shifted) real timestamps; **timestamp-shift calendar mismatch** (EDF shifted −508d, DATALOG dirs/OSCAR refs on original calendar) | Start with `block_count` per detailed night; defer `intervals` until calendar-rebase + timestamp-safety are settled |
-| `Session.settings` | `settings.snapshot_count` / `.present` / `.values` | **Partial (updated — see §11)** | `_build_session` → `_session_settings` now emits one snapshot with `therapy_mode` (← `pressure_mode`) when a real mode exists; nothing else (parser exposes no other setting) | `therapy_mode` fixture-backed (`cpap-py`-gated) + parser-free unit tests; `values` for the rest still injected-only | `therapy_mode` **ready & landed**; min/max/set pressure/EPR/ramp/humidifier/mask_type **not in cpap-parser schema** | **Done for `therapy_mode` (§11).** Remaining fields need upstream parser/schema work; `persist.py` still hardcodes `therapy_mode`/`mask_type`/`humidity_level` `None` so mapping is conformance-only |
+| `Session.settings` | `settings.snapshot_count` / `.present` / `.values` | **Partial (updated — see §11)** | `_build_session` → `_session_settings` emits one snapshot with `therapy_mode` (← `pressure_mode`) when a real mode exists; `persist_import_run` now saves it and flattens it onto `sessions.therapy_mode` | `therapy_mode` fixture-backed (`cpap-py`-gated), parser-free unit-tested, and parser-backed DB parity-tested | `therapy_mode` **landed through persistence**; min/max/set pressure/EPR/ramp/humidifier/mask_type **not in cpap-parser schema** | Done for `therapy_mode`; remaining fields need upstream parser/schema work and remain `NULL` |
 | `Session.signals` | *(no comparator)* | **Yes** (when `include_waveforms`) | `_session_waveforms` → `_HIGH_RATE_CHANNELS` (BRP) + `_LOW_RATE_CHANNELS` (PLD) `SignalChannel`s | Fixture-backed via `test_airsense10_fixture_channel_inventory_matches_classification` (pure-Python, **not** `validate_import`) | n/a (no import-level comparator) | No `signals` comparator in `validate_import`; channel inventory already covered elsewhere | None needed; channel inventory is already fixture-backed by its own test |
 | `Session.events` | `events.count` / `.types` / `.events` | **Yes** (scored events always; large-leak only when `include_waveforms`) | `_session_events` from `CPAPSession.events` (`event_type`, `timestamp_sec`→absolute, `duration_sec`); `_large_leak_events` derived from leak signal | Injected-only (`validate_import`); event *counts* indirectly via AHI parity test | `count`/`types` **medium**; ordered `events` **low** | No manifest block; `cpap-py` absent; event **type vocabulary is raw cpap-parser strings** (`"Obstructive Apnea"`, …), not yet mapped to the OSCAR enum; ordered list embeds real timestamps | Start with `count` (and per-type `types`) on detailed nights; defer ordered `events`/timestamps until vocabulary + calendar are settled |
 | `Session.waveforms` | *(no comparator)* | **Yes** (when `include_waveforms`) | `_session_waveforms` → `WaveformSegment` metadata (`sample_count`/`sample_rate_hz`, no arrays) | Indirect: `resmed_waveform_absent` warning tested parser-free | n/a (no import-level comparator) | No waveform comparator; full-night/segment storage is deferred + stop-and-ask | None this milestone (waveform storage out of scope) |
@@ -120,10 +120,9 @@ Three layered blockers, in order of how fundamental they are:
    one setting cpap-parser exposes: `_build_session` → `_session_settings` now maps
    `pressure_mode` → `therapy_mode` (and only that). The remaining fields
    (min/max/set pressure, EPR, ramp, humidifier, mask_type) are **absent from the
-   cpap-parser schema** and stay unmapped, and `persist.py` still hardcodes
-   `therapy_mode`/`mask_type`/`humidity_level`/`temperature_c` to `None` — so the
-   mapping is **conformance-only** and persistence is unchanged (stop-and-ask if
-   wiring it into production would touch import behavior).
+   cpap-parser schema** and stay unmapped. `persist.py` now writes the loader
+   snapshot and projects `therapy_mode` to the session row; unavailable fields
+   remain `None`, and missing/`"Unknown"` values are not stored as settings.
 
 So: `oscar_reference` is *manifest + file* only; the value blocks need *a run*
 (parser/backend + an authored block + calendar handling), and `settings.values`
@@ -410,17 +409,16 @@ and `test_fixture_settings_snapshot_maps_only_therapy_mode`
 (`test_build_session_maps_therapy_mode_settings_snapshot`,
 `test_build_session_omits_settings_when_mode_unknown_or_absent`).
 
-**Still blocked / unchanged.**
+**Still blocked / partial.**
 
 - **All other settings fields** (`minimum_pressure_cm_h2o`/`maximum_pressure_cm_h2o`/
   `set_pressure_cm_h2o`/`epr_level`/`epr_enabled`/`ramp_*`/`humidifier_level`/
   `mask_type`): cpap-parser does **not** expose them, so they cannot be mapped
   without parser/schema work upstream. Not fabricated.
-- **Persistence is unchanged.** `persist.py` still hardcodes
-  `therapy_mode`/`mask_type`/`humidity_level` to `None`; this mapping is
-  **normalized-run / conformance-only** for now. Wiring the snapshot through to the
-  `sessions` columns is a separate persistence change (stop-and-ask if it touches
-  production import behavior).
+- **Persistence for `therapy_mode` is implemented.** The parser-backed parity run
+  writes 40 snapshots and populates `sessions.therapy_mode` on all 40 sessions.
+  Mask type, humidity, temperature, pressure/EPR/ramp settings remain unavailable
+  and `NULL`; full settings parity is therefore still partial.
 - Support status is **not** upgraded to "validated" beyond this single,
   conservatively-confident field.
 

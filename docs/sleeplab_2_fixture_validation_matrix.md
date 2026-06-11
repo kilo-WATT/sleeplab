@@ -198,10 +198,9 @@ What stays blocked, and why:
   schema** (`MachineInfo`/`CPAPSessionSummary`/`CPAPSession` carry no such fields;
   `pressure_50`/`pressure_95` are *measured* percentiles, not settings). Mapping
   them needs upstream parser/schema work, not a SleepLab loader change.
-- **Persistence is unchanged.** `persist.py` still hardcodes
-  `therapy_mode`/`mask_type`/`humidity_level` to `None`, so the mapping is
-  **normalized-run / conformance-only**; wiring it into the `sessions` columns is a
-  separate persistence change (stop-and-ask if it touches production import).
+- **Persistence is implemented for `therapy_mode`.** The loader snapshot is written
+  through `upsert_settings_snapshot` and projected to `sessions.therapy_mode`.
+  Missing/`"Unknown"` values are omitted; unsupported fields remain `NULL`.
 - The `settings.values` comparator (missing-≠-off semantics, float tolerance,
   snapshot selection) remains exercised by injected runs for the *unmapped* fields.
 
@@ -246,8 +245,8 @@ injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
 
 **Blocked / deferred:** OSCAR numeric parity (`oscar_reference.parity`),
 weighted/time-based summaries, settings-value loader mapping **beyond
-`therapy_mode`** (the rest are absent from the cpap-parser schema), settings
-**persistence** (`persist.py` still hardcodes `None` — mapping is conformance-only),
+`therapy_mode`** (the rest are absent from the cpap-parser schema), full settings
+parity beyond the persisted therapy mode,
 Lowenstein persistence, ResMed `cpap-parser` production cutover, full-night /
 compressed-segment waveform storage, device-time-correction implementation.
 
@@ -270,7 +269,7 @@ normalized run (`cpap-py`-gated); "deferred/blocked" rows say why.
 | `events` ordered list / start times / `duration_seconds` | ⛔ deferred | timestamps + duration shape not authored |
 | `settings.present` / `snapshot_count` / `values.therapy_mode` | ✅ done | §11 |
 | `settings.values` other fields (pressure/EPR/ramp/humidifier/mask) | ⛔ blocked | absent from cpap-parser schema |
-| `settings` **persistence** (sessions columns) | ⛔ blocked | `persist.py` hardcodes `None` — stop-and-ask |
+| `settings` **persistence** (`therapy_mode`) | ✅ done | snapshot row + `sessions.therapy_mode`; unsupported fields stay `NULL` |
 | `identity_hashes` | ⛔ deferred | DB-gated; synthetic rows only |
 | `oscar_reference` numeric **parity** | ⛔ deferred | designed (plan §13), not implemented |
 

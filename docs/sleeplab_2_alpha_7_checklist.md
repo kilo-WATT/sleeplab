@@ -374,9 +374,10 @@ On the fixture `therapy_mode` is a stable `"APAP"`, so the manifest now pins
 for the 3 detailed nights, verified by `test_fixture_semantic_expected_import_matches_normalized_run`
 + `test_fixture_settings_snapshot_maps_only_therapy_mode` (`cpap-py`-gated) and
 parser-free unit tests in `tests/test_resmed_import_regressions.py`. **Persistence
-unchanged** — `persist.py` still hardcodes `therapy_mode`/`mask_type`/`humidity_level`
-`None`, so the mapping is conformance-only (gap audit §11). **Still blocked:** all
-other settings fields (not in the parser schema); settings persistence (stop-and-ask);
+now landed for `therapy_mode`** — the cpap-parser bridge writes the normalized
+snapshot and populates `sessions.therapy_mode`; unsupported fields remain `NULL`
+and missing/`"Unknown"` values are not fabricated (gap audit §11). **Still blocked:**
+all other settings fields (not in the parser schema); full settings parity;
 timestamped intervals/events.
 
 **Event TYPE counts — LANDED (SleepLab-normalized, not OSCAR parity):** the
@@ -406,8 +407,10 @@ classifies each as equal / expected_difference / unexpected_difference / skipped
 not_implemented. DB-free classification unit tests run in the normal suite; the
 end-to-end harness gates on `TEST_DATABASE_URL` + `cpap-py` (validated in
 Linux/Docker with a Postgres service). First run: `session_metrics`/`session_events`/
-`nightly_therapy_aggregates` are at **parity**, while the **settings-snapshot drop
-(40 → 0)** and the **session-granularity split** are now measured, not assumed
-(cutover audit §5a). No production routing/default/schema/persistence/dependency
-change. **Next safe task:** wire `therapy_mode` → `settings_snapshots` (stop-and-ask)
-and watch the harness's settings row move toward parity.
+`nightly_therapy_aggregates` are at **parity**. The settings row-count drop is now
+closed (**40 → 40**) with parser `therapy_mode="APAP"` persisted on all sessions,
+while broader settings remain an `expected_difference` (legacy 14 keys vs parser
+`therapy_mode` only); the **session-granularity split** is measured, not assumed
+(cutover audit §5a). No routing/default/schema/dependency change. Remaining cutover work includes
+oximetry, source-file provenance, session granularity, and settings beyond the
+single field exposed by cpap-parser.
