@@ -178,3 +178,50 @@ additionally needs *the loader to emit `SettingsSnapshot`*.
   contract and gating these blockers map onto.
 - `tests/test_resmed_import_regressions.py` — the parser-free `_build_session`
   idiom the documenting tests below reuse.
+
+## 8. Parser-backed setup gap (verified this phase)
+
+An attempt to author the first parser-gated **semantic** `expected.import`
+values for the committed AirSense 10 fixture confirmed the path is *ready in
+concept* but blocked by two concrete, recorded setup gaps. Neither is a code
+defect; both are environment/fixture wiring that must be closed before any
+semantic `warnings`/`session_blocks.block_count`/`therapy_aggregates`/
+`events.count` value can be honestly authored. No semantic values were added.
+
+1. **`cpap-py` EDF backend absent.** In the environment used here `cpap_parser`
+   **is** importable but `cpap_py` is **not** (`importlib.util.find_spec`), so
+   `_import_parser_available()` is `False`. The three `cpap-py`-gated tests in
+   `tests/conformance/test_resmed_airsense10.py` (AHI / computed-usage /
+   ghost-night parity) `importorskip` and skip; the pure-Python serial/channel
+   tests still pass. `validate_import`'s auto-parse acquisition therefore returns
+   `(None, "cpap-parser/cpap-py not installed")` and every parse-dependent block
+   skips. Decoding `STR.edf`/`DATALOG` to build a normalized `ImportRun` needs the
+   backend, so the EDF payload cannot be decoded here.
+
+2. **Fixture layout vs `source_directory` default.** Even with the backend
+   installed, `_acquire_import_run` parses `root / manifest.get("source_directory",
+   "source")`. The AirSense 10 fixture is **non-standard**: `DATALOG/` and
+   `STR.edf` live at the fixture **root**, and the manifest carries **no**
+   `source_directory` key. So the default `source/` path is empty —
+   `ResMedNativeLoader().detect(<root>/source)` returns `[]` (auto-parse would skip
+   with `"no ResMed device detected in fixture source"`), whereas
+   `detect(<root>)` *does* find the device. Closing this is a one-line manifest
+   addition (`"source_directory": "."`), but it is only worth taking together with
+   (1) and an authored block — adding it alone would not enable any check.
+
+**What this means.** Current committed fixture-backed coverage for this card
+remains the parser-free `oscar_reference` hash pins (§2.1). The loader-ready
+semantic candidates stay **injected-only** until a `cpap-py`-equipped dev/CI
+environment exists *and* the fixture exposes its source via `source_directory`.
+The honest gated contract is pinned parser-free by
+`tests/test_conformance.py::test_validate_import_airsense10_semantic_block_gated_until_parser_backend`:
+a semantic block injected into a copy of the committed manifest **skips** with one
+of the acquisition reasons above (never a fabricated pass) while the
+`oscar_reference` hash still verifies.
+
+**Next action (unchanged, now precise):** in a `cpap-py`-equipped environment,
+(a) add `"source_directory": "."` to the AirSense 10 manifest (or pass an injected
+run), (b) obtain the normalized `ImportRun`, (c) read the safe aggregate facts
+(warning codes, per-night block counts, usage/span/gap seconds, event counts), and
+(d) author those `expected.import` blocks from the verified run. Do **not**
+fabricate any value while the backend is unavailable.

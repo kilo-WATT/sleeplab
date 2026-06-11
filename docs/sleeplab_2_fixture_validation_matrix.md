@@ -150,6 +150,20 @@ anonymized reference CSVs in fixture #2.
   generalization (support a `files` list), never the anonymized data files. Next
   candidates remain gated: a standard `expected.import` block (parse-dependent) and
   `settings.values` (loader gap).
+- **Parser-backed semantic coverage — blocked by two verified setup gaps (this
+  phase).** Authoring the first parser-gated semantic `expected.import` values
+  (`warnings`/`session_blocks.block_count`/`therapy_aggregates`/`events.count`)
+  for this card needs a normalized `ImportRun`, which is gated by **(1)** the
+  `cpap-py` EDF backend being **absent** here (`cpap_parser` imports, `cpap_py`
+  does not, so `_import_parser_available()` is `False` and auto-parse skips with
+  `"cpap-parser/cpap-py not installed"`); and **(2)** this fixture's **non-standard
+  layout** — `DATALOG/`/`STR.edf` at the root with **no** `source_directory` key,
+  so `_acquire_import_run`'s default `source/` path finds no device even with the
+  backend installed (closable by a one-line `"source_directory": "."` manifest
+  addition, only worth taking together with (1) and an authored block). No semantic
+  values were added; the gated contract is pinned parser-free by
+  `tests/test_conformance.py::test_validate_import_airsense10_semantic_block_gated_until_parser_backend`.
+  Full detail in `docs/sleeplab_2_resmed_normalized_output_gap_audit.md` §8.
 
 ## 3. The settings-value loader gap (why `settings.values` stays injected-only)
 
@@ -225,6 +239,9 @@ compressed-segment waveform storage, device-time-correction implementation.
    only on a run + an authored manifest block), whereas `settings.values` is
    blocked by the loader gap (no `SettingsSnapshot` is constructed) and the
    timestamped `intervals`/`events` lists by the anonymization-calendar split.
+   For the AirSense 10 card specifically, obtaining a run is **additionally**
+   gated by the two setup gaps verified this phase (the absent `cpap-py` backend
+   and the missing `source_directory` pointer) — see §2.2 and the gap audit §8.
 
 ## 6. Inspecting fixture-backed status (reporting)
 

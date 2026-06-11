@@ -304,3 +304,19 @@ task:** add fixture-backed `warnings`/`block_count`/`therapy_aggregates`/
 loader, routing, schema, or persistence change). The current loader output shape
 is pinned parser-free by the `test_build_session_emits_*` tests in
 `tests/test_resmed_import_regressions.py`.
+
+**Parser-backed setup gap (verified this phase, no semantic values added):**
+attempting that next task confirmed two concrete blockers, now recorded in the
+gap audit §8. (1) `cpap-py` is **absent** in this environment (`cpap_parser`
+imports, `cpap_py` does not), so `validate_import` auto-parse skips with
+`"cpap-parser/cpap-py not installed"`. (2) The AirSense 10 fixture is
+non-standard (`DATALOG`/`STR.edf` at the root, **no** `source_directory` key), so
+even with the backend `_acquire_import_run`'s default `source/` path finds no
+device — closable by a one-line `"source_directory": "."` manifest addition, only
+worth taking with (1) and an authored block. Committed coverage therefore stays
+the parser-free `oscar_reference` hash pins; the honest gated contract is pinned
+by `test_validate_import_airsense10_semantic_block_gated_until_parser_backend`
+(`tests/test_conformance.py`): a semantic block on a copy of the committed
+manifest **skips** with the acquisition reason, never a fabricated pass, while the
+`oscar_reference` hash still verifies. No values were fabricated while the backend
+is unavailable.
