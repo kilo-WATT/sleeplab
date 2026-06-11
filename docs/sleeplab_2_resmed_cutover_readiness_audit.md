@@ -85,12 +85,10 @@ To keep the matrix honest, these are **done** and de-risk the cutover:
 Each step is small and safe on its own; persistence/routing/dependency steps are
 **stop-and-ask** per the workflow rules. Ordered so the *oracle* lands first.
 
-1. **Build the legacy↔parser DB parity harness** (test-only; P0 #1,#2). Import the
-   AirSense 10 fixture through both paths into a throwaway test DB (Docker:
-   Postgres + `cpap-py`) and diff `sessions`/`session_blocks`/`session_events`/
-   `signal_channels`/`derived_values`/`session_metrics`/`session_waveform`. This
-   creates the missing oracle and makes every later gap measurable. No routing
-   change.
+1. **Build the legacy↔parser DB parity harness** (test-only; P0 #1,#2). — **DONE,
+   see §5a.** Imports the AirSense 10 fixture through both paths into a throwaway
+   rolled-back test transaction and classifies per-table differences. The oracle now
+   exists; the remaining steps are measured against it. No routing change.
 2. **Decide the session-granularity model** (P1 #6, #11). Per-night (new) vs
    per-PLD (legacy/architecture). Product/data decision — **stop-and-ask**. Blocks
    #5, #7, #11 framing and any migration plan for already-imported data.
@@ -117,15 +115,82 @@ Each step is small and safe on its own; persistence/routing/dependency steps are
 11. **Flip `SLEEPLAB_USE_CPAP_PARSER` default** — only after 1–10. Explicit
     **stop-and-ask**; this is the cutover.
 
+## 5a. DB parity harness — BUILT (step 1 done)
+
+Step 1 (the legacy↔parser DB oracle) is implemented and validated end-to-end. It
+turns the matrix from assertions into measured pass/fail without any routing,
+schema, persistence, or dependency change.
+
+**Where it lives.**
+- `tests/cutover_parity.py` — pure, DB-free, unit-tested core: the parity-table
+  scope, the redacted aggregate `snapshot_parity_tables(conn, …)`, the
+  `KNOWN_DIFFERENCES` map (from §3), and `classify_parity(legacy, parser)` →
+  per-table verdict (`equal` / `expected_difference` / `unexpected_difference` /
+  `missing_in_legacy` / `missing_in_parser` / `skipped` / `not_implemented`).
+- `tests/test_resmed_cutover_db_parity.py` — DB-free classification unit tests
+  (run in the normal suite) **plus** the gated end-to-end harness
+  `test_db_parity_harness`.
+
+**What it compares.** Aggregate, redacted snapshots (counts, distinct counts, and
+category-label sets — never serials, raw timestamps, paths, or ids) of: `sessions`,
+`session_blocks`, `settings_snapshots`, `session_events`, `session_spo2`,
+`signal_channels`, `derived_values`, `session_metrics` (row count), `session_waveform`
+(row count only — no blobs), `import_source_files`, and the
+`nightly_therapy_aggregates` view.
+
+**How it runs / what gates it.** Both paths import the committed AirSense 10 fixture
+into the **same rolled-back test transaction under separate `machine_id`s** — no
+production DB, nothing survives the test. The legacy path runs on any host (its EDF
+parser is pure-Python) via a commit-swallowing connection proxy; the cpap-parser
+path runs `persist_import_run`. Gating: the `db` fixture skips without
+`TEST_DATABASE_URL`; the parser half additionally needs `cpap-py` (absent → the
+report is legacy-only and parser-dependent tables read `skipped`, never a crash).
+To run the full harness: a Postgres `TEST_DATABASE_URL` **and** `cpap-py` —
+i.e. Linux/Docker (Postgres service + `pip install -r api/requirements.txt -r
+requirements.txt`), exactly the pattern used for the parser-backed conformance tests.
+
+**First-run results (AirSense 10 fixture, both paths).** The harness verdicts:
+
+| Table | Verdict | Legacy | Parser |
+|---|---|---|---|
+| `sessions` | expected_difference | 43 rows, max_block_index 3 (per-PLD-block) | 40 rows, max_block_index 0 (per-night) |
+| `session_blocks` | expected_difference | 72 | 7 |
+| `settings_snapshots` | **expected_difference (P0 visible)** | **40** | **0** |
+| `session_events` | **equal** | 11 (CA/Hypopnea/Large Leak/Obstructive) | 11 (same types) |
+| `session_metrics` | **equal** | 34 710 | 34 710 |
+| `nightly_therapy_aggregates` | **equal** | 40 | 40 |
+| `signal_channels` | expected_difference | 54 rows; units incl. `L/s` | 33 rows; units incl. `L/min` |
+| `derived_values` | expected_difference | 90 rows, event-count+stat keys | 520 rows, usage-semantics keys |
+| `session_waveform` | expected_difference | 81 485 | 81 410 (~0.1%) |
+| `session_spo2` | equal (not exercised) | 0 | 0 |
+| `import_source_files` | equal (not exercised) | 0 | 0 |
+
+Honest reads from the first run:
+- **Strong parity already exists** where it matters most: low-rate `session_metrics`
+  (exact), scored `session_events` (count + type set), the nightly view, and
+  `total_ahi_events` (9 = 9).
+- The **settings-snapshot drop is real and observable** (40 → 0) — the most
+  actionable P0.
+- The **granularity split is visible** (per-PLD-block vs per-night; 43/72 vs 40/7).
+- **Oximetry (#3) and source-file provenance (#7) are NOT exercised by this
+  fixture** — both sides are 0 (`session_spo2`: this card's SAD carries no usable
+  SpO2; `import_source_files`: the in-transaction harness registers no upload files).
+  The code gap is still real; it just needs a fixture/flow that exercises it.
+- `derived_values` and `session_waveform` differ as a *consequence* of granularity /
+  event-window rebasing — now classified as documented `expected_difference`s, so
+  the harness fails only on a genuinely **new, undocumented** divergence.
+
 ## 6. Bottom line
 
-The cpap-parser path is **normalized-output-validated but persistence-unproven**.
-The gating items are not the loader — they are (a) the absent legacy↔parser
-**DB-level oracle**, (b) **dropped persisted data** vs legacy (oximetry,
-settings, source-file lineage), and (c) an undecided **session-granularity model**
-plus the operational dependency/routing/soak gates. Recommended first move is the
-parity harness (step 1): test-only, no routing change, and it turns every other
-row in this matrix into a measured pass/fail.
+The cpap-parser path is **normalized-output-validated and now DB-diffable** (the
+parity oracle exists, §5a). The first measured run shows real strengths
+(`session_metrics`/`session_events`/nightly-aggregate parity) and pins the live
+gaps: the **settings-snapshot drop** (40 → 0) is the most actionable P0; the
+**session-granularity split** needs a product decision; oximetry/source-file gaps
+are real in code but await a fixture/flow that exercises them. The remaining gating
+items — dropped persisted data, the granularity model, and the operational
+dependency/routing/soak gates — are now each a measurable row against the harness,
+not a guess. No production routing, schema, persistence, or dependency changed.
 
 ## 7. Cross-references
 

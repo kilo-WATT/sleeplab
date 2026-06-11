@@ -395,3 +395,19 @@ task:** either tackle the raw→OSCAR event-type vocabulary parity (stop-and-ask
 decide whether to wire the `therapy_mode` snapshot through `persist_import_run` (a
 persistence change — stop-and-ask). Exact event/block timestamps and durations
 stay deferred.
+
+**ResMed cutover DB parity harness — LANDED (test-only, no routing change):** the
+first legacy-vs-cpap-parser database parity oracle is built
+(`tests/cutover_parity.py` + `tests/test_resmed_cutover_db_parity.py`). It imports
+the committed AirSense 10 fixture through both the legacy `import_sessions` path and
+the cpap-parser `persist_import_run` path into one rolled-back test transaction
+(separate `machine_id`s), snapshots redacted aggregates of the key tables, and
+classifies each as equal / expected_difference / unexpected_difference / skipped /
+not_implemented. DB-free classification unit tests run in the normal suite; the
+end-to-end harness gates on `TEST_DATABASE_URL` + `cpap-py` (validated in
+Linux/Docker with a Postgres service). First run: `session_metrics`/`session_events`/
+`nightly_therapy_aggregates` are at **parity**, while the **settings-snapshot drop
+(40 → 0)** and the **session-granularity split** are now measured, not assumed
+(cutover audit §5a). No production routing/default/schema/persistence/dependency
+change. **Next safe task:** wire `therapy_mode` → `settings_snapshots` (stop-and-ask)
+and watch the harness's settings row move toward parity.
