@@ -1864,6 +1864,73 @@ def test_validate_import_oscar_reference_additional_files_missing_file_fails(tmp
     ), result.failures
 
 
+def test_validate_import_airsense10_semantic_block_gated_until_parser_backend(tmp_path):
+    """Phase 2: AirSense 10 *semantic* expected.import blocks stay gated, never faked.
+
+    The committed AirSense 10 manifest pins only the parser-free
+    ``oscar_reference`` hashes. The loader-ready *semantic* candidates
+    (``warnings.codes`` / ``session_blocks.block_count`` / ``therapy_aggregates`` /
+    ``events.count``) cannot be authored with real values until a normalized
+    ``ImportRun`` can be obtained from the committed card, which needs **both**
+    ``cpap-parser`` and its ``cpap-py`` EDF backend (``_import_parser_available``).
+    This pins the honest contract end-to-end on the *committed* fixture: with a
+    semantic block present but no injected ``run``, ``validate_import`` must
+    **skip** it with a clear acquisition reason — never fabricate a pass — while
+    the parser-free ``oscar_reference`` hash pin still verifies.
+
+    Two distinct, currently-recorded blockers can produce that skip, and the
+    assertion accepts either so the test is honest in every environment:
+
+    * the ``cpap-py`` backend is absent (the CI/dev default here) →
+      ``"cpap-parser/cpap-py not installed"``; or
+    * the backend is present but ``_acquire_import_run`` looks under the default
+      ``source/`` subdir, which this non-standard fixture does not have (its
+      ``DATALOG``/``STR.edf`` live at the fixture root and the manifest carries no
+      ``source_directory`` pointer) → ``"no ResMed device detected in fixture
+      source"``.
+
+    Either way nothing is value-asserted, so a green run here is a *gated* green,
+    not evidence of semantic parity. See
+    ``docs/sleeplab_2_resmed_normalized_output_gap_audit.md`` §8 and
+    ``docs/sleeplab_2_fixture_validation_matrix.md`` §2.2.
+    """
+    # Copy the committed fixture (manifest + oscar_reference files) so the
+    # committed manifest is never mutated; add the lowest-risk loader-ready
+    # candidate alongside the real oscar_reference pin.
+    fixture = tmp_path / "resmed_airsense10_001"
+    shutil.copytree(AIRSENSE10_FIXTURE, fixture)
+    manifest_path = fixture / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["expected"]["import"]["warnings"] = {"codes": ["resmed_summary_only_day"]}
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    # No run injected: the only way to a run is the gated auto-parse path.
+    result = validate_import(fixture)
+
+    # The committed, parser-free oscar_reference hash pin still verifies (the
+    # semantic block must not regress the integrity pin).
+    assert not any("oscar_reference" in f for f in result.failures), result.failures
+
+    statuses = summarize_import_blocks(fixture, result)
+    assert statuses["warnings"] == "skipped", statuses
+    # Nothing was value-asserted, so the run passes purely on gated skips.
+    assert result.passed, result.failures
+
+    warnings_skip = next(
+        (s for s in result.skipped if "expected.import.warnings:" in s), None
+    )
+    assert warnings_skip is not None, result.skipped
+    # The skip is one of the honest run-acquisition reasons, never a silent pass.
+    assert any(
+        reason in warnings_skip
+        for reason in (
+            "cpap-parser/cpap-py not installed",
+            "no ResMed device detected in fixture source",
+            "could not parse fixture source",
+        )
+    ), warnings_skip
+
+
 def test_summarize_import_blocks_classifies_passed_skipped_failed(tmp_path):
     """Phase 2 clarity: per-block status distinguishes passed / skipped / failed.
 
