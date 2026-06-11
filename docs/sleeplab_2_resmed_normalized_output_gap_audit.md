@@ -314,3 +314,60 @@ about adding the parser to `pyproject.toml`/`uv.lock` (which would rebuild these
 native deps in every CI run and activate the gated tests) is **unchanged** — that
 remains a deliberate, declined change; this note only records the local-host build
 failure.
+
+### 9.2 Resolved in a Linux container — first parser-backed semantic coverage landed
+
+Following §9.1, the parser was installed and the fixture validated **in a Linux
+container** (`python:3.12-slim`), where `pyedflib` ships a manylinux wheel so no C
+compiler is needed:
+
+```
+docker run -d -v <repo>:/src:ro python:3.12-slim sleep infinity
+# in container: apt-get install -y git
+#               pip install -r /src/api/requirements.txt -r /src/requirements.txt pytest
+```
+
+`cpap_parser` **and** `cpap_py` then import cleanly (`pyedflib 0.1.42`, `numpy
+2.4.6`, `pandas 3.0.3`), and `ResMedNativeLoader.import_data_with_directory` on the
+committed AirSense 10 fixture produces a normalized `ImportRun`. **No
+dependency/lock/tracked files were changed** — the install lived only inside the
+ephemeral container; `pyproject.toml`/`uv.lock`/`requirements.txt`/`Dockerfile`
+remain untouched.
+
+**Safe aggregate facts read from the normalized run** (default `ImportOptions`, the
+exact options `_acquire_import_run` uses; anonymized −508d-shifted machine-local
+dates, no serial/PHI printed):
+
+| Fact | Value |
+|---|---|
+| sessions | 40 (37 summary-only "ghost", 3 detailed) |
+| run warning codes | `resmed_summary_only_day` (only); `resmed_serial_absent` **absent** (serial present) |
+| detailed dates | `2024-12-14`, `2024-12-25`, `2025-01-05` |
+| `session_blocks.block_count` | 4 / 1 / 2 |
+| `therapy_aggregates` usage_seconds | 26100 / 22920 / 20400 |
+| `therapy_aggregates` wall_clock_seconds | 31767 / 22920 / 20401 |
+| `therapy_aggregates` gap_seconds | 5667 / 0 / 1 |
+| `events.count` | 2 / 4 / 5 |
+| `Session.settings` | **empty on every session** (no `SettingsSnapshot` built — loader gap holds) |
+| signals/waveforms | present only with `include_waveforms=True` (not pinned) |
+
+**What became fixture-backed (committed).** These exact values are now pinned as
+semantic `expected.import` blocks in the AirSense 10 manifest —
+`warnings.codes`/`warnings.absent`, `session_blocks.block_count`,
+`therapy_aggregates` (usage/wall-clock/gap seconds), and `events.count` — and are
+verified by `validate_import(run=...)` against the real parsed run in
+`tests/conformance/test_resmed_airsense10.py::test_fixture_semantic_expected_import_matches_normalized_run`
+(`cpap-py`-gated: it runs where the backend is present and skips cleanly, never
+fabricating a pass, where it is absent — e.g. Windows/CI). The manifest records this
+provenance in its top-level `import_expected_provenance` field. This is the **first
+committed, value-level, fixture-backed import-level coverage** on a real card (the
+prior `oscar_reference` coverage was hash-only).
+
+**What remains blocked (unchanged).** `settings.values` stays blocked — the loader
+constructs no `SettingsSnapshot` (settings empty on all 40 sessions), so only the
+honest absence is observable. Exact `session_blocks.intervals` and ordered
+`events` with timestamps remain **deferred**: they embed shifted real timestamps
+and depend on the anonymization-calendar split plus the raw→OSCAR event-type
+vocabulary, none of which were settled here — so no timestamps were authored. OSCAR
+numeric parity, weighted/time-based summaries, persistence, production routing, and
+the `cpap-parser` cutover are all untouched.

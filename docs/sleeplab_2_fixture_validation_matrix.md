@@ -125,14 +125,18 @@ anonymized reference CSVs in fixture #2.
 | therapy aggregates (computed usage) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_computed_usage_matches_oscar_for_detailed_nights` vs OSCAR total time, abs=0.1 h |
 | summary-only / ghost nights | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ghost_nights_flagged_not_deleted` (kept + `has_detailed_data is False`) |
 | OSCAR reference (export hash) | **fixture-backed (Phase 2)** | manifest pins `expected.import.oscar_reference.export_hash` for committed `oscar_reference/summary.csv` **and** (via `oscar_reference.files`) for `oscar_reference/sessions.csv`; both verified parser-free by `validate_import` in `test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fixture` and `test_validate_import_oscar_reference_sessions_csv_hash_pinned_on_committed_airsense10_fixture` |
-| `expected.import` (warnings / session_blocks / settings / events / therapy_aggregates / identity_hashes) | **not committed** | manifest has no `expected.import`; non-standard schema |
-| settings values | **cannot — loader gap** | ResMed loader maps no `SettingsSnapshot` (see §3) |
+| `expected.import` **warnings / session_blocks.block_count / therapy_aggregates / events.count** | **fixture-backed (Phase 2, value-level, `cpap-py`-gated)** | manifest pins these authored-from-the-real-run values; `validate_import(run=...)` verifies them against the normalized `ImportRun` in `test_fixture_semantic_expected_import_matches_normalized_run` (parsed in Linux/Docker; skips where `cpap-py` absent). First committed *value-level* import coverage on a real card |
+| `expected.import` settings / identity_hashes | **not committed** | settings → loader gap (below); identity_hashes → DB-gated, synthetic only |
+| settings values | **cannot — loader gap** | ResMed loader maps no `SettingsSnapshot` (settings empty on all 40 sessions; see §3) |
 | DB identity hashes | **not via this fixture** | exercised only by synthetic DB-row tests |
 
-- **Cannot validate yet:** the parse-dependent `expected.import` comparators for
-  this card (no `session_blocks`/`settings`/`events`/`therapy_aggregates` block,
-  non-standard manifest); per-setting values (loader gap); persisted DB identity
-  hashes for this card. *(OSCAR export-hash integrity is now pinned — see below.)*
+- **Now fixture-backed (value-level):** `warnings`, `session_blocks.block_count`,
+  `therapy_aggregates` (usage/wall-clock/gap seconds), and `events.count` — authored
+  from and verified against the real normalized `ImportRun` (gap audit §9.2).
+- **Cannot validate yet:** per-setting `settings.values` (loader gap — no
+  `SettingsSnapshot`); exact `session_blocks.intervals` / ordered timestamped
+  `events` (anonymization-calendar split + event-type vocabulary — deferred, no
+  timestamps authored); persisted DB identity hashes for this card.
 - **Privacy concerns / unknowns:** anonymized real card. Do **not** expose real
   values; do **not** overwrite the data files. Safe, already-committed summary
   facts (from `README.md`/`oscar_reference`): 40 summary nights, 3 detailed
@@ -150,35 +154,27 @@ anonymized reference CSVs in fixture #2.
   generalization (support a `files` list), never the anonymized data files. Next
   candidates remain gated: a standard `expected.import` block (parse-dependent) and
   `settings.values` (loader gap).
-- **Parser-backed semantic coverage — setup path, one blocker remaining.**
-  Authoring the first parser-gated semantic `expected.import` values
-  (`warnings`/`session_blocks.block_count`/`therapy_aggregates`/`events.count`)
-  for this card needs a normalized `ImportRun`. Two setup gaps were identified; one
-  is now closed:
-  - **(1) `cpap-py` EDF backend — still absent (the remaining blocker).**
-    `cpap_parser` imports but `cpap_py` does not, so `_import_parser_available()`
-    is `False` and auto-parse skips with `"cpap-parser/cpap-py not installed"`.
-    `cpap_py` is the ResMed EDF reader pulled by the `cpap-parser[resmed]` extra
-    (pinned git fork in root `requirements.txt`; a production dep via the
-    Dockerfile, deliberately absent from `pyproject.toml`/`uv.lock` and CI's
-    `uv sync --group dev`). Dependency files were **not** changed (adding it would
-    rebuild git-sourced native deps in CI and activate the gated tests — not
-    low-risk); see the gap audit §9 for the operator-authorized install path. An
-    authorized validation-only local install was **attempted this phase and failed**
-    on the Windows dev host: the transitive `pyedflib` has no wheel here and its C
-    extension needs MSVC Build Tools (gap audit §9.1). `cpap_py` stays absent; the
-    next attempt should run where `pyedflib` ships a prebuilt wheel (Linux/CI/macOS).
-  - **(2) Fixture `source_directory` — FIXED this phase.** The manifest now pins
+- **Parser-backed semantic coverage — LANDED (Phase 2).** The first parser-gated
+  semantic `expected.import` values for this card
+  (`warnings`/`session_blocks.block_count`/`therapy_aggregates`/`events.count`) are
+  now committed and value-verified. The path that got there:
+  - **(1) `cpap-py` EDF backend — resolved in Linux/Docker.** On Windows the
+    `cpap-parser[resmed]` install fails because `pyedflib` has no wheel and needs
+    MSVC Build Tools (gap audit §9.1). The fixture was therefore parsed in a
+    `python:3.12-slim` container (manylinux `pyedflib` wheel — no compiler), where
+    `cpap_parser`+`cpap_py` import and `ResMedNativeLoader` yields a normalized
+    `ImportRun`. **No dependency/lock/tracked files were changed** — the install
+    stayed inside the ephemeral container (gap audit §9.2).
+  - **(2) Fixture `source_directory` — FIXED (prior phase).** The manifest pins
     `"source_directory": "."` so `_acquire_import_run` resolves the source to the
-    committed fixture root (the card's `DATALOG/`/`STR.edf` live there, not under a
-    `source/` subdir). Verified parser-free by
-    `test_validate_import_airsense10_source_directory_points_at_committed_root`
-    (`tests/test_conformance.py`) and by the detection half of
-    `test_fixture_normalized_import_run_acquired_via_loader`
-    (`tests/conformance/test_resmed_airsense10.py`, the run half `cpap-py`-gated).
-  No semantic values were added. The gated contract holds in both environments via
-  `test_validate_import_airsense10_semantic_block_gated_until_parser_backend`.
-  Full detail in `docs/sleeplab_2_resmed_normalized_output_gap_audit.md` §8–§9.
+    committed fixture root. Verified parser-free by
+    `test_validate_import_airsense10_source_directory_points_at_committed_root`.
+  The authored values were read from the real run and are checked by
+  `test_fixture_semantic_expected_import_matches_normalized_run` (`cpap-py`-gated:
+  runs in Linux/Docker, skips cleanly on Windows/CI without fabricating a pass). The
+  gated contract also still holds via
+  `test_validate_import_airsense10_semantic_block_gated_until_parser_backend`. Full
+  detail (incl. the exact values and what stays blocked) in the gap audit §9.2.
 
 ## 3. The settings-value loader gap (why `settings.values` stays injected-only)
 
@@ -204,15 +200,21 @@ snapshot list and fail/skip, never fabricate a pass. Wiring real
 - **`validate_import.oscar_reference.export_hash`** — now committed-fixture-backed
   on the AirSense 10 fixture for **both** the per-day `summary.csv` and the
   per-session `sessions.csv` (parser-free hash checks; see §2.2).
+- **`validate_import.warnings` (`codes`/`absent`), `session_blocks.block_count`,
+  `therapy_aggregates` (usage/wall-clock/gap seconds), `events.count`** — now
+  committed-fixture-backed on the AirSense 10 fixture, authored from and verified
+  against the real normalized `ImportRun` (`cpap-py`-gated, parsed in Linux/Docker;
+  see §2.2 and gap audit §9.2). First *value-level* committed import coverage.
 
 **Injected-only today** (no committed fixture drives them — exercised by an
 injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
 
-- `validate_import.warnings` (`codes`/`absent`)
-- `validate_import.session_blocks` (`block_count` **and** `intervals`)
-- `validate_import.therapy_aggregates` (`usage`/`wall_clock`/`gap`/`block_count`)
-- `validate_import.settings` (`snapshot_count`/`present`/`values`)
-- `validate_import.events` (`count`/`types`/ordered `events`)
+- `validate_import.session_blocks.intervals` (timestamped — deferred; only
+  `block_count` is committed-fixture-backed, above)
+- `validate_import.events` `types` / ordered timestamped `events` (only `count` is
+  committed-fixture-backed, above)
+- `validate_import.settings` (`snapshot_count`/`present`/`values`) — loader builds
+  no `SettingsSnapshot`
 - `validate_import.oscar_reference.parity` (numeric parity — still deferred,
   always a skip; the export-**hash** half is now fixture-backed, above)
 - `validate_import.identity_hashes` (synthetic upserted DB rows, DB-gated)

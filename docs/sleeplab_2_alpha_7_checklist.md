@@ -339,3 +339,24 @@ a prebuilt wheel (a Linux/CI runner — manylinux — or macOS, or a Windows hos
 MSVC Build Tools), confirm `test_fixture_normalized_import_run_acquired_via_loader`
 passes, then author `warnings`/`block_count`/`therapy_aggregates`/`events.count`
 from the verified normalized run.
+
+**Parser-backed semantic coverage — LANDED (later phase, in Linux/Docker):** the
+"next safe task" above is now done. The fixture was parsed in a `python:3.12-slim`
+container (manylinux `pyedflib` wheel — no MSVC build needed; `cpap_parser`+`cpap_py`
+import cleanly), `ResMedNativeLoader` produced a normalized `ImportRun`, and the
+first **value-level** semantic `expected.import` blocks were authored *from that
+run* and committed: `warnings.codes`/`warnings.absent`,
+`session_blocks.block_count`, `therapy_aggregates` (usage/wall-clock/gap seconds),
+and `events.count` for the 3 detailed nights. They are verified by
+`tests/conformance/test_resmed_airsense10.py::test_fixture_semantic_expected_import_matches_normalized_run`
+(`cpap-py`-gated: runs in Linux/Docker, skips cleanly on Windows/CI — never
+fabricates a pass). **No dependency/lock/tracked files were changed** (the install
+stayed inside the ephemeral container); the manifest carries an
+`import_expected_provenance` note. Exact values and the full method are in gap audit
+§9.2. **Still blocked (unchanged):** `settings.values` (no `SettingsSnapshot` is
+built — settings empty on all 40 sessions); timestamped `session_blocks.intervals`
+and ordered `events` (anonymization-calendar split + event-type vocabulary — no
+timestamps authored). **Next safe task:** either map `SettingsSnapshot` in the
+loader (a loader change — stop-and-ask if it touches production) to unblock
+`settings.present`/`values`, or settle the event-type vocabulary + calendar rebase
+before authoring timestamped intervals/events.
