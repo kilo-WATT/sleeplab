@@ -582,7 +582,18 @@ def upsert_settings_snapshot(
     parser_id: str,
     parser_version: str,
     diagnostics: list[dict],
+    confidence: str = "strong",
+    validation_status: str | None = None,
 ) -> int:
+    # ``confidence``/``validation_status`` default to the legacy STR behavior
+    # (``'strong'`` + diagnostics-derived) so existing callers are unchanged; the
+    # cpap-parser persistence bridge passes its own conservative values for a
+    # single-field, not-yet-cross-validated mapping (e.g. ``probable``/``partial``).
+    resolved_validation = validation_status or (
+        "partial"
+        if any(item.get("severity") in {"warning", "error"} for item in diagnostics)
+        else "validated"
+    )
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -593,7 +604,7 @@ def upsert_settings_snapshot(
                 diagnostics, updated_at
             ) VALUES (
                 %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::uuid[],
-                %s, 'strong', %s, %s, %s, %s::jsonb, NOW()
+                %s, %s, %s, %s, %s, %s::jsonb, NOW()
             )
             ON CONFLICT (machine_id, effective_at, adapter_id) DO UPDATE SET
                 session_id = EXCLUDED.session_id,
@@ -620,11 +631,8 @@ def upsert_settings_snapshot(
                 json.dumps(source_names),
                 source_file_ids,
                 adapter_id,
-                (
-                    "partial"
-                    if any(item.get("severity") in {"warning", "error"} for item in diagnostics)
-                    else "validated"
-                ),
+                confidence,
+                resolved_validation,
                 parser_id,
                 parser_version,
                 json.dumps(diagnostics),

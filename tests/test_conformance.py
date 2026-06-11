@@ -4,7 +4,7 @@ import hashlib
 import json
 import shutil
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2420,6 +2420,124 @@ def test_validate_import_identity_hashes_incremental_preserves_first_night(db, t
 
     # The combined-set hash grows (B added) — expected, not churn.
     assert snap_b["sessions"] != snap_a["sessions"]
+
+
+def test_persist_import_run_writes_therapy_mode_settings_snapshot(db, test_user):
+    """DB-gated: the cpap-parser persist path now writes a settings_snapshots row.
+
+    Closes the scoreboard's settings_snapshots 40→0 gap for ``therapy_mode``. A
+    minimal normalized run (one session carrying a ``therapy_mode=APAP`` snapshot)
+    is persisted via ``persist_import_run``; the test asserts the snapshot row, the
+    flattened ``sessions.therapy_mode`` column, that unmapped fields stay ``NULL``
+    (no fabrication), and that a re-import is idempotent (no duplicate row).
+    """
+    from importer.loaders.models import Confidence, Session, SettingsSnapshot
+    from importer.loaders.persist import persist_import_run
+
+    raw_conn = db.connection().connection.driver_connection
+    user_id = test_user["id"]
+    machine_id, run_id = _new_machine_and_run(raw_conn, user_id=user_id, serial="SET-SNAP")
+
+    start = datetime(2026, 6, 1, 22, 0)
+    session = Session(
+        source_session_key="resmed:SET-SNAP:2026-06-01",
+        machine_key="SET-SNAP",
+        start_time=start,
+        end_time=start + timedelta(hours=8),
+        machine_local_date="2026-06-01",
+        timezone_basis="machine_local",
+        settings=[
+            SettingsSnapshot(
+                effective_at=start,
+                settings={"therapy_mode": "APAP"},
+                source_names={"therapy_mode": "pressure_mode"},
+                source_file_ids=("STR.edf",),
+                confidence=Confidence.PROBABLE,
+            )
+        ],
+    )
+    run = SimpleNamespace(
+        machine=SimpleNamespace(serial_number="SET-SNAP", manufacturer="ResMed"),
+        sessions=[session],
+        adapter_version="0.1",
+    )
+
+    counts = persist_import_run(
+        run, user_id, raw_conn, import_run_id=run_id, machine_id=machine_id, raw_directory=None
+    )
+    assert counts["settings"] == 1
+
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT normalized_settings->>'therapy_mode', confidence, validation_status,
+                   adapter_id, source_names->>'therapy_mode'
+            FROM settings_snapshots WHERE machine_id = %s
+            """,
+            (machine_id,),
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    therapy_mode, confidence, validation_status, adapter_id, source_name = rows[0]
+    assert therapy_mode == "APAP"
+    assert confidence == "probable"  # conservative, not overclaimed as 'strong'
+    assert validation_status == "partial"
+    assert adapter_id == "resmed-cpap-parser-v1"
+    assert source_name == "pressure_mode"
+
+    # Flattened onto the sessions row; unmapped settings stay NULL (not fabricated).
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            "SELECT therapy_mode, mask_type, humidity_level, temperature_c "
+            "FROM sessions WHERE machine_id = %s",
+            (machine_id,),
+        )
+        srow = cur.fetchone()
+    assert srow == ("APAP", None, None, None)
+
+    # Idempotent re-import: same effective_at/adapter -> update in place, no dup.
+    persist_import_run(
+        run, user_id, raw_conn, import_run_id=run_id, machine_id=machine_id, raw_directory=None
+    )
+    with raw_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM settings_snapshots WHERE machine_id = %s", (machine_id,))
+        assert cur.fetchone()[0] == 1
+
+
+def test_persist_import_run_writes_no_settings_when_session_has_none(db, test_user):
+    """DB-gated: a session without settings writes no snapshot and leaves columns NULL."""
+    from importer.loaders.models import Session
+    from importer.loaders.persist import persist_import_run
+
+    raw_conn = db.connection().connection.driver_connection
+    user_id = test_user["id"]
+    machine_id, run_id = _new_machine_and_run(raw_conn, user_id=user_id, serial="SET-NONE")
+
+    start = datetime(2026, 6, 1, 22, 0)
+    session = Session(
+        source_session_key="resmed:SET-NONE:2026-06-01",
+        machine_key="SET-NONE",
+        start_time=start,
+        end_time=start + timedelta(hours=8),
+        machine_local_date="2026-06-01",
+        timezone_basis="machine_local",
+        settings=[],
+    )
+    run = SimpleNamespace(
+        machine=SimpleNamespace(serial_number="SET-NONE", manufacturer="ResMed"),
+        sessions=[session],
+        adapter_version="0.1",
+    )
+
+    counts = persist_import_run(
+        run, user_id, raw_conn, import_run_id=run_id, machine_id=machine_id, raw_directory=None
+    )
+    assert counts["settings"] == 0
+    with raw_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM settings_snapshots WHERE machine_id = %s", (machine_id,))
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT therapy_mode FROM sessions WHERE machine_id = %s", (machine_id,))
+        assert cur.fetchone()[0] is None
 
 
 def test_cli_import_flag_synthetic_fixture_reports_empty_import_section(capsys):

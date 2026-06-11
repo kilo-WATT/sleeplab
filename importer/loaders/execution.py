@@ -153,6 +153,7 @@ def run_cpap_parser_import(
             imported_blocks=counts["blocks"],
             imported_events=counts["events"],
             imported_channels=counts["channels"],
+            imported_settings=counts["settings"],
             summary_only_days=counts["summary_only_days"],
             warnings=[_warning_dict(warning) for warning in run.warnings],
             errors=[],

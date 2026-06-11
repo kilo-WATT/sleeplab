@@ -37,10 +37,21 @@ than silently dropping or inventing data we record the gaps here:
   onto the ``sessions`` columns here. ``avg_pressure``/``p95_pressure`` use the
   device's set pressure (``Press.2s``), the same channel the old path used. AHI,
   event counts and the three usage semantics are carried through as before.
+* **Settings snapshots** are persisted from ``Session.settings``. Each
+  ``SettingsSnapshot`` is written to ``settings_snapshots`` via the shared
+  ``db.upsert_settings_snapshot`` (idempotent), and its normalized settings are
+  flattened onto the ``sessions`` columns (``therapy_mode`` …), mirroring the
+  legacy STR projection. Today the loader emits only ``therapy_mode`` (from
+  cpap-parser ``pressure_mode``); fields the parser does not expose stay ``NULL``
+  and nothing is fabricated. Confidence/validation are conservative
+  (``probable``/``partial``) — a single device-reported field, not yet
+  cross-validated.
 
 Remaining gaps (genuinely unavailable from cpap-py, written ``NULL``):
 
 * Oximetry (``session_spo2``, ``has_spo2``) is not mapped yet.
+* Settings beyond ``therapy_mode`` (mask_type, humidifier, pressure/EPR/ramp) are
+  absent from the cpap-parser schema, so they remain ``NULL``.
 """
 
 from __future__ import annotations
@@ -104,7 +115,7 @@ def persist_import_run(
     Returns:
         A summary dict with counts of what was written, suitable for logging and
         for :func:`importer.db.finish_import_run`:
-        ``{"sessions", "blocks", "events", "channels", "derived_values",
+        ``{"sessions", "blocks", "events", "channels", "settings", "derived_values",
         "summary_only_days"}``.
 
     The function commits nothing itself — the caller owns the transaction so a
@@ -127,6 +138,7 @@ def persist_import_run(
         replace_session_events,
         upsert_session,
         upsert_session_block,
+        upsert_settings_snapshot,
     )
 
     machine_tz_name, machine_tz = _resolve_machine_tz(db_conn, user_id)
@@ -136,6 +148,7 @@ def persist_import_run(
         "blocks": 0,
         "events": 0,
         "channels": 0,
+        "settings": 0,
         "derived_values": 0,
         "summary_only_days": 0,
         "metric_rows": 0,
@@ -231,6 +244,25 @@ def persist_import_run(
             signals=session.signals,
         )
 
+        # -- Settings snapshots ------------------------------------------
+        # Persist the loader-provided SettingsSnapshots (today: therapy_mode only,
+        # from cpap-parser's pressure_mode). Nothing is fabricated — only what the
+        # normalized session actually carries is written, with the snapshot's own
+        # (conservative) confidence. Idempotent: the helper's
+        # ON CONFLICT (machine_id, effective_at, adapter_id) makes a re-import
+        # update-in-place rather than duplicate.
+        counts["settings"] += _write_settings_snapshots(
+            db_conn,
+            session=session,
+            user_id=user_id,
+            machine_id=machine_id,
+            import_run_id=import_run_id,
+            session_db_id=str(session_db_id),
+            machine_tz=machine_tz,
+            adapter_version=run.adapter_version,
+            upsert=upsert_settings_snapshot,
+        )
+
         # -- Derived values ----------------------------------------------
         summary = {key: _jsonable(value.value) for key, value in derived.items()}
         if summary:
@@ -292,6 +324,7 @@ def _session_row(
     """
     event_counts = _event_counts(session)
     ahi = _derived_scalar(derived, "ahi", default=None)
+    _settings = _session_settings_map(session)
     return {
         "session_id": _session_id(session, folder_date),
         "folder_date": folder_date,
@@ -324,10 +357,14 @@ def _session_row(
         "avg_flow_lim": _derived_scalar(derived, "avg_flow_lim", default=None),
         # Oximetry is not mapped by the loader yet (gap).
         "has_spo2": False,
-        "therapy_mode": None,
-        "mask_type": None,
-        "humidity_level": None,
-        "temperature_c": None,
+        # Flattened settings columns mirror the legacy projection
+        # (db._project_settings_to_sessions): only values the loader actually
+        # carries are set; everything the parser does not expose stays None
+        # (never fabricated). Today that is therapy_mode (from pressure_mode).
+        "therapy_mode": _settings.get("therapy_mode"),
+        "mask_type": _settings.get("mask_type"),
+        "humidity_level": _settings.get("humidifier_level"),
+        "temperature_c": _settings.get("tube_temperature_c"),
         "machine_tz": machine_tz_name,
         "user_id": user_id,
         "machine_id": machine_id,
@@ -419,6 +456,89 @@ def _replace_signal_channel_metadata(
             rows,
         )
     return len(rows)
+
+
+# -- Settings ---------------------------------------------------------------
+
+
+def _session_settings_map(session: Session) -> dict[str, Any]:
+    """Merge a session's ``SettingsSnapshot`` settings into one dict (later wins).
+
+    Used to flatten the loader's settings onto the ``sessions`` columns, mirroring
+    the legacy ``db._project_settings_to_sessions`` projection. Only keys the loader
+    actually emits appear here — nothing is invented.
+    """
+    merged: dict[str, Any] = {}
+    for snapshot in getattr(session, "settings", []) or []:
+        merged.update(_normalized_settings(getattr(snapshot, "settings", {}) or {}))
+    return merged
+
+
+def _normalized_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Keep only real loader-provided settings, never missing placeholders."""
+    return {
+        key: value
+        for key, value in settings.items()
+        if value is not None
+        and not (isinstance(value, str) and value.strip().casefold() == "unknown")
+    }
+
+
+def _write_settings_snapshots(
+    db_conn: Any,
+    *,
+    session: Session,
+    user_id: str,
+    machine_id: str,
+    import_run_id: str,
+    session_db_id: str,
+    machine_tz: ZoneInfo,
+    adapter_version: str,
+    upsert: Any,
+) -> int:
+    """Persist the loader-provided ``SettingsSnapshot``s into ``settings_snapshots``.
+
+    Writes one row per snapshot that actually carries settings, through the shared
+    ``db.upsert_settings_snapshot`` helper (idempotent on
+    ``(machine_id, effective_at, adapter_id)``). Conservative by construction:
+
+    * a snapshot with no real settings is **skipped** (no empty/placeholder row);
+    * ``vendor_settings`` is ``{}`` (cpap-parser exposes no raw vendor blob) and
+      ``source_file_ids`` is ``[]`` (the ``uuid[]`` column has no
+      ``import_source_files`` mapping on this path yet);
+    * the snapshot's own ``confidence`` (e.g. ``probable``) is preserved and the
+      row is marked ``validation_status='partial'`` — a single device-reported
+      field, not yet cross-validated, so nothing is overclaimed.
+    """
+    written = 0
+    for snapshot in getattr(session, "settings", []) or []:
+        normalized = _normalized_settings(dict(getattr(snapshot, "settings", {}) or {}))
+        if not normalized:
+            continue
+        source_names = {
+            key: value
+            for key, value in dict(getattr(snapshot, "source_names", {}) or {}).items()
+            if key in normalized
+        }
+        written += upsert(
+            db_conn,
+            user_id=user_id,
+            machine_id=machine_id,
+            session_id=session_db_id,
+            import_run_id=import_run_id,
+            effective_at=_localize(snapshot.effective_at, machine_tz),
+            normalized_settings=normalized,
+            vendor_settings={},
+            source_names=source_names,
+            source_file_ids=[],
+            adapter_id=_ADAPTER_ID,
+            parser_id="sleeplab.resmed_cpap_parser",
+            parser_version=str(adapter_version),
+            diagnostics=[],
+            confidence=str(getattr(snapshot, "confidence", "probable")),
+            validation_status="partial",
+        )
+    return written
 
 
 # -- Small helpers ---------------------------------------------------------

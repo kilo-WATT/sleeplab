@@ -997,6 +997,82 @@ def test_build_session_omits_settings_when_mode_unknown_or_absent():
         assert session.settings == [], summary
 
 
+def test_persist_session_row_flattens_only_present_settings():
+    """Persist bridge flattens loader settings onto the ``sessions`` columns.
+
+    Parser-free: drives ``persist._session_row`` directly. A session carrying a
+    ``therapy_mode`` snapshot must set ``sessions.therapy_mode``; every settings
+    column the loader does not expose (mask_type / humidity_level / temperature_c)
+    stays ``None`` — never fabricated. A session with no settings keeps them all
+    ``None``.
+    """
+    from importer.loaders import persist
+    from importer.loaders.models import Confidence, Session, SettingsSnapshot
+
+    start = datetime(2026, 6, 1, 22, 0)
+
+    def _session(settings):
+        return Session(
+            source_session_key="resmed:SET:2026-06-01",
+            machine_key="SET",
+            start_time=start,
+            end_time=start + timedelta(hours=8),
+            machine_local_date="2026-06-01",
+            timezone_basis="machine_local",
+            settings=list(settings),
+        )
+
+    snapshot = SettingsSnapshot(
+        effective_at=start,
+        settings={"therapy_mode": "APAP"},
+        source_names={"therapy_mode": "pressure_mode"},
+        source_file_ids=("STR.edf",),
+        confidence=Confidence.PROBABLE,
+    )
+
+    def _row(session):
+        return persist._session_row(
+            session=session,
+            user_id="u",
+            machine_id="m",
+            import_run_id="r",
+            folder_date=date(2026, 6, 1),
+            start_dt=start,
+            duration_seconds=28800,
+            derived={},
+            serial="SER",
+            manufacturer="ResMed",
+            machine_tz_name="UTC",
+            has_detailed=True,
+        )
+
+    with_settings = _row(_session([snapshot]))
+    assert with_settings["therapy_mode"] == "APAP"
+    # Absent fields stay None — no fabricated mask/humidity/temperature.
+    assert with_settings["mask_type"] is None
+    assert with_settings["humidity_level"] is None
+    assert with_settings["temperature_c"] is None
+
+    without = _row(_session([]))
+    assert without["therapy_mode"] is None
+    assert without["mask_type"] is None
+
+    # The merge helper exposes exactly the loader's keys, nothing invented.
+    assert persist._session_settings_map(_session([snapshot])) == {"therapy_mode": "APAP"}
+    assert persist._session_settings_map(_session([])) == {}
+
+    placeholder = SettingsSnapshot(
+        effective_at=start,
+        settings={"therapy_mode": "Unknown", "mask_type": None},
+        source_names={"therapy_mode": "pressure_mode"},
+        source_file_ids=(),
+        confidence=Confidence.PROBABLE,
+    )
+    placeholder_row = _row(_session([placeholder]))
+    assert placeholder_row["therapy_mode"] is None
+    assert persist._session_settings_map(_session([placeholder])) == {}
+
+
 def test_build_session_emits_therapy_aggregate_derived_values():
     """The ``therapy_aggregates`` comparator's source values ARE emitted.
 
