@@ -327,7 +327,15 @@ contract holds in both environments via
 `test_validate_import_airsense10_semantic_block_gated_until_parser_backend`, and a
 new `cpap-py`-gated `test_fixture_normalized_import_run_acquired_via_loader` proves
 the normalized-run acquisition path (skips cleanly until the backend is installed).
-No values were fabricated while the backend is unavailable. **Next safe task:**
-install `cpap-parser[resmed]` per §9, confirm the run-acquisition test passes, then
-author `warnings`/`block_count`/`therapy_aggregates`/`events.count` from the
-verified run.
+No values were fabricated while the backend is unavailable. **Local install
+attempted (this phase) and blocked by a host toolchain gap:** the authorized
+validation-only `uv pip install "cpap-parser[resmed] @ git+…@6e015c4c…"` failed
+because its transitive `pyedflib` dependency has no prebuilt wheel for this Python
+3.12 / Windows host and its `c_edf` C extension cannot compile without Microsoft
+C++ Build Tools (MSVC v14+). `cpap_py` remains absent; **no dependency/lock/tracked
+files were changed**; nothing was committed from the install (gap audit §9.1).
+**Next safe task:** run the install on an environment where `pyedflib` resolves to
+a prebuilt wheel (a Linux/CI runner — manylinux — or macOS, or a Windows host with
+MSVC Build Tools), confirm `test_fixture_normalized_import_run_acquired_via_loader`
+passes, then author `warnings`/`block_count`/`therapy_aggregates`/`events.count`
+from the verified normalized run.

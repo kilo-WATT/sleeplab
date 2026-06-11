@@ -279,3 +279,38 @@ Audited this phase to answer "why is `cpap_parser` importable but `cpap_py` not?
   `test_fixture_normalized_import_run_acquired_via_loader` — will run instead of
   skip. Only then author semantic `expected.import` values, sourced from the
   verified normalized run.
+
+### 9.1 Local install attempt (this phase) — blocked by missing C toolchain
+
+The operator-authorized, **validation-only** local install was attempted on this
+Windows dev host:
+
+```
+uv pip install "cpap-parser[resmed] @ git+https://github.com/kilo-WATT/cpap-parser.git@6e015c4c95317683f68027099d7e998e36131eb2"
+```
+
+**Result: failed to build a transitive native dependency.** Resolution proceeded
+correctly through the chain `cpap-parser[resmed]` → `cpap-py` (v1.0.0) →
+`pyedflib` (v0.1.42), but **`pyedflib` has no prebuilt wheel for this Python 3.12 /
+Windows environment and must compile its `c_edf` C extension from source**. That
+build aborts with:
+
+> `error: Microsoft Visual C++ 14.0 or greater is required. Get it with "Microsoft C++ Build Tools".`
+
+So the blocker is a **host toolchain gap**, not a repository or pin problem:
+`cpap_py` remains un-importable, **no dependency/lock/tracked files were changed**
+(`pyproject.toml`/`uv.lock`/`requirements.txt`/`Dockerfile` untouched), nothing was
+committed from the install, and the `.venv` is a gitignored local artifact. Tasks
+depending on a normalized run (semantic `expected.import` authoring) therefore stay
+blocked on this host.
+
+**Concrete prerequisite for the next attempt** — use an environment where
+`pyedflib` resolves to a **prebuilt wheel** so no C compiler is needed: a Linux
+host / CI runner (manylinux wheels) or macOS, **or** a Windows host with the
+**Microsoft C++ Build Tools (MSVC v14+)** installed so the source build can
+proceed. A Linux/CI runner is the lowest-friction path (it is also where the
+Dockerfile already installs `requirements.txt` successfully). The separate concern
+about adding the parser to `pyproject.toml`/`uv.lock` (which would rebuild these
+native deps in every CI run and activate the gated tests) is **unchanged** — that
+remains a deliberate, declined change; this note only records the local-host build
+failure.

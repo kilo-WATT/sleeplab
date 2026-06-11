@@ -163,7 +163,11 @@ anonymized reference CSVs in fixture #2.
     Dockerfile, deliberately absent from `pyproject.toml`/`uv.lock` and CI's
     `uv sync --group dev`). Dependency files were **not** changed (adding it would
     rebuild git-sourced native deps in CI and activate the gated tests — not
-    low-risk); see the gap audit §9 for the operator-authorized install path.
+    low-risk); see the gap audit §9 for the operator-authorized install path. An
+    authorized validation-only local install was **attempted this phase and failed**
+    on the Windows dev host: the transitive `pyedflib` has no wheel here and its C
+    extension needs MSVC Build Tools (gap audit §9.1). `cpap_py` stays absent; the
+    next attempt should run where `pyedflib` ships a prebuilt wheel (Linux/CI/macOS).
   - **(2) Fixture `source_directory` — FIXED this phase.** The manifest now pins
     `"source_directory": "."` so `_acquire_import_run` resolves the source to the
     committed fixture root (the card's `DATALOG/`/`STR.edf` live there, not under a
