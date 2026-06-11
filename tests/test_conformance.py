@@ -2448,7 +2448,7 @@ def test_cli_import_flag_reports_oscar_reference_for_airsense10(capsys):
     blocks = payload["import"]["blocks"]
     assert payload["import"]["passed"] is True
     assert blocks["oscar_reference"] == "skipped"
-    for block in ("warnings", "session_blocks", "therapy_aggregates", "events"):
+    for block in ("warnings", "session_blocks", "therapy_aggregates", "events", "settings"):
         assert blocks[block] in {"passed", "skipped"}, blocks
     assert not any("oscar_reference" in f for f in payload["import"]["failures"])
 

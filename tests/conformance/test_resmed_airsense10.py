@@ -451,17 +451,18 @@ def test_fixture_semantic_expected_import_matches_normalized_run():
 
     First **committed, value-level, fixture-backed** import-level coverage on a real
     (anonymized) card. The manifest's ``warnings`` / ``session_blocks.block_count`` /
-    ``therapy_aggregates`` / ``events.count`` blocks were authored *from* the actual
-    normalized ``ImportRun`` (default ``ImportOptions``), and this drives
-    ``validate_import`` against that same parsed run to prove they are not drifting
-    fabrications: every authored value must match the loader's real output, or the
-    test fails.
+    ``therapy_aggregates`` / ``events.count`` / ``settings`` blocks were authored
+    *from* the actual normalized ``ImportRun`` (default ``ImportOptions``), and this
+    drives ``validate_import`` against that same parsed run to prove they are not
+    drifting fabrications: every authored value must match the loader's real output,
+    or the test fails.
 
     Scope guardrails baked in:
 
     * Only non-timestamped aggregates are checked (counts, warning codes,
-      usage/wall-clock/gap seconds). No ``settings.values`` (the loader builds no
-      ``SettingsSnapshot``), no exact block-interval or event timestamps.
+      usage/wall-clock/gap seconds, and the device-reported ``settings.therapy_mode``
+      — the only setting cpap-parser exposes). No exact block-interval or event
+      timestamps; no settings beyond ``therapy_mode`` (the parser schema has none).
     * ``oscar_reference`` stays ``"skipped"`` because its numeric-parity sub-check is
       deferred — its hash half still verifies (no failure).
     * ``cpap-py``-gated: skips cleanly (never fabricates a pass) where the EDF
@@ -488,12 +489,58 @@ def test_fixture_semantic_expected_import_matches_normalized_run():
     assert result.failures == ()
 
     statuses = summarize_import_blocks(_FIXTURE_DIR, result)
-    # The four semantic blocks are checked-and-passed (not gated/absent).
-    for block in ("warnings", "session_blocks", "therapy_aggregates", "events"):
+    # The five semantic blocks are checked-and-passed (not gated/absent).
+    for block in ("warnings", "session_blocks", "therapy_aggregates", "events", "settings"):
         assert statuses.get(block) == "passed", (block, statuses, result.skipped)
     # oscar_reference hash verified but parity is deferred → block reads "skipped".
     assert statuses.get("oscar_reference") == "skipped", statuses
     assert not any("oscar_reference" in f for f in result.failures), result.failures
-    # settings.values stays unauthored (loader emits no SettingsSnapshot) — guard
-    # against an accidental future settings block creeping in unverified.
-    assert "settings" not in statuses, statuses
+
+
+def test_fixture_settings_snapshot_maps_only_therapy_mode():
+    """Parser-backed: every session carries one therapy-mode-only ``SettingsSnapshot``.
+
+    cpap-parser exposes a single normalized therapy *setting* — the daily summary's
+    ``pressure_mode`` (an ``"APAP"`` AutoSet device here) — so the loader maps it to
+    ``SettingsSnapshot.therapy_mode`` and nothing else. This pins, against the real
+    card, that:
+
+    * each session has exactly one snapshot (mode is present for every STR night);
+    * the only mapped key is ``therapy_mode`` — no fabricated min/max/set pressure,
+      EPR, ramp, humidifier, or mask_type (none exist in the parser schema);
+    * no placeholder leaks in — no ``"Unknown"``/``""``/fake-zero/fake-false;
+    * provenance + a conservative confidence are recorded.
+
+    ``cpap-py``-gated: skips cleanly where the EDF backend is absent.
+    """
+    from importer.loaders.models import Confidence, ImportOptions
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    pytest.importorskip(
+        "cpap_py",
+        reason="cpap-py EDF backend not installed; STR.edf/DATALOG cannot be decoded",
+    )
+
+    loader = ResMedNativeLoader()
+    detected = loader.detect(_FIXTURE_DIR / _manifest().get("source_directory", "source"))
+    assert detected, "structural detection must find the ResMed card"
+    run, _directory = loader.import_data_with_directory(detected[0], ImportOptions())
+
+    sessions_with_settings = [s for s in run.sessions if s.settings]
+    assert sessions_with_settings, "loader should now populate Session.settings"
+
+    mapped_keys: set[str] = set()
+    for session in sessions_with_settings:
+        assert len(session.settings) == 1, session.machine_local_date
+        snapshot = session.settings[0]
+        # Only therapy_mode, and only a real value — never a fabricated placeholder.
+        assert set(snapshot.settings) == {"therapy_mode"}, snapshot.settings
+        assert snapshot.settings["therapy_mode"] not in ("", "Unknown", None)
+        assert snapshot.source_names.get("therapy_mode") == "pressure_mode"
+        assert snapshot.source_file_ids == ("STR.edf",)
+        assert snapshot.confidence == Confidence.PROBABLE
+        assert snapshot.effective_at == session.start_time
+        mapped_keys |= set(snapshot.settings)
+
+    # Across the whole card, therapy_mode is the *only* setting ever emitted.
+    assert mapped_keys == {"therapy_mode"}, mapped_keys
