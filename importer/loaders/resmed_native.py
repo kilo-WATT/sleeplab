@@ -70,6 +70,7 @@ from .models import (
     NormalizedScalar,
     Session,
     SessionBlock,
+    SettingsSnapshot,
     SignalChannel,
     ValidationStatus,
     WaveformSegment,
@@ -320,6 +321,7 @@ class ResMedNativeLoader(LoaderAdapter):
             timezone_basis="machine_local",
             warnings=warnings,
         )
+        session.settings = self._session_settings(summary, start_time)
         session.derived_values = self._summary_derived_values(summary, has_detailed_data)
         # Per-signal summary statistics (avg/p95 pressure, avg leak, resp rate,
         # …) are derived here, in the loader, so they are conformance-testable and
@@ -378,6 +380,52 @@ class ResMedNativeLoader(LoaderAdapter):
         """
         high_rate_keys = {channel for channel, _unit in _HIGH_RATE_CHANNELS}
         return any(segment.channel_key in high_rate_keys for segment in waveforms)
+
+    @staticmethod
+    def _session_settings(summary, effective_at: datetime) -> list[SettingsSnapshot]:
+        """Map the device-reported therapy mode into a minimal ``SettingsSnapshot``.
+
+        cpap-parser exposes exactly **one** normalized therapy *setting* on the
+        daily summary: ``CPAPSessionSummary.pressure_mode`` — the STR.edf mode code
+        rendered as a label (``"CPAP"``/``"APAP"``/``"BiLevel …"``/``"ASV"``). The
+        rest of the ``SettingsSnapshot`` vocabulary (min/max/set pressure, EPR,
+        ramp, humidifier, mask type) is **not present** in the cpap-parser schema —
+        ``pressure_50``/``pressure_95`` are *measured* mask-pressure percentiles,
+        not configured settings — so only ``therapy_mode`` is mapped here. See
+        ``docs/sleeplab_2_resmed_normalized_output_gap_audit.md`` §10.
+
+        A missing or unrecognised mode is left **absent** (no snapshot at all),
+        never coerced to a placeholder: ``pressure_mode`` is ``""`` when unset and
+        the literal ``"Unknown"`` for an STR mode code the parser does not map, and
+        both mean "no real setting" — consistent with the conformance
+        missing-≠-off semantics. When no real setting is present, ``Session.settings``
+        stays empty.
+
+        ``effective_at`` reuses the session's own ``start_time`` (the detailed
+        night's first session start, or the summary calendar-day anchor for a
+        summary-only/ghost day) — a defensible existing anchor, never an invented
+        global effective date. ``confidence`` is deliberately conservative
+        (``PROBABLE``): the value is device-reported but is an early, single-field
+        mapping not yet cross-validated against an independent reference.
+        """
+        mode = getattr(summary, "pressure_mode", None)
+        settings: dict[str, NormalizedScalar] = {}
+        source_names: dict[str, str] = {}
+        # Only a real, recognised mode is mapped; "" / "Unknown" stay absent.
+        if mode and mode != "Unknown":
+            settings["therapy_mode"] = mode
+            source_names["therapy_mode"] = "pressure_mode"
+        if not settings:
+            return []
+        return [
+            SettingsSnapshot(
+                effective_at=effective_at,
+                settings=settings,
+                source_names=source_names,
+                source_file_ids=("STR.edf",),
+                confidence=Confidence.PROBABLE,
+            )
+        ]
 
     @staticmethod
     def _summary_derived_values(summary, has_detailed_data: bool) -> list[DerivedValue]:

@@ -923,30 +923,78 @@ def test_run_warnings_persist_as_structured_diagnostics():
 # ---------------------------------------------------------------------------
 
 
-def test_build_session_emits_no_settings_snapshot_documents_values_gap():
-    """Loader gap: no ``SettingsSnapshot`` is built, so ``settings.values`` can't pass.
+def _summary_with_mode(pressure_mode):
+    """A summary fake carrying a ``pressure_mode`` (the only setting cpap-parser exposes)."""
+    from types import SimpleNamespace
 
-    ``validate_import``'s ``settings.values`` comparator is implemented and
-    unit-tested, but against a real card it has nothing to compare: the ResMed
-    loader never populates ``Session.settings``. This pins that gap — the only
-    honest committed assertion for this card today is ``settings.present: false``
-    — so a future loader change that maps STR settings into a ``SettingsSnapshot``
-    will visibly flip this test.
+    return SimpleNamespace(
+        date=date(2026, 6, 1),
+        has_detailed_data=True,
+        summary_reported_usage=8.0,
+        computed_usage=8.0,
+        recording_span=8.0,
+        ahi=1.0,
+        pressure_mode=pressure_mode,
+    )
+
+
+def test_build_session_maps_therapy_mode_settings_snapshot():
+    """Loader now maps ``pressure_mode`` → one ``SettingsSnapshot.therapy_mode``.
+
+    cpap-parser exposes exactly one normalized therapy *setting* — the daily
+    summary's ``pressure_mode`` label — so ``_build_session`` emits a single
+    ``SettingsSnapshot`` carrying *only* ``therapy_mode`` (no fabricated min/max/
+    set pressure, EPR, ramp, humidifier, or mask_type — those are absent from the
+    parser schema). Source provenance is preserved and ``effective_at`` reuses the
+    session's own ``start_time`` anchor.
     """
+    from importer.loaders.models import Confidence
     from importer.loaders.resmed_native import ResMedNativeLoader
 
     detailed = [_detailed_session(flow_rate=[1.0, 2.0], set_pressure=[10.0, 11.0])]
 
     session = ResMedNativeLoader()._build_session(
-        _waveform_summary(),
+        _summary_with_mode("APAP"),
         detailed=detailed,
         machine_key="SN-TEST",
         include_waveforms=True,
         run_warnings=[],
     )
 
-    # The deepest blocker for fixture-backed settings.values: empty, not faked.
-    assert session.settings == []
+    assert len(session.settings) == 1
+    snapshot = session.settings[0]
+    # Only therapy_mode is mapped — nothing fabricated for absent fields.
+    assert snapshot.settings == {"therapy_mode": "APAP"}
+    assert snapshot.source_names == {"therapy_mode": "pressure_mode"}
+    assert snapshot.source_file_ids == ("STR.edf",)
+    assert snapshot.confidence == Confidence.PROBABLE
+    # effective_at reuses the existing session anchor, not an invented date.
+    assert snapshot.effective_at == session.start_time
+
+
+def test_build_session_omits_settings_when_mode_unknown_or_absent():
+    """Missing/unknown therapy mode stays absent — never a fabricated placeholder.
+
+    ``pressure_mode`` is ``""`` when STR.edf has no mode and the literal
+    ``"Unknown"`` for an unmapped mode code; a summary fake may also omit the
+    attribute entirely. In every "no real setting" case ``Session.settings`` must
+    stay empty — never coerced to ``"Unknown"``/``""``/a fake snapshot — so the
+    conformance missing-≠-off semantics hold against a real card.
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    loader = ResMedNativeLoader()
+    detailed = [_detailed_session(flow_rate=[1.0, 2.0], set_pressure=[10.0, 11.0])]
+
+    for summary in (_summary_with_mode("Unknown"), _summary_with_mode(""), _waveform_summary()):
+        session = loader._build_session(
+            summary,
+            detailed=detailed,
+            machine_key="SN-TEST",
+            include_waveforms=True,
+            run_warnings=[],
+        )
+        assert session.settings == [], summary
 
 
 def test_build_session_emits_therapy_aggregate_derived_values():
