@@ -451,18 +451,19 @@ def test_fixture_semantic_expected_import_matches_normalized_run():
 
     First **committed, value-level, fixture-backed** import-level coverage on a real
     (anonymized) card. The manifest's ``warnings`` / ``session_blocks.block_count`` /
-    ``therapy_aggregates`` / ``events.count`` / ``settings`` blocks were authored
-    *from* the actual normalized ``ImportRun`` (default ``ImportOptions``), and this
-    drives ``validate_import`` against that same parsed run to prove they are not
-    drifting fabrications: every authored value must match the loader's real output,
-    or the test fails.
+    ``therapy_aggregates`` / ``events`` (``count`` + per-type ``types``) / ``settings``
+    blocks were authored *from* the actual normalized ``ImportRun`` (default
+    ``ImportOptions``), and this drives ``validate_import`` against that same parsed
+    run to prove they are not drifting fabrications: every authored value must match
+    the loader's real output, or the test fails.
 
     Scope guardrails baked in:
 
     * Only non-timestamped aggregates are checked (counts, warning codes,
-      usage/wall-clock/gap seconds, and the device-reported ``settings.therapy_mode``
-      — the only setting cpap-parser exposes). No exact block-interval or event
-      timestamps; no settings beyond ``therapy_mode`` (the parser schema has none).
+      usage/wall-clock/gap seconds, SleepLab-normalized event *type* counts — not
+      OSCAR parity — and the device-reported ``settings.therapy_mode``, the only
+      setting cpap-parser exposes). No exact block-interval or event timestamps, no
+      ordered event lists/durations; no settings beyond ``therapy_mode``.
     * ``oscar_reference`` stays ``"skipped"`` because its numeric-parity sub-check is
       deferred — its hash half still verifies (no failure).
     * ``cpap-py``-gated: skips cleanly (never fabricates a pass) where the EDF
@@ -544,3 +545,56 @@ def test_fixture_settings_snapshot_maps_only_therapy_mode():
 
     # Across the whole card, therapy_mode is the *only* setting ever emitted.
     assert mapped_keys == {"therapy_mode"}, mapped_keys
+
+
+def test_fixture_event_type_counts_match_normalized_run():
+    """Parser-backed: the manifest's ``events.types`` equal the real per-type tallies.
+
+    Extends the committed ``events`` coverage from total ``count`` to per-type
+    counts. These are **SleepLab normalized** ``event_type`` counts as emitted by
+    ``ResMedNativeLoader`` — the raw cpap-parser labels (``"Central Apnea"`` /
+    ``"Obstructive Apnea"`` / ``"Hypopnea"``) plus the loader-derived ``"Large
+    Leak"`` — **not** OSCAR event-type parity (the raw→OSCAR enum mapping is still
+    deferred; see gap audit §12). The test proves the authored ``types`` are the
+    real run's tallies (not fabricated) and that ``validate_import`` actually
+    checks them: it compares the manifest's ``types`` to ``Counter(event_type)``
+    from the parsed run for each detailed night, then drives ``validate_import``.
+
+    ``cpap-py``-gated: skips cleanly where the EDF backend is absent.
+    """
+    from collections import Counter
+
+    from importer.conformance import summarize_import_blocks, validate_import
+    from importer.loaders.models import ImportOptions
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    pytest.importorskip(
+        "cpap_py",
+        reason="cpap-py EDF backend not installed; STR.edf/DATALOG cannot be decoded",
+    )
+
+    loader = ResMedNativeLoader()
+    detected = loader.detect(_FIXTURE_DIR / _manifest().get("source_directory", "source"))
+    assert detected, "structural detection must find the ResMed card"
+    run, _directory = loader.import_data_with_directory(detected[0], ImportOptions())
+
+    by_date: dict[str, list] = {}
+    for session in run.sessions:
+        by_date.setdefault(session.machine_local_date, []).append(session)
+
+    events_block = _manifest()["expected"]["import"]["events"]
+    assert events_block, "manifest must carry an events block"
+
+    for date_key, expected in events_block.items():
+        assert "types" in expected, f"{date_key} must pin event types"
+        actual = Counter(
+            ev.event_type for s in by_date.get(date_key, []) for ev in s.events
+        )
+        # Authored types are the real, complete per-type tally for that night.
+        assert dict(actual) == expected["types"], (date_key, dict(actual), expected["types"])
+        # Type counts reconcile with the already-pinned total count.
+        assert sum(expected["types"].values()) == expected["count"], date_key
+
+    result = validate_import(_FIXTURE_DIR, run=run)
+    assert result.passed, result.failures
+    assert summarize_import_blocks(_FIXTURE_DIR, result).get("events") == "passed"

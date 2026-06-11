@@ -1901,6 +1901,31 @@ def test_validate_import_airsense10_source_directory_points_at_committed_root():
     assert detected[0].source_root.resolve() == AIRSENSE10_FIXTURE.resolve()
 
 
+def test_validate_import_airsense10_committed_event_types_are_checked():
+    """The committed manifest's ``events.types`` are consumed, not ignored (parser-free).
+
+    Injects a run whose ``2025-01-05`` events deliberately do **not** match the
+    committed ``expected.import.events.2025-01-05.types`` (which pins
+    ``{"Central Apnea": 1, "Obstructive Apnea": 4}``). ``validate_import`` must
+    surface a per-type mismatch for the committed manifest, proving its
+    ``events.types`` entries are actually evaluated. Parser-free — uses an injected
+    ``Session`` so it runs on Windows/CI without ``cpap-py``.
+    """
+    # One scored Central Apnea, zero Obstructive Apnea — wrong vs the committed pin.
+    wrong = _fake_session(
+        "2025-01-05",
+        events=[_event("Central Apnea", datetime(2026, 6, 1, 23, 0), 13.0)],
+    )
+    result = validate_import(AIRSENSE10_FIXTURE, run=_fake_run(sessions=[wrong]))
+
+    assert not result.passed
+    assert any(
+        "expected.import.events.2025-01-05.types.Obstructive Apnea" in f
+        and "expected 4" in f
+        for f in result.failures
+    ), result.failures
+
+
 def test_validate_import_airsense10_semantic_block_gated_until_parser_backend(tmp_path):
     """Phase 2: AirSense 10 *semantic* expected.import blocks are never faked.
 
