@@ -78,7 +78,7 @@ For each vendor-neutral contract area on `Session` / `ImportRun`, what
 |---|---|---|---|---|---|---|---|
 | `ImportRun.warnings` | `warnings` | **Yes** | `_merge_identity` → `resmed_serial_absent`; `_build_session` → `resmed_summary_only_day`, `resmed_waveform_absent`, flushed to run via `run_warnings.extend` | Injected-only (`validate_import`); codes also asserted parser-free by `_build_session` regression tests | **High** (codes parser-free, no PHI) | No `expected.import.warnings` block in the AirSense 10 manifest; auto-parse needs `cpap-py` | Author a `warnings.codes`/`absent` block once a run is obtainable; codes are the safest semantic pin |
 | `Session.blocks` | `session_blocks.block_count` / `.intervals` | **Yes** | `_session_blocks` from `directory.sessions` (non-annotation file-sessions): `start_time`/`end_time`/`file_type` | Injected-only (`validate_import`); span sanity indirectly via computed-usage parity test | `block_count` **medium**; `intervals` **low** | No manifest block; `cpap-py` absent; `intervals` embed (shifted) real timestamps; **timestamp-shift calendar mismatch** (EDF shifted −508d, DATALOG dirs/OSCAR refs on original calendar) | Start with `block_count` per detailed night; defer `intervals` until calendar-rebase + timestamp-safety are settled |
-| `Session.settings` | `settings.snapshot_count` / `.present` / `.values` | **No** | *Nothing.* `_build_session` never constructs a `SettingsSnapshot`; `Session.settings` stays `[]` | Comparator injected-only; **loader emits nothing** | `present`/`snapshot_count` would assert *false*/0 (true today); `values` **not ready** | **Loader gap** — no loader builds `SettingsSnapshot`; STR.edf mode/pressure/EPR/ramp are not mapped. `persist.py` confirms it: `therapy_mode`/`mask_type`/`humidity_level` are hardcoded `None` | Map `SettingsSnapshot` from STR settings in a *future* loader change (stop-and-ask if it touches production); until then only `present:false` is honest |
+| `Session.settings` | `settings.snapshot_count` / `.present` / `.values` | **Partial (updated — see §11)** | `_build_session` → `_session_settings` now emits one snapshot with `therapy_mode` (← `pressure_mode`) when a real mode exists; nothing else (parser exposes no other setting) | `therapy_mode` fixture-backed (`cpap-py`-gated) + parser-free unit tests; `values` for the rest still injected-only | `therapy_mode` **ready & landed**; min/max/set pressure/EPR/ramp/humidifier/mask_type **not in cpap-parser schema** | **Done for `therapy_mode` (§11).** Remaining fields need upstream parser/schema work; `persist.py` still hardcodes `therapy_mode`/`mask_type`/`humidity_level` `None` so mapping is conformance-only |
 | `Session.signals` | *(no comparator)* | **Yes** (when `include_waveforms`) | `_session_waveforms` → `_HIGH_RATE_CHANNELS` (BRP) + `_LOW_RATE_CHANNELS` (PLD) `SignalChannel`s | Fixture-backed via `test_airsense10_fixture_channel_inventory_matches_classification` (pure-Python, **not** `validate_import`) | n/a (no import-level comparator) | No `signals` comparator in `validate_import`; channel inventory already covered elsewhere | None needed; channel inventory is already fixture-backed by its own test |
 | `Session.events` | `events.count` / `.types` / `.events` | **Yes** (scored events always; large-leak only when `include_waveforms`) | `_session_events` from `CPAPSession.events` (`event_type`, `timestamp_sec`→absolute, `duration_sec`); `_large_leak_events` derived from leak signal | Injected-only (`validate_import`); event *counts* indirectly via AHI parity test | `count`/`types` **medium**; ordered `events` **low** | No manifest block; `cpap-py` absent; event **type vocabulary is raw cpap-parser strings** (`"Obstructive Apnea"`, …), not yet mapped to the OSCAR enum; ordered list embeds real timestamps | Start with `count` (and per-type `types`) on detailed nights; defer ordered `events`/timestamps until vocabulary + calendar are settled |
 | `Session.waveforms` | *(no comparator)* | **Yes** (when `include_waveforms`) | `_session_waveforms` → `WaveformSegment` metadata (`sample_count`/`sample_rate_hz`, no arrays) | Indirect: `resmed_waveform_absent` warning tested parser-free | n/a (no import-level comparator) | No waveform comparator; full-night/segment storage is deferred + stop-and-ask | None this milestone (waveform storage out of scope) |
@@ -114,17 +114,16 @@ Three layered blockers, in order of how fundamental they are:
      original calendar (see `test_resmed_airsense10.py::_summaries_by_oscar_date`).
      Authored interval/event timestamps must account for that.
 
-3. **`settings.values` has an additional hard loader gap.** Even with a parser
-   and an authored block, `settings.values` could never pass against this card:
-   **no loader constructs a `SettingsSnapshot`.** `grep SettingsSnapshot
-   importer/` matches only the dataclass definition in `models.py` and the
-   comparator/tests — `ResMedNativeLoader._build_session` never populates
-   `Session.settings`, and `persist.py` hardcodes `therapy_mode`/`mask_type`/
-   `humidity_level`/`temperature_c` to `None`. The comparator correctly *fails*
-   (not fabricates a pass) against an empty snapshot list — but that means the
-   only honest committed assertion today is `present: false`. Wiring real settings
-   is a loader change, deliberately out of scope (stop-and-ask if it would touch
-   production import behavior).
+3. **`settings.values` had an additional hard loader gap — now partially closed
+   (§11).** At the time of this audit no loader constructed a `SettingsSnapshot`,
+   so `settings.values` could not pass against this card. §11 closes this for the
+   one setting cpap-parser exposes: `_build_session` → `_session_settings` now maps
+   `pressure_mode` → `therapy_mode` (and only that). The remaining fields
+   (min/max/set pressure, EPR, ramp, humidifier, mask_type) are **absent from the
+   cpap-parser schema** and stay unmapped, and `persist.py` still hardcodes
+   `therapy_mode`/`mask_type`/`humidity_level`/`temperature_c` to `None` — so the
+   mapping is **conformance-only** and persistence is unchanged (stop-and-ask if
+   wiring it into production would touch import behavior).
 
 So: `oscar_reference` is *manifest + file* only; the value blocks need *a run*
 (parser/backend + an authored block + calendar handling), and `settings.values`
@@ -363,11 +362,64 @@ provenance in its top-level `import_expected_provenance` field. This is the **fi
 committed, value-level, fixture-backed import-level coverage** on a real card (the
 prior `oscar_reference` coverage was hash-only).
 
-**What remains blocked (unchanged).** `settings.values` stays blocked — the loader
-constructs no `SettingsSnapshot` (settings empty on all 40 sessions), so only the
-honest absence is observable. Exact `session_blocks.intervals` and ordered
-`events` with timestamps remain **deferred**: they embed shifted real timestamps
-and depend on the anonymization-calendar split plus the raw→OSCAR event-type
-vocabulary, none of which were settled here — so no timestamps were authored. OSCAR
-numeric parity, weighted/time-based summaries, persistence, production routing, and
-the `cpap-parser` cutover are all untouched.
+**What remains blocked.** *(Superseded for settings by §11.)* `settings.values`
+was blocked at the time of §9.2 — the loader constructed no `SettingsSnapshot`. §11
+**partially resolves** this: the one therapy setting cpap-parser actually exposes
+(`pressure_mode` → `therapy_mode`) is now mapped and fixture-backed; every other
+settings field stays blocked because the parser schema has none. Exact
+`session_blocks.intervals` and ordered `events` with timestamps remain **deferred**:
+they embed shifted real timestamps and depend on the anonymization-calendar split
+plus the raw→OSCAR event-type vocabulary, none of which were settled here — so no
+timestamps were authored. OSCAR numeric parity, weighted/time-based summaries,
+persistence, production routing, and the `cpap-parser` cutover are all untouched.
+
+## 11. ResMed settings mapping — `therapy_mode` only (resolved this phase)
+
+The §3 / §9.2 "no loader builds a `SettingsSnapshot`" gap is now **partially
+closed**, conservatively. An audit of what cpap-parser actually exposes (parsed
+AirSense 10 fixture in a Linux container) found that the normalized schema carries
+**exactly one** therapy *setting*: `CPAPSessionSummary.pressure_mode` — the STR.edf
+mode code rendered as a label (`PRESSURE_MODE_NAMES`: `"CPAP"`/`"APAP"`/`"BiLevel …"`/
+`"ASV"`, or `"Unknown"`/`""` when unset). The other `pressure_*` fields
+(`pressure_50`/`pressure_95`) are **measured mask-pressure percentiles, not configured
+settings**, and there are **no** min/max/set-pressure, EPR, ramp, humidifier, tube/
+climate, or mask-type fields anywhere in `MachineInfo` / `CPAPSessionSummary` /
+`CPAPSession`.
+
+**What was implemented** (`ResMedNativeLoader._session_settings`, wired into
+`_build_session`):
+
+- One `SettingsSnapshot` per session carrying **only** `therapy_mode = pressure_mode`.
+- A missing/unknown mode (`""` or the literal `"Unknown"`) is left **absent** — no
+  snapshot, never coerced to a placeholder/`0`/`false`/`"off"` — so the conformance
+  missing-≠-off semantics hold.
+- `effective_at` reuses the session's existing `start_time` anchor (detailed-night
+  first start, or the summary calendar-day anchor for a ghost day) — no invented
+  global date. `source_names = {"therapy_mode": "pressure_mode"}`,
+  `source_file_ids = ("STR.edf",)`, `confidence = PROBABLE` (conservative: a single
+  device-reported field, not yet cross-validated).
+
+**On the committed AirSense 10 fixture:** `pressure_mode` is a stable `"APAP"` across
+all 40 summaries (AutoSet device), so all 40 sessions get a one-key snapshot. The
+manifest now pins `expected.import.settings.<date>` = `snapshot_count: 1`,
+`present: true`, `values: {therapy_mode: "APAP"}` for the 3 detailed nights, verified
+against the real run by `test_fixture_semantic_expected_import_matches_normalized_run`
+and `test_fixture_settings_snapshot_maps_only_therapy_mode`
+(`cpap-py`-gated). Parser-free unit coverage of the helper lives in
+`tests/test_resmed_import_regressions.py`
+(`test_build_session_maps_therapy_mode_settings_snapshot`,
+`test_build_session_omits_settings_when_mode_unknown_or_absent`).
+
+**Still blocked / unchanged.**
+
+- **All other settings fields** (`minimum_pressure_cm_h2o`/`maximum_pressure_cm_h2o`/
+  `set_pressure_cm_h2o`/`epr_level`/`epr_enabled`/`ramp_*`/`humidifier_level`/
+  `mask_type`): cpap-parser does **not** expose them, so they cannot be mapped
+  without parser/schema work upstream. Not fabricated.
+- **Persistence is unchanged.** `persist.py` still hardcodes
+  `therapy_mode`/`mask_type`/`humidity_level` to `None`; this mapping is
+  **normalized-run / conformance-only** for now. Wiring the snapshot through to the
+  `sessions` columns is a separate persistence change (stop-and-ask if it touches
+  production import behavior).
+- Support status is **not** upgraded to "validated" beyond this single,
+  conservatively-confident field.

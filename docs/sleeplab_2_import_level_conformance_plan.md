@@ -10,9 +10,11 @@ export-hash verification, and the DB-gated
 `identity_hashes` checks (persisted session/block key-set hashes + counts, with
 duplicate/incremental stability proven by DB-gated tests) are built and tested.
 `session_blocks.intervals` start/end boundary comparison (±1s) is implemented
-too. Remaining: OSCAR **numeric parity** (Step 3b), and — until the ResMed loader
-maps `SettingsSnapshot`s — settings `values` only has effect against an injected
-run.
+too. Remaining: OSCAR **numeric parity** (Step 3b). The ResMed loader now maps the
+one setting cpap-parser exposes (`pressure_mode` → `therapy_mode`), so settings
+`values.therapy_mode` is committed-fixture-backed; every *other* settings field is
+absent from the cpap-parser schema and still only has effect against an injected
+run (see the gap audit §11).
 
 This document expands the design note in
 `docs/sleeplab_2_alpha_6_checklist.md` §6 ("Import-level conformance path") into
@@ -251,11 +253,14 @@ Parse-only, no database — these compare the **pre-persistence** `ImportRun`
   `present` from `Session.settings`, plus per-setting `values` compared against the
   selected snapshot's `settings` map with explicit missing-≠-off semantics
   (`null` = absent/`None`; strings/bools exact; numbers within `1e-6`). The
-  comparator is loader-agnostic, so it is exercised today by injecting a
-  `SettingsSnapshot`-bearing run; the ResMed cpap-parser loader does not yet map
-  `SettingsSnapshot`s, so against a real card `values` simply finds an empty
-  snapshot and fails/needs presence assertions rather than fabricating a pass. A
-  bare setting key placed outside `values` is skipped, not faked.
+  comparator is loader-agnostic. The ResMed cpap-parser loader now maps the one
+  setting the parser exposes — `pressure_mode` → `therapy_mode` — so on the
+  AirSense 10 fixture `snapshot_count`/`present`/`values.therapy_mode` are
+  committed-fixture-backed (gap audit §11). For every *other* settings field (none
+  exist in the cpap-parser schema) the comparator is still exercised by injecting a
+  `SettingsSnapshot`-bearing run; against a real card those simply find no snapshot
+  key and fail/need presence assertions rather than fabricating a pass. A bare
+  setting key placed outside `values` is skipped, not faked.
 - `session_blocks` — **[implemented: block_count + intervals]** summed
   `len(Session.blocks)` per machine-local date, plus `intervals` start/end
   boundary comparison against each `SessionBlock.start_time`/`end_time`. Actual

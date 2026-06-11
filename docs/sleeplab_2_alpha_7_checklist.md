@@ -360,3 +360,23 @@ timestamps authored). **Next safe task:** either map `SettingsSnapshot` in the
 loader (a loader change — stop-and-ask if it touches production) to unblock
 `settings.present`/`values`, or settle the event-type vocabulary + calendar rebase
 before authoring timestamped intervals/events.
+
+**ResMed `SettingsSnapshot` mapping — LANDED (`therapy_mode` only):** the "next
+safe task" above is partly done. An audit of cpap-parser found it exposes exactly
+one normalized therapy *setting* — the daily summary's `pressure_mode` — and **no**
+min/max/set pressure, EPR, ramp, humidifier, or mask-type fields (those are absent
+from the schema; `pressure_50/95` are measured percentiles, not settings).
+`ResMedNativeLoader._session_settings` now maps `pressure_mode` → a one-key
+`SettingsSnapshot.therapy_mode` per session (absent when the mode is `""`/`"Unknown"`
+— never fabricated; `effective_at` = session `start_time`; `confidence` = `PROBABLE`).
+On the fixture `therapy_mode` is a stable `"APAP"`, so the manifest now pins
+`settings.<date>` = `snapshot_count: 1`/`present: true`/`values: {therapy_mode: "APAP"}`
+for the 3 detailed nights, verified by `test_fixture_semantic_expected_import_matches_normalized_run`
++ `test_fixture_settings_snapshot_maps_only_therapy_mode` (`cpap-py`-gated) and
+parser-free unit tests in `tests/test_resmed_import_regressions.py`. **Persistence
+unchanged** — `persist.py` still hardcodes `therapy_mode`/`mask_type`/`humidity_level`
+`None`, so the mapping is conformance-only (gap audit §11). **Still blocked:** all
+other settings fields (not in the parser schema); settings persistence (stop-and-ask);
+timestamped intervals/events. **Next safe task:** decide whether to wire the snapshot
+through `persist_import_run` (a persistence change — stop-and-ask), or move to the
+timestamp/event-vocabulary work.
