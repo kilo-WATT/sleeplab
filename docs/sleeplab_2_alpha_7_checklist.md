@@ -126,8 +126,11 @@ skipped, never faked). No routing or schema change. In priority order:
       *committed-fixture-backed* — the anonymized AirSense 10 fixture
       (`tests/conformance/fixtures/resmed_airsense10_001/manifest.json`) pins
       `expected.import.oscar_reference.export_hash` for its committed
-      `oscar_reference/summary.csv`, verified parser-free by `validate_import`
-      (`tests/test_conformance.py`). Numeric `parity` is unchanged (still skips).
+      `oscar_reference/summary.csv` **and**, via the `oscar_reference.files` list, a
+      sha256 for the twin `oscar_reference/sessions.csv`, both verified parser-free
+      by `validate_import` (`tests/test_conformance.py`). The comparator was
+      generalized backward-compatibly to verify a list of reference-file pins.
+      Numeric `parity` is unchanged (still skips).
 - [ ] **Weighted / time-based summaries.** Where ResMed PLD data already exists,
       exercise time-weighted summary conformance — OSCAR's
       `session_channel_values` (value → count + `time_ms`) is the precedent for
@@ -252,9 +255,15 @@ per committed fixture, exactly what is fixture-backed vs injected-only.
 - Real-card (anonymized AirSense 10): serial identity and signal channel
   inventory (pure-Python, normal suite); AHI / computed-usage / ghost-night
   parity vs the committed OSCAR export (`cpap-py`-gated).
-- **New this phase:** `expected.import.oscar_reference.export_hash` is now
-  committed-fixture-backed on the AirSense 10 fixture and verified parser-free by
-  `validate_import` — the first committed `expected.import` coverage.
+- **This phase:** `expected.import.oscar_reference.export_hash` is now
+  committed-fixture-backed on the AirSense 10 fixture for **both** committed
+  anonymized exports — the per-day `summary.csv` and (via the
+  `oscar_reference.files` list) the per-session `sessions.csv` — verified
+  parser-free by `validate_import`. This is the only committed `expected.import`
+  coverage so far. A `warnings.absent` pin on the synthetic fixture was
+  *deliberately not taken*: it would only assert wiring against an injected empty
+  run (no parser is installed to value-verify it) while flipping the
+  import-block-free invariant three tests rely on — see the matrix §5.
 
 **Still injected-only** (no committed fixture drives them): the `warnings`,
 `session_blocks` (count + intervals), `therapy_aggregates`, `settings`
@@ -263,7 +272,12 @@ by injected runs, `tmp_path` manifests, or synthetic DB rows.
 
 **Tooling:** `summarize_import_blocks(fixture_dir, result)` labels each requested
 `expected.import` block passed/skipped/failed so a green-and-checked block reads
-distinctly from a green-but-gated one (read-only; no production behavior).
+distinctly from a green-but-gated one. The conformance CLI also gained an opt-in
+`--import` flag (`python -m importer.conformance <fixture> --import`) that prints
+that per-block status parser-free and degrades gracefully (no traceback) on the
+non-standard AirSense 10 fixture. Both are read-only; no production behavior.
+Contributor guidance for supplying new safe evidence lives in
+`docs/sleeplab_2_validation_inputs.md`.
 
 **Remaining blocked/deferred (unchanged):** OSCAR numeric parity,
 weighted/time-based summaries, the `settings.values` loader mapping (no loader

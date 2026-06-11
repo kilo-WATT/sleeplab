@@ -228,6 +228,19 @@ score, adherence, reports, trends, and AI duration inputs through that
 aggregate. One restricted AirSense 10 card and synthetic fixtures prove the
 implemented path, but do not justify a full ResMed validation claim.
 
+**Phase 2 fixture-backed validation status (not RC/beta readiness):** the only
+*committed-fixture-backed* `expected.import` coverage today is the OSCAR
+reference `export_hash` — a parser-free sha256 integrity pin on the AirSense 10
+fixture's committed, anonymized `summary.csv` and `sessions.csv`. Every other
+import-level comparator (`warnings`, `session_blocks`, `therapy_aggregates`,
+`settings`, `events`, `identity_hashes`) remains **injected-only**, and OSCAR
+**numeric parity**, the `settings.values` loader mapping, and Lowenstein stay
+blocked/deferred. This is conformance depth, not validated multi-family support;
+it does not move any device to **validated** or imply beta. See
+`docs/sleeplab_2_fixture_validation_matrix.md` for the per-fixture breakdown and
+`docs/sleeplab_2_validation_inputs.md` for how new safe evidence can be
+contributed.
+
 1. Validate ResMed BRP/SA2 channel inventory and full-night waveform storage,
    downsampling, query performance, retention, and absence diagnostics.
 2. Extend conformance manifests with persisted settings, interval boundaries,

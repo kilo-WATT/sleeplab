@@ -96,9 +96,11 @@ anonymized reference CSVs in fixture #2.
   history), `DATALOG/` for **3 detailed nights** (`20260506`, `20260517`,
   `20260528`) each with BRP/PLD/EVE/CSL/SAD `.edf` + `.crc`.
 - **OSCAR reference:** `oscar_reference/summary.csv` (per-day rollup, the
-  ground-truth the tests assert against) and `oscar_reference/sessions.csv`. Both
-  committed and anonymized. **No `export_hash` is committed** — the CSV is read
-  at runtime for values, not yet integrity-pinned.
+  ground-truth the tests assert against) and `oscar_reference/sessions.csv`
+  (per-session detail). Both committed and anonymized. **Both are now
+  integrity-pinned** — the manifest pins a sha256 `export_hash` for `summary.csv`
+  and, via the `oscar_reference.files` list, for `sessions.csv`; the CSVs are
+  still read at runtime for values, but silent drift is now caught.
 - **Tests using it:**
   - `tests/test_resmed_import_regressions.py::test_airsense10_fixture_channel_inventory_matches_classification`
     — **pure-Python** (`edf_parser.read_header`, no `cpap-py`), runs in the
@@ -119,7 +121,7 @@ anonymized reference CSVs in fixture #2.
 | events (AHI parity) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ahi_matches_oscar_summary` vs `oscar_reference/summary.csv`, detailed nights, abs=0.05 |
 | therapy aggregates (computed usage) | **fixture-backed** (`cpap-py`-gated) | `test_fixture_computed_usage_matches_oscar_for_detailed_nights` vs OSCAR total time, abs=0.1 h |
 | summary-only / ghost nights | **fixture-backed** (`cpap-py`-gated) | `test_fixture_ghost_nights_flagged_not_deleted` (kept + `has_detailed_data is False`) |
-| OSCAR reference (export hash) | **fixture-backed (Phase 2)** | manifest now pins `expected.import.oscar_reference.export_hash` for the committed `oscar_reference/summary.csv`; verified parser-free by `validate_import` in `test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fixture` |
+| OSCAR reference (export hash) | **fixture-backed (Phase 2)** | manifest pins `expected.import.oscar_reference.export_hash` for committed `oscar_reference/summary.csv` **and** (via `oscar_reference.files`) for `oscar_reference/sessions.csv`; both verified parser-free by `validate_import` in `test_validate_import_oscar_reference_hash_pinned_on_committed_airsense10_fixture` and `test_validate_import_oscar_reference_sessions_csv_hash_pinned_on_committed_airsense10_fixture` |
 | `expected.import` (warnings / session_blocks / settings / events / therapy_aggregates / identity_hashes) | **not committed** | manifest has no `expected.import`; non-standard schema |
 | settings values | **cannot — loader gap** | ResMed loader maps no `SettingsSnapshot` (see §3) |
 | DB identity hashes | **not via this fixture** | exercised only by synthetic DB-row tests |
@@ -136,12 +138,15 @@ anonymized reference CSVs in fixture #2.
   on-disk detailed nights is a *recorded, intentionally-unfixed* discrepancy (the
   on-disk DATALOG is authoritative).
 - **Recommended next action — DONE (Phase 2):** the OSCAR reference `export_hash`
-  is now pinned in the manifest for the committed `oscar_reference/summary.csv` and
-  exercised through `validate_import`'s parser-free hash check — moving the
-  `oscar_reference` comparator from injected-only to committed-fixture-backed with
-  no PHI, parse, or DB. This touched the *manifest* (metadata) only, never the
-  anonymized data files. Next candidates remain gated: a standard `expected.import`
-  block (parse-dependent) and `settings.values` (loader gap).
+  is now pinned in the manifest for **both** committed anonymized exports —
+  `oscar_reference/summary.csv` (top-level `export_hash`) and
+  `oscar_reference/sessions.csv` (an `oscar_reference.files` entry) — and exercised
+  through `validate_import`'s parser-free hash check, moving the `oscar_reference`
+  comparator from injected-only to committed-fixture-backed with no PHI, parse, or
+  DB. This touched the *manifest* (metadata) plus a backward-compatible comparator
+  generalization (support a `files` list), never the anonymized data files. Next
+  candidates remain gated: a standard `expected.import` block (parse-dependent) and
+  `settings.values` (loader gap).
 
 ## 3. The settings-value loader gap (why `settings.values` stays injected-only)
 
@@ -165,7 +170,8 @@ snapshot list and fail/skip, never fabricate a pass. Wiring real
   (pure-Python), AHI parity, computed-usage parity, ghost-night flagging
   (airsense10; the last three `cpap-py`-gated against the committed OSCAR CSV).
 - **`validate_import.oscar_reference.export_hash`** — now committed-fixture-backed
-  on the AirSense 10 fixture (parser-free hash check; see §2.2).
+  on the AirSense 10 fixture for **both** the per-day `summary.csv` and the
+  per-session `sessions.csv` (parser-free hash checks; see §2.2).
 
 **Injected-only today** (no committed fixture drives them — exercised by an
 injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
@@ -186,14 +192,43 @@ compressed-segment waveform storage, device-time-correction implementation.
 
 ## 5. Recommended Phase 2 order (conservative)
 
-1. **DONE — Pin the airsense10 OSCAR `export_hash`** and add a parser-free
-   `validate_import` test → first committed-fixture-backed `oscar_reference`
-   coverage. Lowest risk: no parse, no DB, no PHI, manifest-only. Plus a
-   read-only `summarize_import_blocks` reporting helper.
-2. **Add a parser-free `warnings.absent` `expected.import`** to the synthetic
-   fixture (skips cleanly without the parser) — only if it does not overclaim.
-3. **Defer** parse-dependent committed expectations (`session_blocks.intervals`,
+1. **DONE — Pin the airsense10 OSCAR `export_hash`** for `summary.csv` and add a
+   parser-free `validate_import` test → first committed-fixture-backed
+   `oscar_reference` coverage. Lowest risk: no parse, no DB, no PHI, manifest-only.
+   Plus a read-only `summarize_import_blocks` reporting helper.
+2. **DONE — Pin the twin `sessions.csv` `export_hash`** via the manifest's
+   `oscar_reference.files` list (a small backward-compatible comparator
+   generalization), with committed-fixture + mismatch/missing-file tests. Same
+   lowest-risk profile: a sha256 over an already-committed redistributable export,
+   no parse/DB/PHI, no production behavior change.
+3. **DEFERRED (deliberately) — `warnings.absent` on the synthetic fixture.** A
+   parser-free `warnings.absent` would only assert wiring against an injected empty
+   run (no loader actually runs in this environment — `cpap-py`/`cpap-parser` are
+   not installed, so it cannot be parse-verified), *and* it would flip the
+   deliberately-encoded "synthetic fixture stays import-block-free" invariant
+   asserted by three tests (`test_validate_import_passes_and_skips_when_import_block_absent`,
+   `test_expected_import_block_is_optional_and_absent_today`,
+   `test_summarize_import_blocks_empty_without_import_block`). Marginal evidentiary
+   value at the cost of the backward-compat witness — not taken.
+4. **Defer** parse-dependent committed expectations (`session_blocks.intervals`,
    `settings.values`, `events`, `therapy_aggregates`) until either the synthetic
    EDFs are confirmed `cpap-py`-decodable or the airsense10 fixture gains a
    standard `expected.import` block, and (for `settings.values`) until the loader
-   maps `SettingsSnapshot`s.
+   maps `SettingsSnapshot`s. None can be honestly value-verified while no parser is
+   installed.
+
+## 6. Inspecting fixture-backed status (reporting)
+
+Two read-only aids surface this matrix's distinctions without reading test source:
+
+- `summarize_import_blocks(fixture_dir, result)` labels each requested
+  `expected.import` block **passed / skipped / failed**.
+- The conformance CLI gained an opt-in `--import` flag
+  (`python -m importer.conformance <fixture> --import`) that runs `validate_import`
+  parser-free and prints the per-block status alongside the planning result. It
+  degrades gracefully on the non-standard AirSense 10 fixture (reports
+  "planning validation unavailable: …" instead of crashing) and still emits the
+  import section. Neither changes production behavior.
+
+For how contributors can supply *new* safe evidence without posting raw CPAP
+data, see `docs/sleeplab_2_validation_inputs.md`.
