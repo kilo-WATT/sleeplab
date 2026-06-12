@@ -204,7 +204,18 @@ Honest reads from the first run:
   when present and cpap-parser exposes no per-mask intervals. Closing it requires
   upstream mask intervals or a view/product decision (out of scope here, no
   schema/view change). The harness now reports `usage_source` so a recording-span
-  total is never silently compared against authoritative mask intervals.
+  total is never silently compared against authoritative mask intervals. The
+  parser path also now carries each detailed night's STR-reported therapy on its
+  recording-span blocks, so the view's `summary_reported_usage_seconds` surfaces
+  the authoritative therapy total (69,600s on the fixture) alongside the
+  recording-span `usage_seconds` — the authoritative reference for cross-checking.
+- **The detailed-night overcount is data-dependent and the fixture understates
+  it.** The fixture has only 3 detailed nights of 40, so the recording-span
+  overcount looks like ~2.2%. The overcount is Σ(recording span − therapy) over
+  *detailed* nights, so on a card where most or all nights are detailed it is
+  materially larger (tens of percent). A private, local-only real-card soak
+  confirmed this and is the reason the parity harness must read `usage_source`
+  and `summary_reported_usage_seconds`, not just `total_usage_seconds`.
 - **Oximetry is not provable with this fixture.** It contains six SAD files and
   valid Pulse/SpO2 headers, but every SpO2 sample is the `-1` missing sentinel.
   `parse_sa2` returns `None`, so legacy correctly writes 0 rows and keeps
