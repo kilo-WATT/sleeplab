@@ -285,6 +285,27 @@ class WaveformResponse(BaseModel):
     pressure: list[float | None]
 
 
+class WaveformSignalMetadata(BaseModel):
+    """Stored full-night waveform channel metadata."""
+
+    signal_name: str
+    unit: str
+    sample_rate_hz: float
+    start_time: datetime
+    end_time: datetime
+    sample_count: int
+    chunk_count: int
+    encoding: str
+
+
+class WaveformSignalResponse(WaveformSignalMetadata):
+    """Decoded samples for one full-night waveform signal."""
+
+    returned_sample_count: int
+    timestamps: list[str]
+    values: list[float | None]
+
+
 class EventWindowResponse(BaseModel):
     """Pydantic model representing the timeline window surrounding an event.
 

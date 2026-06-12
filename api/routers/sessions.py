@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from importer.waveform_chunks import decode_window, downsample_extrema
+
 from ..auth import get_current_user
 from ..database import get_db
 from ..leak_units import leak_to_lpm
@@ -23,6 +25,8 @@ from ..models import (
     SpO2Response,
     TagInsight,
     WaveformResponse,
+    WaveformSignalMetadata,
+    WaveformSignalResponse,
 )
 from ..therapy_score import compute_therapy_score
 
@@ -1133,6 +1137,125 @@ def get_session_metrics(
     return _metrics_response(rows, _session_leak_unit(internal_session_id, db))
 
 
+@router.get(
+    "/{session_id}/waveforms",
+    response_model=list[WaveformSignalMetadata],
+)
+def get_session_waveforms(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List full-night waveform signals stored for a machine-local night."""
+    internal_session_id = _require_session(session_id, current_user["id"], db)
+    rows = (
+        db.execute(
+            text("""
+                WITH target AS (
+                    SELECT folder_date, machine_id
+                    FROM sessions
+                    WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+                )
+                SELECT wc.signal_name, wc.unit, MAX(wc.sample_rate_hz) AS sample_rate_hz,
+                       MIN(wc.start_time) AS start_time, MAX(wc.end_time) AS end_time,
+                       SUM(wc.sample_count)::int AS sample_count,
+                       COUNT(*)::int AS chunk_count, MIN(wc.encoding) AS encoding
+                FROM waveform_chunks wc
+                JOIN sessions s ON s.id = wc.session_id
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+                WHERE s.user_id = CAST(:uid AS uuid)
+                GROUP BY wc.signal_name, wc.unit
+                ORDER BY wc.signal_name
+            """),
+            {"sid": internal_session_id, "uid": current_user["id"]},
+        )
+        .mappings()
+        .all()
+    )
+    return [WaveformSignalMetadata.model_validate(dict(row)) for row in rows]
+
+
+@router.get(
+    "/{session_id}/waveforms/{signal_name}",
+    response_model=WaveformSignalResponse,
+)
+def get_session_waveform_signal(
+    session_id: str,
+    signal_name: str,
+    start_time: datetime | None = Query(None),
+    end_time: datetime | None = Query(None),
+    max_points: int = Query(4000, ge=100, le=20000),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Read one full-night waveform, optionally clipped to a time window."""
+    if start_time is not None and end_time is not None and end_time < start_time:
+        raise HTTPException(status_code=400, detail="end_time must not precede start_time")
+    internal_session_id = _require_session(session_id, current_user["id"], db)
+    rows = (
+        db.execute(
+            text("""
+                WITH target AS (
+                    SELECT folder_date, machine_id
+                    FROM sessions
+                    WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+                )
+                SELECT wc.signal_name, wc.unit, wc.sample_rate_hz, wc.start_time,
+                       wc.end_time, wc.sample_count, wc.encoding, wc.payload
+                FROM waveform_chunks wc
+                JOIN sessions s ON s.id = wc.session_id
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+                WHERE s.user_id = CAST(:uid AS uuid)
+                  AND wc.signal_name = :signal_name
+                  AND (
+                      CAST(:start_time AS timestamptz) IS NULL
+                      OR wc.end_time >= CAST(:start_time AS timestamptz)
+                  )
+                  AND (
+                      CAST(:end_time AS timestamptz) IS NULL
+                      OR wc.start_time <= CAST(:end_time AS timestamptz)
+                  )
+                ORDER BY wc.start_time, wc.chunk_index
+            """),
+            {
+                "sid": internal_session_id,
+                "uid": current_user["id"],
+                "signal_name": signal_name,
+                "start_time": start_time,
+                "end_time": end_time,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Waveform signal '{signal_name}' is not available for this session",
+        )
+
+    decoded_points = decode_window(rows, start_time=start_time, end_time=end_time)
+    if not decoded_points:
+        raise HTTPException(status_code=404, detail="No waveform samples in requested window")
+    points = downsample_extrema(decoded_points, max_points)
+    first = rows[0]
+    return WaveformSignalResponse(
+        signal_name=signal_name,
+        unit=first["unit"],
+        sample_rate_hz=float(first["sample_rate_hz"]),
+        start_time=points[0].timestamp,
+        end_time=points[-1].timestamp,
+        sample_count=sum(point.value is not None for point in decoded_points),
+        chunk_count=len(rows),
+        encoding=first["encoding"],
+        returned_sample_count=len(points),
+        timestamps=[point.timestamp.isoformat() for point in points],
+        values=[point.value for point in points],
+    )
+
+
 @router.get("/{session_id}/breath", response_model=MetricsResponse)
 def get_session_breath(
     session_id: str,
@@ -1342,6 +1465,16 @@ def update_session_timezone(
             text("UPDATE session_waveform SET ts = ts + :delta WHERE session_id = CAST(:id AS uuid)"),
             {"id": row["id"], "delta": delta},
         )
+        db.execute(
+            text("""
+                UPDATE waveform_chunks
+                SET start_time = start_time + :delta,
+                    end_time = end_time + :delta,
+                    updated_at = NOW()
+                WHERE session_id = CAST(:id AS uuid)
+            """),
+            {"id": row["id"], "delta": delta},
+        )
 
     db.commit()
     return get_session(session_id=session_id, current_user=current_user, db=db)
@@ -1445,6 +1578,13 @@ def _night_data_availability(
                           JOIN night_sessions x ON x.id = sw.session_id), 0) AS waveform_sample_count,
                 EXISTS (
                     SELECT 1
+                    FROM waveform_chunks wc
+                    JOIN night_sessions x ON x.id = wc.session_id
+                    WHERE wc.signal_name = 'flow_rate'
+                      AND wc.sample_count > 0
+                ) AS has_full_night_flow,
+                EXISTS (
+                    SELECT 1
                     FROM settings_snapshots ss
                     JOIN target t ON t.machine_id = ss.machine_id
                     WHERE ss.effective_at < (t.folder_date + INTERVAL '2 days')
@@ -1464,7 +1604,7 @@ def _night_data_availability(
         "events_available": event_count > 0,
         "therapy_graphs_available": metric_sample_count > 0,
         "event_waveforms_available": waveform_sample_count > 0,
-        "full_night_flow_available": False,
+        "full_night_flow_available": bool(row["has_full_night_flow"]),
         "spo2_available": has_spo2,
         "settings_available": has_inline_settings or bool(row["has_settings_snapshot"]),
     }

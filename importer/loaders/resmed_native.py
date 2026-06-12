@@ -82,7 +82,9 @@ _ANNOTATION_FILE_TYPES = frozenset({"EVE", "CSL", "AEV"})
 
 #: High-rate (BRP) waveform channels and their units, in emit order.
 _HIGH_RATE_CHANNELS: tuple[tuple[str, str], ...] = (
-    ("flow_rate", "L/min"),
+    # cpap-parser applies the EDF gain/offset without unit conversion. ResMed
+    # Flow.40ms declares L/s, so the normalized array remains L/s.
+    ("flow_rate", "L/s"),
     ("pressure", "cmH2O"),
 )
 

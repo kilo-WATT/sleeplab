@@ -3,7 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, EventWindowResponse, TherapyScoreComponent, SessionTherapyContext, MachineSettingsSnapshot } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, EventWindowResponse, TherapyScoreComponent, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
+import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
 import EventInspector from '../components/EventInspector'
@@ -118,6 +119,7 @@ export default function SessionDetail() {
   const [session, setSession] = useState<SessionDetailType | null>(null)
   const [events, setEvents] = useState<EventRecord[]>([])
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
+  const [fullNightFlow, setFullNightFlow] = useState<WaveformSignalResponse | null>(null)
   const [spo2, setSpo2] = useState<SpO2Response | null>(null)
   const [equipment, setEquipment] = useState<InferredEquipment | null>(null)
   const [therapyContext, setTherapyContext] = useState<SessionTherapyContext | null>(null)
@@ -150,6 +152,7 @@ export default function SessionDetail() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     setSpo2(null)
+    setFullNightFlow(null)
     setEquipment(null)
     setTherapyContext(null)
     setSettingsHistory([])
@@ -176,9 +179,13 @@ export default function SessionDetail() {
       return Promise.all([
         api.getEvents(s.id),
         api.getMetrics(s.id, 15),
-      ]).then(([e, m]) => {
+        s.data_availability.full_night_flow_available
+          ? api.getWaveform(s.id, 'flow_rate', { max_points: 4000 }).catch(() => null)
+          : Promise.resolve(null),
+      ]).then(([e, m, flow]) => {
         setEvents(e)
         setMetrics(m)
+        setFullNightFlow(flow)
         setLoading(false)
         if (s.has_spo2) {
           api.getSessionSpo2(s.id).then(setSpo2).catch(() => setSpo2(null))
@@ -847,6 +854,17 @@ export default function SessionDetail() {
         />
       )}
 
+      {fullNightFlow ? (
+        <FullNightFlowChart waveform={fullNightFlow} />
+      ) : (
+        <UnavailableDataCard
+          title="Full-night flow unavailable"
+          description={isParserBacked
+            ? 'No full-night ResMed Flow.40ms chunks were stored for this night. SleepLab does not synthesize missing waveform data.'
+            : 'This night was imported before full-night waveform chunk storage was available. Re-import the CPAP card to populate it when the source includes flow data.'}
+        />
+      )}
+
       {spo2 ? (
         <SpO2Chart spo2={spo2} wearable={wearableData} />
       ) : (
@@ -907,7 +925,7 @@ function NightDataCoverage({ session }: { session: SessionDetailType }) {
     },
     {
       label: 'Full-night flow',
-      value: availability.full_night_flow_available ? 'Available' : 'Event windows only',
+      value: availability.full_night_flow_available ? 'Stored in chunks' : 'Not stored',
       available: availability.full_night_flow_available,
     },
   ]

@@ -28,8 +28,9 @@ than silently dropping or inventing data we record the gaps here:
   metadata, not the underlying arrays. To still populate the sample tables
   *without* widening the vendor-neutral model, the execution layer passes the
   raw ``CPAPDirectory`` (``raw_directory=``) from the same parse; this bridge
-  then writes ``session_metrics`` (full-resolution low-rate) and
-  ``session_waveform`` (event-windowed high-rate) from ``CPAPSession.timeseries``.
+  then writes ``session_metrics`` (full-resolution low-rate),
+  ``session_waveform`` (event-windowed high-rate), and ``waveform_chunks``
+  (compressed full-night high-rate signals) from ``CPAPSession.timeseries``.
   Channel *metadata* (``signal_channels``) is persisted from the ImportRun.
 * **Summary statistics** (``avg_pressure``, ``p95_pressure``, ``avg_leak`` and the
   per-channel averages) are computed by the loader from the decoded timeseries
@@ -60,6 +61,8 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from importer.waveform_chunks import ENCODING, build_chunks
 
 from .models import DerivedValue, ImportRun, Session
 from .resmed_native import _ANNOTATION_FILE_TYPES, ResMedNativeLoader
@@ -154,6 +157,7 @@ def persist_import_run(
         "summary_only_days": 0,
         "metric_rows": 0,
         "waveform_rows": 0,
+        "waveform_chunks": 0,
     }
 
     # Index the raw parser's detailed file-sessions by night date so each
@@ -343,6 +347,14 @@ def persist_import_run(
             ]
             counts["waveform_rows"] += _write_session_waveform(
                 db_conn, str(session_db_id), detailed, machine_tz, night_events
+            )
+            counts["waveform_chunks"] += _write_waveform_chunks(
+                db_conn,
+                session_db_id=str(session_db_id),
+                import_run_id=import_run_id,
+                detailed=detailed,
+                machine_tz=machine_tz,
+                parser_version=run.adapter_version,
             )
 
     return counts
@@ -920,6 +932,96 @@ def _write_session_waveform(
     sql = "INSERT INTO session_waveform (session_id, ts, flow, pressure) VALUES %s"
     with db_conn.cursor() as cur:
         psycopg2.extras.execute_values(cur, sql, rows, page_size=5000)
+    return len(rows)
+
+
+def _write_waveform_chunks(
+    db_conn: Any,
+    *,
+    session_db_id: str,
+    import_run_id: str,
+    detailed: list,
+    machine_tz: ZoneInfo,
+    parser_version: str | None,
+) -> int:
+    """Replace full-night high-rate chunks exposed by the parser for one night."""
+    import json
+
+    import psycopg2.extras
+
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM waveform_chunks WHERE session_id = %s", (session_db_id,))
+
+    rows: list[tuple] = []
+    next_index = {"flow_rate": 0, "pressure": 0}
+    units = {"flow_rate": "L/s", "pressure": "cmH2O"}
+    for source_index, cpap_session in enumerate(sorted(detailed, key=lambda item: item.start_time)):
+        timeseries = cpap_session.timeseries
+        rate = float(cpap_session.sample_rate or 0)
+        if timeseries is None or rate <= 0:
+            continue
+        start = _localize(cpap_session.start_time, machine_tz)
+        source_ref = f"{cpap_session.file_type}:{source_index}"
+        for signal_name, unit in units.items():
+            samples = getattr(timeseries, signal_name, None) or []
+            if not samples:
+                continue
+            chunks = build_chunks(
+                signal_name=signal_name,
+                unit=unit,
+                sample_rate_hz=rate,
+                start_time=start,
+                samples=samples,
+                first_chunk_index=next_index[signal_name],
+            )
+            next_index[signal_name] += len(chunks)
+            for chunk in chunks:
+                provenance = {
+                    "source_type": "resmed_edf",
+                    "source_channel": "Flow.40ms"
+                    if signal_name == "flow_rate"
+                    else "Press.40ms",
+                    "timestamp_basis": "machine_local_localized",
+                }
+                rows.append(
+                    (
+                        session_db_id,
+                        import_run_id,
+                        signal_name,
+                        unit,
+                        rate,
+                        chunk.start_time,
+                        chunk.end_time,
+                        chunk.chunk_index,
+                        chunk.sample_count,
+                        ENCODING,
+                        psycopg2.Binary(chunk.payload),
+                        chunk.uncompressed_bytes,
+                        len(chunk.payload),
+                        source_ref,
+                        _ADAPTER_ID,
+                        "cpap-parser",
+                        parser_version,
+                        json.dumps(provenance),
+                    )
+                )
+
+    if not rows:
+        return 0
+    with db_conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO waveform_chunks (
+                session_id, import_run_id, signal_name, unit, sample_rate_hz,
+                start_time, end_time, chunk_index, sample_count, encoding,
+                payload, uncompressed_bytes, compressed_bytes, source_ref,
+                adapter_id, parser_id, parser_version, provenance
+            ) VALUES %s
+            """,
+            rows,
+            page_size=250,
+        )
     return len(rows)
 
 

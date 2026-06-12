@@ -595,6 +595,23 @@ export interface WaveformResponse {
   pressure: (number | null)[]
 }
 
+export interface WaveformSignalMetadata {
+  signal_name: string
+  unit: string
+  sample_rate_hz: number
+  start_time: string
+  end_time: string
+  sample_count: number
+  chunk_count: number
+  encoding: string
+}
+
+export interface WaveformSignalResponse extends WaveformSignalMetadata {
+  returned_sample_count: number
+  timestamps: string[]
+  values: (number | null)[]
+}
+
 /**
  * Properties and structure for the event window response.
  */
@@ -901,6 +918,15 @@ export const api = {
       params as Record<string, string | number> | undefined,
     ),
   getMetrics: (id: string, downsample = 15) => get<MetricsResponse>(`/sessions/${id}/metrics`, { downsample }),
+  getWaveform: (
+    id: string,
+    signalName: string,
+    params?: { start_time?: string; end_time?: string; max_points?: number },
+  ) =>
+    get<WaveformSignalResponse>(
+      `/sessions/${id}/waveforms/${signalName}`,
+      params as Record<string, string | number> | undefined,
+    ),
   getSessionSpo2: (id: string) => get<SpO2Response>(`/sessions/${id}/spo2`),
   listEquipment: () => get<Equipment[]>('/equipment/'),
   createEquipment: (payload: EquipmentCreate) => post<Equipment>('/equipment/', payload),

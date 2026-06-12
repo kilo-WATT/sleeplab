@@ -70,7 +70,7 @@ const mockSession = {
     events_available: true,
     therapy_graphs_available: true,
     event_waveforms_available: true,
-    full_night_flow_available: false,
+    full_night_flow_available: true,
     spo2_available: false,
     settings_available: true,
   },
@@ -143,6 +143,29 @@ const meta: Meta<typeof SessionDetail> = {
       api.getSessionByDate = async () => session;
       api.getEvents = async () => mockEvents;
       api.getMetrics = async () => mockMetrics;
+      api.getWaveform = async () => ({
+        signal_name: 'flow_rate',
+        unit: 'L/s',
+        sample_rate_hz: 25,
+        start_time: '2023-10-01T23:00:00Z',
+        end_time: '2023-10-02T07:00:00Z',
+        sample_count: 9,
+        chunk_count: 96,
+        encoding: 'float32-le-zlib-v1',
+        returned_sample_count: 9,
+        timestamps: [
+          '2023-10-01T23:00:00Z',
+          '2023-10-02T00:00:00Z',
+          '2023-10-02T01:00:00Z',
+          '2023-10-02T02:00:00Z',
+          '2023-10-02T03:00:00Z',
+          '2023-10-02T04:00:00Z',
+          '2023-10-02T05:00:00Z',
+          '2023-10-02T06:00:00Z',
+          '2023-10-02T07:00:00Z',
+        ],
+        values: [-0.8, 1.1, -1.2, 0.9, -0.7, 1.3, -1.0, 0.8, -0.5],
+      });
       api.getSessions = async () => [session];
       api.getSessionSpo2 = async () => mockSpo2;
       api.getInferredEquipment = async () => equipment;

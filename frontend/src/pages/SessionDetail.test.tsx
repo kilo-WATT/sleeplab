@@ -9,6 +9,7 @@ const apiMock = vi.hoisted(() => ({
   getSessionByDate: vi.fn(),
   getEvents: vi.fn(),
   getMetrics: vi.fn(),
+  getWaveform: vi.fn(),
   getSessions: vi.fn(),
   getInferredEquipment: vi.fn(),
   getWearableData: vi.fn(),
@@ -182,5 +183,35 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByText('Night graphs unavailable')).toBeInTheDocument()
     expect(screen.getByText('Oximetry unavailable')).toBeInTheDocument()
     expect(screen.getByText(/does not yet claim SpO2 or pulse support/)).toBeInTheDocument()
+    expect(screen.getByText('Full-night flow unavailable')).toBeInTheDocument()
+  })
+
+  it('renders stored full-night parser flow without claiming unsupported signals', async () => {
+    const session = sessionDetail('America/New_York')
+    session.data_availability.full_night_flow_available = true
+    apiMock.getSessionByDate.mockResolvedValue(session)
+    apiMock.getWaveform.mockResolvedValue({
+      signal_name: 'flow_rate',
+      unit: 'L/s',
+      sample_rate_hz: 25,
+      start_time: '2026-06-02T03:59:51Z',
+      end_time: '2026-06-02T03:59:52Z',
+      sample_count: 3,
+      chunk_count: 1,
+      encoding: 'float32-le-zlib-v1',
+      returned_sample_count: 3,
+      timestamps: [
+        '2026-06-02T03:59:51Z',
+        '2026-06-02T03:59:51.04Z',
+        '2026-06-02T03:59:51.08Z',
+      ],
+      values: [-0.5, 0, 0.7],
+    })
+
+    renderSessionDetail()
+
+    expect(await screen.findByText('Full-night flow rate')).toBeInTheDocument()
+    expect(screen.getByText(/ResMed Flow.40ms at 25 Hz/)).toBeInTheDocument()
+    expect(screen.queryByText('Full-night flow unavailable')).not.toBeInTheDocument()
   })
 })
