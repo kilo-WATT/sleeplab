@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
 
+from .leak_units import leak_to_lpm
 from .models import TherapyScore, TherapyScoreComponent, TherapyScoreComponents
 
 BASE_WEIGHTS = {
@@ -48,15 +49,18 @@ def compute_therapy_score(session: Mapping[str, object]) -> TherapyScore:
             unit="events/hr",
         ))
 
-    leak_lps = _number(session.get("avg_leak"))
-    leak_threshold_lps = _large_leak_threshold_lps(session)
-    if leak_lps is not None and leak_threshold_lps is not None:
+    # Leak is stored per-importer in L/s (legacy) or L/min (cpap-parser); always
+    # normalize to L/min via the session's leak_unit before scoring/displaying so
+    # parser nights are not silently inflated 60x. See api/leak_units.py.
+    leak_lpm = leak_to_lpm(session.get("avg_leak"), _leak_unit(session))
+    leak_threshold_lpm = _large_leak_threshold_lpm(session)
+    if leak_lpm is not None and leak_threshold_lpm is not None:
         available.append(_AvailableComponent(
             key="leak",
             base_weight=BASE_WEIGHTS["leak"],
             label="Large leak",
-            percent=_score_leak(leak_lps, leak_threshold_lps),
-            value=round(leak_lps * 60, 2),
+            percent=_score_leak(leak_lpm, leak_threshold_lpm),
+            value=round(leak_lpm, 2),
             unit="L/min",
         ))
 
@@ -118,7 +122,7 @@ def compute_therapy_score(session: Mapping[str, object]) -> TherapyScore:
         )
 
     total = _clamp_int(total, 0, 100)
-    callout = _callout(available, session, leak_threshold_lps)
+    callout = _callout(available, session, leak_threshold_lpm)
     if not parser_validated:
         callout = f"{callout} Scoring confidence is lower because this session was not parser-validated."
 
@@ -152,12 +156,12 @@ def _score_ahi(ahi: float) -> float:
     return _clamp(0.85 * (1.0 - ((ahi - 5) / 15) ** 1.1), 0.0, 1.0)
 
 
-def _score_leak(leak_lps: float, threshold_lps: float) -> float:
+def _score_leak(leak_lpm: float, threshold_lpm: float) -> float:
     """Return a 0–1 score for mask leak; full credit at or below threshold, linear decay to zero at 2.5× threshold."""
-    if leak_lps <= threshold_lps:
+    if leak_lpm <= threshold_lpm:
         return 1.0
-    zero_at = threshold_lps * 2.5
-    return _clamp(1.0 - ((leak_lps - threshold_lps) / (zero_at - threshold_lps)), 0.0, 1.0)
+    zero_at = threshold_lpm * 2.5
+    return _clamp(1.0 - ((leak_lpm - threshold_lpm) / (zero_at - threshold_lpm)), 0.0, 1.0)
 
 
 def _score_duration(duration_hours: float) -> float:
@@ -180,15 +184,21 @@ def _score_spo2(avg_spo2: float | None, min_spo2: float | None) -> float:
     return avg_score
 
 
-def _large_leak_threshold_lps(session: Mapping[str, object]) -> float | None:
-    """Return the large-leak threshold in L/s for this session's manufacturer, or None if unknown.
+def _leak_unit(session: Mapping[str, object]) -> str | None:
+    """Return the session's recorded leak unit, or None when absent."""
+    unit = session.get("leak_unit")
+    return str(unit) if unit is not None else None
 
-    Currently only ResMed devices have a defined threshold (24 L/min = 0.4 L/s).  Unknown
+
+def _large_leak_threshold_lpm(session: Mapping[str, object]) -> float | None:
+    """Return the large-leak threshold in L/min for this session's manufacturer, or None if unknown.
+
+    Currently only ResMed devices have a defined threshold (24 L/min).  Unknown
     manufacturers return None, which excludes the leak component from scoring.
     """
     manufacturer = str(session.get("manufacturer") or "").strip().lower()
     if manufacturer == "resmed":
-        return RESMED_LARGE_LEAK_LPM / 60
+        return RESMED_LARGE_LEAK_LPM
     return None
 
 
@@ -211,7 +221,7 @@ def _redistributed_max_scores(components: list[_AvailableComponent]) -> dict[str
 def _callout(
     available: list[_AvailableComponent],
     session: Mapping[str, object],
-    leak_threshold_lps: float | None,
+    leak_threshold_lpm: float | None,
 ) -> str:
     """Return a human-readable callout sentence identifying the worst-scoring component.
 
@@ -228,9 +238,9 @@ def _callout(
     }
     callout = messages[worst.key]
     ahi = _number(session.get("ahi"))
-    leak_lps = _number(session.get("avg_leak"))
-    if leak_threshold_lps is not None and leak_lps is not None and ahi is not None:
-        if leak_lps > leak_threshold_lps and ahi < 3:
+    leak_lpm = leak_to_lpm(session.get("avg_leak"), _leak_unit(session))
+    if leak_threshold_lpm is not None and leak_lpm is not None and ahi is not None:
+        if leak_lpm > leak_threshold_lpm and ahi < 3:
             callout = (
                 "Large leak was the biggest drag on tonight's score, and the low AHI may be "
                 "understated because leak was above the large-leak threshold."

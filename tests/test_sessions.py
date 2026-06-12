@@ -4,7 +4,12 @@ from datetime import UTC, date, datetime, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from api.routers.sessions import _build_pdf_report, _manufacturer_select_expression, _mask_device_serial
+from api.routers.sessions import (
+    _build_pdf_report,
+    _manufacturer_select_expression,
+    _mask_device_serial,
+    _mean_leak_lpm,
+)
 from api.therapy_score import compute_therapy_score
 
 
@@ -36,6 +41,7 @@ def _seed_session(
     avg_pressure: float | None = 10.2,
     p95_pressure: float | None = 12.4,
     avg_leak: float | None = 0.012,
+    leak_unit: str | None = None,
     device_serial: str | None = "SN12345",
     therapy_mode: str | None = None,
     mask_type: str | None = None,
@@ -60,13 +66,13 @@ def _seed_session(
             INSERT INTO sessions (
                 id, session_id, folder_date, start_datetime, pld_start_datetime,
                 duration_seconds, device_serial, has_spo2, machine_tz, user_id,
-                note, tags, total_ahi_events, avg_pressure, p95_pressure, avg_leak,
+                note, tags, total_ahi_events, avg_pressure, p95_pressure, avg_leak, leak_unit,
                 therapy_mode, mask_type, avg_spo2, min_spo2, machine_id,
                 provenance_status{manufacturer_column}
             ) VALUES (
                 CAST(:sid AS uuid), :sid, :fd, :start, :start,
                 :duration_seconds, :device_serial, :has_spo2, :machine_tz, CAST(:uid AS uuid),
-                :note, CAST(:tags AS text[]), :total_ahi_events, :avg_pressure, :p95_pressure, :avg_leak,
+                :note, CAST(:tags AS text[]), :total_ahi_events, :avg_pressure, :p95_pressure, :avg_leak, :leak_unit,
                 :therapy_mode, :mask_type, :avg_spo2, :min_spo2, CAST(:machine_id AS uuid),
                 :provenance_status{manufacturer_value}
             )
@@ -84,6 +90,7 @@ def _seed_session(
             "avg_pressure": avg_pressure,
             "p95_pressure": p95_pressure,
             "avg_leak": avg_leak,
+            "leak_unit": leak_unit,
             "device_serial": device_serial,
             "therapy_mode": therapy_mode,
             "mask_type": mask_type,
@@ -437,6 +444,36 @@ class TestGetSession:
         assert leak["unit"] == "L/min"
         assert leak["unavailable_reason"] is None
 
+    def test_get_by_date_parser_lpm_leak_is_not_inflated(self, client: TestClient, auth_headers, test_user, db):
+        """A cpap-parser night (leak_unit='L/min') must score leak in L/min, not * 60.
+
+        Regression: the leak component used to assume L/s. A parser night at
+        10.22 L/min would have been read as 613 L/min and scored as severe leak.
+        Stored as L/min, it must surface as 10.22 L/min with full credit.
+        """
+        db.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS manufacturer TEXT"))
+        folder_date = date(2026, 7, 1)
+        _seed_session(
+            db,
+            test_user["id"],
+            folder_date=folder_date,
+            duration_seconds=8 * 3600,
+            total_ahi_events=0,
+            avg_leak=10.22,
+            leak_unit="L/min",
+            manufacturer="ResMed",
+            include_manufacturer=True,
+            provenance_status="native_resmed_cpap_parser",
+        )
+
+        resp = client.get(f"/sessions/by-date/{folder_date.isoformat()}", headers=auth_headers)
+
+        assert resp.status_code == 200
+        leak = resp.json()["therapy_score"]["components"]["leak"]
+        assert leak["value"] == 10.22  # not 613.2
+        assert leak["unit"] == "L/min"
+        assert leak["score"] == leak["max_score"]
+
     def test_get_by_date_unknown_manufacturer_keeps_leak_unavailable(self, client: TestClient, auth_headers, test_user, db):
         db.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS manufacturer TEXT"))
         folder_date = date(2026, 6, 2)
@@ -473,6 +510,24 @@ class TestExportSessionPdf:
         assert "array_agg(s.manufacturer ORDER BY s.duration_seconds DESC)" in expression
         assert "FILTER (WHERE s.manufacturer IS NOT NULL AND s.manufacturer <> '')" in expression
         assert "'Unknown'" in expression
+
+    def test_mean_leak_lpm_normalizes_mixed_unit_nights(self):
+        """Each night is converted to L/min by its own unit before averaging.
+
+        A legacy night (0.2 L/s = 12 L/min) and a parser night (10 L/min) must
+        average to 11 L/min — not (0.2 + 10)/2 * 60, which the old blanket * 60
+        would have produced when the two import paths were mixed.
+        """
+        nights = [
+            {"avg_leak": 0.2, "leak_unit": "L/s"},
+            {"avg_leak": 10.0, "leak_unit": "L/min"},
+        ]
+        assert _mean_leak_lpm(nights) == 11.0
+
+    def test_mean_leak_lpm_defaults_missing_unit_to_legacy(self):
+        assert _mean_leak_lpm([{"avg_leak": 0.2, "leak_unit": None}]) == 12.0
+        assert _mean_leak_lpm([{"avg_leak": None, "leak_unit": "L/min"}]) is None
+        assert _mean_leak_lpm([]) is None
 
     def test_pdf_omits_repeated_unavailable_equipment_rows(self):
         pdf = _build_pdf_report(

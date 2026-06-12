@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
+from ..leak_units import leak_to_lpm
 from ..models import (
     EventRecord,
     EventWindowResponse,
@@ -115,6 +116,21 @@ def _format_metric(value, suffix: str = "") -> str:
     if value is None:
         return "Unavailable"
     return f"{float(value):.1f}{suffix}"
+
+
+def _mean_leak_lpm(nights: list[dict]) -> float | None:
+    """Mean nightly leak in L/min, normalizing each night by its own leak_unit.
+
+    Legacy nights store leak in L/s and parser nights in L/min, so each night must
+    be converted to L/min before averaging — a blanket ``* 60`` would inflate the
+    parser nights 60x (and double-count when the two import paths are mixed).
+    """
+    values = [
+        lpm
+        for night in nights
+        if (lpm := leak_to_lpm(night.get("avg_leak"), night.get("leak_unit"))) is not None
+    ]
+    return sum(values) / len(values) if values else None
 
 
 def _group_contiguous_dates(dates: list[date]) -> str:
@@ -265,10 +281,9 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
 
     avg_pressures = [float(night["avg_pressure"]) for night in nights if night["avg_pressure"] is not None]
     p95_pressures = [float(night["p95_pressure"]) for night in nights if night["p95_pressure"] is not None]
-    leaks = [float(night["avg_leak"]) for night in nights if night["avg_leak"] is not None]
     avg_pressure = sum(avg_pressures) / len(avg_pressures) if avg_pressures else None
     p95_pressure = sum(p95_pressures) / len(p95_pressures) if p95_pressures else None
-    avg_leak = sum(leaks) / len(leaks) if leaks else None
+    avg_leak_lpm = _mean_leak_lpm(nights)
 
     manufacturers: dict[str, list[date]] = defaultdict(list)
     device_serials = set()
@@ -313,7 +328,7 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
         ["Total nights recorded", str(nights_used)],
         ["Average pressure", _format_metric(avg_pressure, " cmH2O")],
         ["P95 pressure", _format_metric(p95_pressure, " cmH2O")],
-        ["Average leak", _format_metric(avg_leak * 60 if avg_leak is not None else None, " L/min")],
+        ["Average leak", _format_metric(avg_leak_lpm, " L/min")],
     ]
 
     story = [
@@ -356,7 +371,7 @@ def _build_pdf_report(_start_raw: str, _end_raw: str, start: date, end: date, ni
         ]))
     notes = [
         "AHI is calculated from recorded apnea and hypopnea events over recorded therapy hours.",
-        "Leak values follow SleepLab's existing session display convention.",
+        "Leak is reported in L/min, normalized from each night's recorded leak unit.",
     ]
     if missing_equipment_details:
         notes.append("Some equipment details were not available for this device.")
@@ -402,6 +417,7 @@ def export_sessions_pdf(
                     AVG(s.avg_pressure) AS avg_pressure,
                     MAX(s.p95_pressure) AS p95_pressure,
                     AVG(s.avg_leak) AS avg_leak,
+                    (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                     (array_agg(s.device_serial ORDER BY s.duration_seconds DESC) FILTER (WHERE s.device_serial IS NOT NULL))[1] AS device_serial,
                     (array_agg(s.therapy_mode ORDER BY s.duration_seconds DESC) FILTER (WHERE s.therapy_mode IS NOT NULL))[1] AS therapy_mode,
                     (array_agg(s.mask_type ORDER BY s.duration_seconds DESC) FILTER (WHERE s.mask_type IS NOT NULL))[1] AS mask_type,
@@ -427,6 +443,7 @@ def export_sessions_pdf(
                 ROUND(avg_pressure::numeric, 2) AS avg_pressure,
                 ROUND(p95_pressure::numeric, 2) AS p95_pressure,
                 ROUND(avg_leak::numeric, 4) AS avg_leak,
+                leak_unit,
                 device_serial,
                 therapy_mode,
                 mask_type,
@@ -1113,7 +1130,7 @@ def get_session_metrics(
     if not rows:
         return _empty_metrics_response()
 
-    return _metrics_response(rows)
+    return _metrics_response(rows, _session_leak_unit(internal_session_id, db))
 
 
 @router.get("/{session_id}/breath", response_model=MetricsResponse)
@@ -1155,7 +1172,7 @@ def get_session_breath(
     if not rows:
         return _empty_metrics_response()
 
-    return _metrics_response(rows)
+    return _metrics_response(rows, _session_leak_unit(internal_session_id, db))
 
 
 def _empty_metrics_response() -> MetricsResponse:
@@ -1174,8 +1191,12 @@ def _empty_metrics_response() -> MetricsResponse:
     )
 
 
-def _metrics_response(rows) -> MetricsResponse:
-    """Assemble a MetricsResponse from raw DB rows, converting Decimal values to float."""
+def _metrics_response(rows, leak_unit: str | None = None) -> MetricsResponse:
+    """Assemble a MetricsResponse from raw DB rows, converting Decimal values to float.
+
+    ``leak`` is returned in its stored units; ``leak_unit`` tells the client which
+    unit that is so it can normalize to L/min (legacy stores L/s, parser L/min).
+    """
     return MetricsResponse(
         timestamps=[r["ts"].isoformat() for r in rows],
         mask_pressure=[_f(r["mask_pressure"]) for r in rows],
@@ -1187,6 +1208,7 @@ def _metrics_response(rows) -> MetricsResponse:
         min_vent=[_f(r["min_vent"]) for r in rows],
         snore=[_f(r["snore"]) for r in rows],
         flow_lim=[_f(r["flow_lim"]) for r in rows],
+        leak_unit=leak_unit,
     )
 
 
@@ -1323,6 +1345,14 @@ def update_session_timezone(
 
     db.commit()
     return get_session(session_id=session_id, current_user=current_user, db=db)
+
+
+def _session_leak_unit(internal_session_id: str, db: Session) -> str | None:
+    """Return the stored leak unit for a session so metric clients can normalize to L/min."""
+    return db.execute(
+        text("SELECT leak_unit FROM sessions WHERE id = CAST(:id AS uuid)"),
+        {"id": internal_session_id},
+    ).scalar()
 
 
 def _require_session(session_id: str, user_id: str, db: Session) -> str:

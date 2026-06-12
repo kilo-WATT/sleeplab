@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..database import get_db
+from ..leak_units import leak_to_lpm
 from ..llm_client import get_llm_client, get_model, get_provider, is_configured
 from ..settings_store import get_llm_settings, has_explicit_llm_settings
 
@@ -243,7 +244,9 @@ def _build_general_context(db: Session, user_id: str, days: int) -> dict[str, An
                      THEN SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0)
                      ELSE NULL END AS ahi,
                 AVG(s.avg_pressure) AS avg_pressure, MAX(s.p95_pressure) AS p95_pressure,
-                AVG(s.avg_leak) AS avg_leak, AVG(s.avg_flow_lim) AS avg_flow_lim,
+                AVG(s.avg_leak) AS avg_leak,
+                (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
+                AVG(s.avg_flow_lim) AS avg_flow_lim,
                 SUM(s.central_apnea_count) AS central_apnea_count,
                 SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
                 SUM(s.hypopnea_count) AS hypopnea_count, SUM(s.apnea_count) AS apnea_count,
@@ -311,7 +314,9 @@ def _build_trend_context(db: Session, user_id: str) -> dict[str, Any]:
                      THEN SUM(s.total_ahi_events) / (nta.usage_seconds / 3600.0)
                      ELSE NULL END AS ahi,
                 AVG(s.avg_pressure) AS avg_pressure, MAX(s.p95_pressure) AS p95_pressure,
-                AVG(s.avg_leak) AS avg_leak, AVG(s.avg_flow_lim) AS avg_flow_lim,
+                AVG(s.avg_leak) AS avg_leak,
+                (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
+                AVG(s.avg_flow_lim) AS avg_flow_lim,
                 SUM(s.central_apnea_count) AS central_apnea_count,
                 SUM(s.obstructive_apnea_count) AS obstructive_apnea_count,
                 SUM(s.hypopnea_count) AS hypopnea_count, SUM(s.apnea_count) AS apnea_count,
@@ -378,6 +383,7 @@ def _build_session_context(db: Session, user_id: str, session_id: str) -> dict[s
                 AVG(s.avg_pressure) AS avg_pressure,
                 MAX(s.p95_pressure) AS p95_pressure,
                 AVG(s.avg_leak) AS avg_leak,
+                (array_agg(s.leak_unit ORDER BY s.duration_seconds DESC))[1] AS leak_unit,
                 AVG(s.avg_flow_lim) AS avg_flow_lim,
                 BOOL_OR(s.has_spo2) AS has_spo2,
                 AVG(s.avg_spo2) AS avg_spo2,
@@ -469,10 +475,12 @@ def _build_session_context(db: Session, user_id: str, session_id: str) -> dict[s
             "max_sample_cm_h2o": _float(metrics["max_pressure"] if metrics else None),
         },
         "leak": {
-            "avg_lpm": _lps_to_lpm(row["avg_leak"]),
-            "sample_avg_lpm": _lps_to_lpm(metrics["avg_leak"] if metrics else None),
-            "p95_lpm": _lps_to_lpm(metrics["p95_leak"] if metrics else None),
-            "max_lpm": _lps_to_lpm(metrics["max_leak"] if metrics else None),
+            # row["avg_leak"] and the session_metrics leak samples share this
+            # session's leak_unit; normalize all of them to L/min the same way.
+            "avg_lpm": leak_to_lpm(row["avg_leak"], row["leak_unit"]),
+            "sample_avg_lpm": leak_to_lpm(metrics["avg_leak"] if metrics else None, row["leak_unit"]),
+            "p95_lpm": leak_to_lpm(metrics["p95_leak"] if metrics else None, row["leak_unit"]),
+            "max_lpm": leak_to_lpm(metrics["max_leak"] if metrics else None, row["leak_unit"]),
             "large_leak_reference_lpm": 24,
         },
         "flow_limitation": {
@@ -503,7 +511,7 @@ def _night_dict(row: Mapping[str, Any]) -> dict[str, Any]:
         "ahi": _float(row["ahi"]),
         "avg_pressure": _float(row["avg_pressure"]),
         "p95_pressure": _float(row["p95_pressure"]),
-        "avg_leak_lpm": _lps_to_lpm(row["avg_leak"]),
+        "avg_leak_lpm": leak_to_lpm(row["avg_leak"], row.get("leak_unit")),
         "avg_flow_lim": _float(row["avg_flow_lim"]),
         "event_counts": {
             "central": int(row["central_apnea_count"] or 0),
@@ -758,7 +766,3 @@ def _avg(values: list[float]) -> float | None:
 
 def _float(value: object) -> float | None:
     return round(float(value), 4) if value is not None else None
-
-
-def _lps_to_lpm(value: object) -> float | None:
-    return round(float(value) * 60, 2) if value is not None else None

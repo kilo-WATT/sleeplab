@@ -96,6 +96,47 @@ def test_unconfirmed_manufacturer_redistributes_leak_weight():
     assert score.components.ahi.max_score + score.components.duration.max_score + score.components.spo2.max_score == 100
 
 
+def test_parser_lpm_leak_is_not_inflated_by_60():
+    """A cpap-parser session (leak_unit='L/min') must not be treated as L/s.
+
+    Regression: therapy_score previously multiplied avg_leak by 60 unconditionally,
+    so a parser night at 12 L/min was shown as 720 L/min and scored as catastrophic
+    leak. With the leak_unit respected, 12 L/min stays 12 L/min and (being below the
+    24 L/min ResMed threshold) keeps full leak credit.
+    """
+    score = compute_therapy_score(_session(avg_leak=12.0, leak_unit="L/min"))
+
+    assert score.components.leak is not None
+    assert score.components.leak.value == 12.0
+    assert score.components.leak.unit == "L/min"
+    assert score.components.leak.score == score.components.leak.max_score
+
+
+def test_parser_and_legacy_same_physical_leak_score_identically():
+    """The same physical leak scores the same regardless of stored unit.
+
+    0.5 L/s (legacy) and 30 L/min (parser) are the same leak; both exceed the
+    24 L/min threshold and must produce the same leak component value and score.
+    """
+    legacy = compute_therapy_score(_session(avg_leak=0.5, leak_unit="L/s", ahi=8.0))
+    parser = compute_therapy_score(_session(avg_leak=30.0, leak_unit="L/min", ahi=8.0))
+
+    assert legacy.components.leak is not None and parser.components.leak is not None
+    assert legacy.components.leak.value == parser.components.leak.value == 30.0
+    assert legacy.components.leak.score == parser.components.leak.score
+    assert legacy.components.leak.score < legacy.components.leak.max_score
+
+
+def test_parser_large_leak_reduces_component_and_flags_callout():
+    """A genuinely large parser leak (48 L/min) still penalizes the leak component."""
+    score = compute_therapy_score(_session(avg_leak=48.0, leak_unit="L/min", ahi=2.0))
+
+    assert score.components.leak is not None
+    assert score.components.leak.value == 48.0
+    assert score.components.leak.score < score.components.leak.max_score
+    assert "low AHI may be understated" in score.callout
+
+
 def test_grade_mapping():
     assert grade_for_score(90) == "A"
     assert grade_for_score(80) == "B"

@@ -240,6 +240,8 @@ class MetricsResponse(BaseModel):
         min_vent: Minute ventilation data series.
         snore: Snore index data series.
         flow_lim: Flow limitation index data series.
+        leak_unit: Stored unit of the raw leak series (e.g. 'L/s', 'L/min') so
+            clients normalize to L/min instead of assuming a unit.
     """
 
     timestamps: list[str]
@@ -252,6 +254,7 @@ class MetricsResponse(BaseModel):
     min_vent: list[float | None]
     snore: list[float | None]
     flow_lim: list[float | None]
+    leak_unit: str | None = None
 
 
 class SpO2Response(BaseModel):
@@ -454,6 +457,7 @@ class OverviewDailyStat(BaseModel):
     avg_pressure: float | None
     p95_pressure: float | None
     avg_leak: float | None
+    leak_unit: str | None = None
     large_leak_minutes: float | None
     avg_flow_lim: float | None
     avg_tidal_vol: float | None
