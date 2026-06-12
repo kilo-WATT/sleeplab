@@ -90,15 +90,19 @@ KNOWN_DIFFERENCES: dict[str, str] = {
         "oximetry (has_spo2 hardcoded False) — audit P0 #3"
     ),
     "session_events": (
-        "event-window assignment policy differs. Both paths read an identical raw "
-        "EVE event list (the EVE parsers agree exactly), but legacy clips device-"
-        "scored events to each PLD recording window (events_for_block), discarding "
-        "events that fall outside a recording block (inter-block gaps / boundaries), "
-        "while the cpap-parser path retains the full device-scored list. Net effect "
-        "on a real card: parser >= legacy, by the count of boundary/gap events; type "
-        "sets match and large-leak derivation agrees. Inspect type_counts / "
-        "ahi_event_count to confirm the gap is boundary-clipped scored events; a "
-        "net-negative or large divergence would still warrant review — audit P1 event-window policy"
+        "DECIDED POLICY (SleepLab 2.0 = Option A): preserve the full device-scored "
+        "event list. Both paths read an identical raw EVE event list (the EVE parsers "
+        "agree exactly) and large-leak derivation matches, but legacy clips device-"
+        "scored events to each PLD recording window (events_for_block), dropping events "
+        "in inter-block gaps / at boundaries, while the cpap-parser path keeps the full "
+        "device-scored list. So parser >= legacy is the EXPECTED, accepted direction "
+        "(the parser is not overcounting — it preserves events legacy dropped); legacy "
+        "recording-window clipping is treated as legacy behavior, not the target. "
+        "Accepted only while consistent with that policy: matching event-type sets and "
+        "parser totals/AHI >= legacy. A type-set mismatch, a net-negative (parser < "
+        "legacy), or evidence of duplication stays unexpected — inspect type_counts / "
+        "ahi_event_count. Do not claim exact OSCAR parity here without an OSCAR "
+        "reference — audit P1 event-window policy"
     ),
     "signal_channels": (
         "channel metadata source differs (legacy: raw EDF header; cpap-parser: "
@@ -586,6 +590,18 @@ def classify_parity(
     ``known_differences`` (carrying its reason) or ``unexpected_difference`` when
     not — the latter is what a reviewer must investigate.
 
+    Two tables get a *policy-aware* verdict instead of a flat known-difference
+    lookup, so an accepted shape is not confused with a genuine regression:
+
+    * ``sessions`` — the night-level-vs-block-scoped row-count difference is only
+      accepted when block, usage, and event totals reconcile
+      (:func:`_session_shape_totals_match`).
+    * ``session_events`` — SleepLab 2.0 preserves the full device-scored event list
+      (Option A), so a difference is accepted only when it matches that policy:
+      equal event-type sets and parser totals/AHI ``>=`` legacy. A type-set
+      mismatch, a net-negative, or unavailable fields stay
+      ``unexpected_difference`` (:func:`_event_policy_difference_accepted`).
+
     Returns ``{table: {"category", "reason", "legacy", "parser"}}``.
     """
     report: dict[str, dict] = {}
@@ -622,6 +638,10 @@ def classify_parity(
             totals_match, reason = _session_shape_totals_match(legacy, parser)
             category = EXPECTED_DIFFERENCE if totals_match else UNEXPECTED_DIFFERENCE
             report[table] = _verdict(category, reason, legacy_side, parser_side)
+        elif table == "session_events":
+            accepted, reason = _event_policy_difference_accepted(legacy_side, parser_side)
+            category = EXPECTED_DIFFERENCE if accepted else UNEXPECTED_DIFFERENCE
+            report[table] = _verdict(category, reason, legacy_side, parser_side)
         elif table in known_differences:
             report[table] = _verdict(EXPECTED_DIFFERENCE, known_differences[table], legacy_side, parser_side)
         else:
@@ -637,11 +657,18 @@ def classify_parity(
 def _session_shape_totals_match(
     legacy: dict[str, dict], parser: dict[str, dict]
 ) -> tuple[bool, str]:
-    """Guard the accepted night-level-vs-block-scoped session row difference."""
+    """Guard the accepted night-level-vs-block-scoped session row difference.
+
+    Block rows and nightly usage seconds must reconcile exactly. Event totals need
+    not be *equal*: under the device-scored-event policy (Option A) the parser may
+    legitimately retain more events than legacy, so an event difference is allowed
+    as long as it is the accepted policy difference
+    (:func:`_event_policy_difference_accepted`); a type-set mismatch or a
+    net-negative still blocks acceptance.
+    """
     comparisons = (
         ("block rows", "session_blocks", "row_count"),
         ("nightly usage seconds", "nightly_therapy_aggregates", "total_usage_seconds"),
-        ("event rows", "session_events", "row_count"),
     )
     mismatches: list[str] = []
     for label, table, field in comparisons:
@@ -652,6 +679,13 @@ def _session_shape_totals_match(
         elif legacy_value != parser_value:
             mismatches.append(f"{label} differ ({legacy_value!r} vs {parser_value!r})")
 
+    legacy_events = legacy.get("session_events", {})
+    parser_events = parser.get("session_events", {})
+    if legacy_events != parser_events:
+        accepted, event_reason = _event_policy_difference_accepted(legacy_events, parser_events)
+        if not accepted:
+            mismatches.append(f"event totals not an accepted policy difference — {event_reason}")
+
     if mismatches:
         return (
             False,
@@ -661,7 +695,70 @@ def _session_shape_totals_match(
     return (
         True,
         "SleepLab 2.0 uses night-level sessions plus session_blocks; differing "
-        "session row counts are accepted because block, usage, and event totals match",
+        "session row counts are accepted because block and usage totals match and any "
+        "event-count difference is the accepted device-scored-event policy (parser >= legacy)",
+    )
+
+
+def _event_policy_difference_accepted(
+    legacy_events: dict, parser_events: dict
+) -> tuple[bool, str]:
+    """Guard the accepted device-scored-event policy difference (Option A).
+
+    SleepLab 2.0 preserves the full device-scored event list; legacy clips events to
+    PLD recording windows. A ``session_events`` difference is therefore accepted as
+    this *policy* difference only when it is consistent with it:
+
+    * event-type sets are equal (no type-mapping drift), and
+    * the parser retains at least as many total events and AHI events as legacy
+      (parser ``>=`` legacy — the parser preserves, it does not drop).
+
+    Anything else stays ``unexpected`` so the harness keeps flagging genuine
+    problems rather than waving them through:
+
+    * a type-set mismatch (parser invents or drops an event type),
+    * a net-negative (parser persists fewer events/AHI than legacy — a regression
+      or dropped data, the opposite of the preserve-everything policy), or
+    * missing fields needed to make the call.
+
+    Note: this cannot, from aggregates alone, prove the extra events are unique
+    rather than duplicated. Duplication must still be watched via ``type_counts`` /
+    ``ahi_event_count`` and the per-session DB dedupe; the accepted verdict is not a
+    duplication clearance.
+    """
+    le_types = set(legacy_events.get("event_types") or [])
+    pa_types = set(parser_events.get("event_types") or [])
+    if le_types != pa_types:
+        return (
+            False,
+            "event-type sets differ ("
+            f"legacy-only={sorted(le_types - pa_types)}, parser-only={sorted(pa_types - le_types)}"
+            ") — type-mapping mismatch, not the device-scored clipping policy; investigate",
+        )
+
+    le_total = legacy_events.get("row_count")
+    pa_total = parser_events.get("row_count")
+    le_ahi = legacy_events.get("ahi_event_count")
+    pa_ahi = parser_events.get("ahi_event_count")
+    if any(v is None for v in (le_total, pa_total, le_ahi, pa_ahi)):
+        return (
+            False,
+            "event totals / ahi_event_count unavailable, cannot confirm the "
+            "device-scored policy direction — investigate",
+        )
+    if pa_total < le_total or pa_ahi < le_ahi:
+        return (
+            False,
+            "parser persists FEWER events than legacy "
+            f"(total {pa_total} vs {le_total}, ahi {pa_ahi} vs {le_ahi}); SleepLab 2.0 "
+            "preserves the full device-scored list, so a net-negative is unexpected "
+            "(dropped events or a regression) — investigate",
+        )
+    return (
+        True,
+        KNOWN_DIFFERENCES.get("session_events", "")
+        + f" [accepted: types match, parser >= legacy — total {pa_total} vs {le_total}, "
+        f"ahi {pa_ahi} vs {le_ahi}]",
     )
 
 

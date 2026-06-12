@@ -120,6 +120,90 @@ def test_session_row_difference_is_unexpected_without_comparison_totals():
     assert "unavailable" in report["sessions"]["reason"]
 
 
+# --- session_events device-scored-event policy (Option A) ---------------------
+# SleepLab 2.0 preserves the full device-scored event list. These use synthetic,
+# illustrative counts (NOT real-card values): the point is the classification
+# logic, not any specific card's numbers.
+
+_EVENT_TYPES = [
+    "Apnea",
+    "Arousal",
+    "Central Apnea",
+    "Hypopnea",
+    "Large Leak",
+    "Obstructive Apnea",
+]
+
+
+def test_session_events_full_device_list_is_accepted_policy():
+    # parser retains >= legacy with matching type sets -> accepted policy difference.
+    legacy = {"session_events": {"row_count": 10, "event_types": _EVENT_TYPES, "ahi_event_count": 6}}
+    parser = {"session_events": {"row_count": 12, "event_types": _EVENT_TYPES, "ahi_event_count": 7}}
+    report = cp.classify_parity(legacy, parser, tables=("session_events",))
+    assert report["session_events"]["category"] == cp.EXPECTED_DIFFERENCE
+    reason = report["session_events"]["reason"].lower()
+    assert "accepted" in reason and "device-scored" in reason
+
+
+def test_session_events_net_negative_is_unexpected():
+    # parser persists FEWER events than legacy -> not the preserve-everything policy.
+    legacy = {"session_events": {"row_count": 12, "event_types": _EVENT_TYPES, "ahi_event_count": 7}}
+    parser = {"session_events": {"row_count": 10, "event_types": _EVENT_TYPES, "ahi_event_count": 6}}
+    report = cp.classify_parity(legacy, parser, tables=("session_events",))
+    assert report["session_events"]["category"] == cp.UNEXPECTED_DIFFERENCE
+    assert "fewer" in report["session_events"]["reason"].lower()
+
+
+def test_session_events_type_mismatch_is_unexpected():
+    # a new event type on either side is a mapping/dup concern, not the clip policy.
+    legacy = {"session_events": {"row_count": 10, "event_types": _EVENT_TYPES, "ahi_event_count": 6}}
+    parser = {
+        "session_events": {
+            "row_count": 12,
+            "event_types": [*_EVENT_TYPES, "RERA"],
+            "ahi_event_count": 7,
+        }
+    }
+    report = cp.classify_parity(legacy, parser, tables=("session_events",))
+    assert report["session_events"]["category"] == cp.UNEXPECTED_DIFFERENCE
+    assert "type" in report["session_events"]["reason"].lower()
+
+
+def test_session_events_higher_ahi_but_fewer_total_is_unexpected():
+    # AHI up but total down is contradictory (e.g. dropped non-AHI / duplication) ->
+    # stay unexpected; the policy only accepts parser >= legacy on BOTH measures.
+    legacy = {"session_events": {"row_count": 12, "event_types": _EVENT_TYPES, "ahi_event_count": 6}}
+    parser = {"session_events": {"row_count": 10, "event_types": _EVENT_TYPES, "ahi_event_count": 7}}
+    report = cp.classify_parity(legacy, parser, tables=("session_events",))
+    assert report["session_events"]["category"] == cp.UNEXPECTED_DIFFERENCE
+
+
+def test_session_shape_accepts_option_a_event_difference_when_block_usage_match():
+    # When block + usage totals reconcile, an accepted device-scored event
+    # difference must NOT block the session row-shape acceptance.
+    common = {
+        "session_blocks": {"row_count": 72},
+        "nightly_therapy_aggregates": {"total_usage_seconds": 1000},
+    }
+    legacy = {
+        "sessions": {"row_count": 43},
+        **common,
+        "session_events": {"row_count": 10, "event_types": _EVENT_TYPES, "ahi_event_count": 6},
+    }
+    parser = {
+        "sessions": {"row_count": 40},
+        **common,
+        "session_events": {"row_count": 12, "event_types": _EVENT_TYPES, "ahi_event_count": 7},
+    }
+    report = cp.classify_parity(legacy, parser, tables=("sessions",))
+    assert report["sessions"]["category"] == cp.EXPECTED_DIFFERENCE
+
+
+def test_session_events_policy_documented_in_known_differences():
+    text = cp.KNOWN_DIFFERENCES["session_events"].lower()
+    assert "device-scored" in text and "option a" in text
+
+
 def test_classify_missing_sides():
     legacy = {"sessions": {"row_count": 1}}
     parser = {"session_spo2": {"row_count": 0}}
