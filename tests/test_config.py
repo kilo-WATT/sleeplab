@@ -19,6 +19,11 @@ class TestGetConfig:
         assert data["machine_tz"] == "UTC"
         assert data["resmed_import_backend"] == "legacy"
         assert isinstance(data["cpap_parser_available"], bool)
+        assert data["resmed_import_ready"] is True
+        assert data["datalog_import_backend"] == "legacy"
+        assert data["datalog_import_available"] is True
+        assert data["cpap_parser_oximetry_supported"] is False
+        assert data["cpap_parser_source_provenance"] == "manifest-level-partial"
 
     def test_reflects_env_vars(self, monkeypatch):
         """Test reflects env vars."""
@@ -36,7 +41,10 @@ class TestGetConfig:
         resp = client.get("/config")
 
         assert resp.status_code == 200
-        assert resp.json()["resmed_import_backend"] == "cpap-parser"
+        data = resp.json()
+        assert data["resmed_import_backend"] == "cpap-parser"
+        assert data["datalog_import_available"] is False
+        assert data["resmed_import_ready"] is data["cpap_parser_available"]
 
     def test_no_auth_required(self):
         """Test no auth required."""
@@ -52,6 +60,11 @@ class TestGetConfig:
             "machine_tz",
             "resmed_import_backend",
             "cpap_parser_available",
+            "resmed_import_ready",
+            "datalog_import_backend",
+            "datalog_import_available",
+            "cpap_parser_oximetry_supported",
+            "cpap_parser_source_provenance",
         }
         assert isinstance(data["display_tz"], str)
         assert isinstance(data["machine_tz"], str)

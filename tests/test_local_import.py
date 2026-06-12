@@ -41,6 +41,15 @@ def test_trigger_local_no_path(client, auth_headers):
     assert resp.status_code == 400
 
 
+def test_trigger_local_is_disabled_in_parser_mode(client, auth_headers, monkeypatch):
+    monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", "1")
+
+    resp = client.post("/import/trigger-local", headers=auth_headers)
+
+    assert resp.status_code == 409
+    assert "legacy-only" in resp.json()["detail"]
+
+
 def test_trigger_all_no_secret(client):
     """Test trigger all no secret."""
     resp = client.post("/import/trigger/all")

@@ -5,12 +5,11 @@ GET /config  — returns server-side settings the frontend needs at runtime,
                including the display timezone for plot labels.
 """
 
-import importlib.util
 import os
 
 from fastapi import APIRouter
 
-from importer.loaders.execution import use_cpap_parser
+from importer.loaders.execution import cpap_parser_runtime_available, use_cpap_parser
 
 router = APIRouter()
 
@@ -28,13 +27,15 @@ def get_config():
                 the naive local timestamps embedded in EDF files.  Defaults to UTC.
     """
     parser_selected = use_cpap_parser()
-    parser_available = (
-        importlib.util.find_spec("cpap_parser") is not None
-        and importlib.util.find_spec("cpap_py") is not None
-    )
+    parser_available = cpap_parser_runtime_available()
     return {
         "display_tz": os.environ.get("DISPLAY_TZ", "UTC"),
         "machine_tz": os.environ.get("MACHINE_TZ", "UTC"),
         "resmed_import_backend": "cpap-parser" if parser_selected else "legacy",
         "cpap_parser_available": parser_available,
+        "resmed_import_ready": not parser_selected or parser_available,
+        "datalog_import_backend": "legacy",
+        "datalog_import_available": not parser_selected,
+        "cpap_parser_oximetry_supported": False,
+        "cpap_parser_source_provenance": "manifest-level-partial",
     }

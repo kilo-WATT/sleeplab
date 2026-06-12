@@ -3,7 +3,9 @@
 from .execution import (
     ExecutionRequest,
     ImportPlanError,
+    cpap_parser_runtime_available,
     prepare_execution,
+    require_cpap_parser_runtime,
     run_cpap_parser_import,
     use_cpap_parser,
 )
@@ -40,9 +42,11 @@ __all__ = [
     "ResMedNativeLoader",
     "create_default_registry",
     "create_import_plan",
+    "cpap_parser_runtime_available",
     "import_plan_dict",
     "inspect_source_root",
     "prepare_execution",
+    "require_cpap_parser_runtime",
     "run_cpap_parser_import",
     "use_cpap_parser",
 ]

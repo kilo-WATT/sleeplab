@@ -4,7 +4,10 @@ on:
   pull_request:
     branches:
       - main
+      - develop/2.0
   push:
+    branches:
+      - develop/2.0
     tags:
       - "v*"
 
@@ -127,10 +130,13 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --extra parser --group dev
+
+      - name: Verify parser runtime
+        run: uv run python -c "import cpap_parser, cpap_py"
 
       - name: Lint with ruff
-        run: uv run ruff check tests/ --output-format=github
+        run: uv run ruff check importer/ tests/ --output-format=github
 
       - name: Run backend tests
         run: uv run pytest -v --tb=short

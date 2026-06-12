@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from importer.loaders import (
     ImportPlanError,
+    cpap_parser_runtime_available,
     create_import_plan,
     import_plan_dict,
     prepare_execution,
@@ -25,7 +26,7 @@ from importer.loaders import (
 
 from ..auth import get_current_user
 from ..database import SessionLocal, get_db
-from ..import_runs import create_import_run
+from ..import_runs import create_import_run, resmed_backend_conflict
 from ..oximeter import OximeterParseError, OximeterRecording, parse_viatom_binary
 from ..settings_store import get_timezone_settings, normalize_timezone
 
@@ -390,6 +391,15 @@ def finish_datalog_upload(
         HTTPException: If the upload session is not found/authorized or if no files were uploaded.
     """
     session = _require_session(upload_id, current_user["id"])
+    if use_cpap_parser():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The /datalog upload flow is legacy-only and is disabled while "
+                "SLEEPLAB_USE_CPAP_PARSER is enabled. Upload the full ResMed card "
+                "root through /source instead."
+            ),
+        )
     if session.file_count == 0:
         raise HTTPException(status_code=400, detail="No files uploaded for this import session")
 
@@ -474,6 +484,32 @@ def finish_source_import(
     except ImportPlanError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    parser_selected = use_cpap_parser()
+    if parser_selected and not cpap_parser_runtime_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The cpap-parser ResMed backend is selected but unavailable. Install "
+                "it with `uv sync --extra parser --group dev` or use the SleepLab "
+                "Docker image, then restart SleepLab."
+            ),
+        )
+    if resmed_backend_conflict(
+        db,
+        user_id=session.user_id,
+        plan=plan,
+        parser_selected=parser_selected,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This ResMed machine already has sessions imported by the other "
+                "backend. SleepLab 2.0 beta does not mix legacy and cpap-parser "
+                "histories. Back up the database, delete existing imported session "
+                "data, then re-import the full card with one backend."
+            ),
+        )
+
     run_id, machine_id = create_import_run(
         db,
         user_id=session.user_id,
@@ -490,7 +526,7 @@ def finish_source_import(
     # importer subprocess is retained as the fallback/rollback path and stays the
     # runtime default until the cpap-py runtime posture is settled (see
     # docs/sleeplab_2_resmed_cutover_remaining_work.md).
-    if use_cpap_parser():
+    if parser_selected:
         logger.info(
             "Routing import run %s through the cpap-parser loader (SLEEPLAB_USE_CPAP_PARSER=1).",
             run_id,

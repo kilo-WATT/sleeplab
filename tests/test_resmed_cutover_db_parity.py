@@ -411,6 +411,7 @@ def _run_legacy(real_conn, *, fixture_root: Path, user_id: str, machine_id: str,
 
 def _run_parser(real_conn, *, fixture_root: Path, user_id: str, machine_id: str, run_id: str):
     """Drive the cpap-parser path (loader -> persist_import_run) into the test txn."""
+    from importer.db import mark_import_source_roles_consumed
     from importer.loaders.models import ImportOptions
     from importer.loaders.persist import persist_import_run
     from importer.loaders.resmed_native import ResMedNativeLoader
@@ -423,6 +424,11 @@ def _run_parser(real_conn, *, fixture_root: Path, user_id: str, machine_id: str,
     run, directory = loader.import_data_with_directory(detected, ImportOptions())
     persist_import_run(
         run, user_id, real_conn, import_run_id=run_id, machine_id=machine_id, raw_directory=directory
+    )
+    mark_import_source_roles_consumed(
+        real_conn,
+        run_id,
+        ("identity", "summary", "events", "waveform", "low_rate_signals", "oximetry"),
     )
 
 
@@ -556,7 +562,7 @@ def test_db_parity_harness(db, test_user):
     assert legacy_sources["row_count"] == parser_sources["row_count"] == manifest_count
     assert legacy_sources["roles"] == parser_sources["roles"]
     assert legacy_sources["used_count"] > 0
-    assert parser_sources["used_count"] == 1
+    assert parser_sources["used_count"] > 1
     assert legacy_sources["skipped_count"] == manifest_count - legacy_sources["used_count"]
     assert parser_sources["skipped_count"] == manifest_count - parser_sources["used_count"]
     assert legacy_sources["unknown_count"] == parser_sources["unknown_count"] == 0

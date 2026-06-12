@@ -92,11 +92,19 @@ def finish_import_run(
     summary_only_days: int = 0,
     warnings: list[dict] | None = None,
     capability_status: dict | None = None,
+    consumed_unlinked_roles: tuple[str, ...] = (),
 ) -> None:
     """Finalize a durable import run after native importer execution."""
 
     warnings = _dedupe_diagnostics(warnings or [])
     with conn.cursor() as cur:
+        if consumed_unlinked_roles:
+            mark_import_source_roles_consumed(
+                conn,
+                import_run_id,
+                consumed_unlinked_roles,
+                cursor=cur,
+            )
         cur.execute(
             """
             UPDATE import_source_files
@@ -151,6 +159,49 @@ def finish_import_run(
             ),
         )
     conn.commit()
+
+
+def mark_import_source_roles_consumed(
+    conn: Any,
+    import_run_id: str,
+    roles: tuple[str, ...],
+    *,
+    cursor: Any = None,
+) -> None:
+    """Mark parser-consumed manifest roles without inventing row-level links."""
+
+    own_cursor = cursor is None
+    cur = cursor or conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE import_source_files
+            SET disposition = 'used',
+                parser_component = 'cpap-parser/resmed',
+                warning_state = warning_state || %s::jsonb
+            WHERE import_run_id = %s
+              AND disposition = 'unknown'
+              AND parser_role = ANY(%s)
+            """,
+            (
+                json.dumps(
+                    [
+                        {
+                            "code": "consumed_without_row_link",
+                            "message": (
+                                "cpap-parser consumed this source category, but upstream "
+                                "does not expose a stable source path for row-level linkage."
+                            ),
+                        }
+                    ]
+                ),
+                import_run_id,
+                list(roles),
+            ),
+        )
+    finally:
+        if own_cursor:
+            cur.close()
 
 
 def _dedupe_diagnostics(diagnostics: list[dict]) -> list[dict]:

@@ -373,6 +373,33 @@ def test_parser_child_cleanup_removes_stale_blocks_and_settings():
     ]
 
 
+def test_finish_import_run_marks_parser_consumed_roles_without_fake_links():
+    conn = FakeConn()
+
+    importer_db.finish_import_run(
+        conn,
+        "run-1",
+        status="success",
+        imported_sessions=1,
+        imported_blocks=1,
+        imported_events=1,
+        imported_channels=1,
+        imported_settings=1,
+        summary_only_days=0,
+        warnings=[],
+        errors=[],
+        consumed_unlinked_roles=("summary", "events", "waveform"),
+    )
+
+    consumed_sql, consumed_params = conn.cursor_obj.statements[0]
+    assert "SET disposition = 'used'" in consumed_sql
+    assert "consumed_without_row_link" in consumed_params[0]
+    assert consumed_params[1] == "run-1"
+    assert consumed_params[2] == ["summary", "events", "waveform"]
+    skipped_sql, _skipped_params = conn.cursor_obj.statements[1]
+    assert "disposition = 'unknown'" in skipped_sql
+
+
 def test_replace_derived_values_accepts_empty_corrected_summary(monkeypatch):
     """A re-import with no derived values clears stale rows without bulk inserting."""
     calls = []

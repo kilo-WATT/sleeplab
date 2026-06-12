@@ -22,6 +22,7 @@ still ``resmed-native-v2``. Only the *execution* step differs, so existing
 detection tests and the legacy fallback stay intact.
 """
 
+import importlib.util
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ from .planning import ImportPlan
 #: The cpap-parser execution adapter/backend identifiers.
 CPAP_PARSER_ADAPTER_ID = "resmed-cpap-parser-v1"
 CPAP_PARSER_BACKEND_ID = "sleeplab-cpap-parser-resmed"
+CPAP_PARSER_REQUIRED_MODULES = ("cpap_parser", "cpap_py")
 
 
 class ImportPlanError(ValueError):
@@ -52,6 +54,25 @@ def use_cpap_parser() -> bool:
     """
 
     return os.environ.get("SLEEPLAB_USE_CPAP_PARSER", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def cpap_parser_runtime_available() -> bool:
+    """Return whether both the parser package and ResMed backend are importable."""
+
+    return all(importlib.util.find_spec(module) is not None for module in CPAP_PARSER_REQUIRED_MODULES)
+
+
+def require_cpap_parser_runtime() -> None:
+    """Fail clearly when configuration selects a parser runtime that is absent."""
+
+    if cpap_parser_runtime_available():
+        return
+    raise ImportError(
+        "SLEEPLAB_USE_CPAP_PARSER is enabled, but the cpap-parser ResMed runtime "
+        "is unavailable. Install it with `uv sync --extra parser --group dev` "
+        "(or use the SleepLab Docker image), then restart SleepLab. Unset "
+        "SLEEPLAB_USE_CPAP_PARSER to use the legacy fallback."
+    )
 
 
 @dataclass(frozen=True)
@@ -118,6 +139,8 @@ def run_cpap_parser_import(
     summary counts.
     """
 
+    require_cpap_parser_runtime()
+
     # Lazy imports keep ``import importer.loaders`` free of psycopg2 / cpap-parser
     # at module load; they are only needed on this opt-in path.
     from importer.db import finish_import_run, get_conn
@@ -173,6 +196,14 @@ def run_cpap_parser_import(
             summary_only_days=counts["summary_only_days"],
             warnings=[_warning_dict(warning) for warning in run.warnings],
             errors=[],
+            consumed_unlinked_roles=(
+                "identity",
+                "summary",
+                "events",
+                "waveform",
+                "low_rate_signals",
+                "oximetry",
+            ),
         )
         return counts
     except Exception:

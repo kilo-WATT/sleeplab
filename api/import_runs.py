@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from importer.loaders.planning import ImportPlan, _source_role
 
+_PARSER_PROVENANCE_PREFIX = "native_resmed_cpap_parser"
+_LEGACY_PROVENANCE_PREFIX = "native_resmed_"
+
 
 def create_import_run(
     db: Session,
@@ -119,6 +122,40 @@ def create_import_run(
     _persist_source_manifest(db, run_id, source_root)
     db.commit()
     return run_id, machine_id
+
+
+def resmed_backend_conflict(
+    db: Session,
+    *,
+    user_id: str,
+    plan: ImportPlan,
+    parser_selected: bool,
+) -> bool:
+    """Return whether this import would mix legacy and parser ResMed sessions."""
+
+    device = plan.inspection["devices"][0]
+    if device["adapter_id"] != "resmed-native-v2":
+        return False
+    serial = _clean(device["identity"].get("serial_number"))
+    rows = db.execute(
+        text("""
+            SELECT DISTINCT s.provenance_status
+            FROM sessions s
+            LEFT JOIN cpap_machines m ON m.id = s.machine_id
+            WHERE s.user_id = CAST(:user_id AS uuid)
+              AND COALESCE(s.manufacturer, m.manufacturer, '') ILIKE 'ResMed'
+              AND (:serial IS NULL OR COALESCE(s.device_serial, m.serial_number) = :serial)
+        """),
+        {"user_id": user_id, "serial": serial},
+    ).scalars()
+    provenances = {str(value or "") for value in rows}
+    if parser_selected:
+        return any(
+            value.startswith(_LEGACY_PROVENANCE_PREFIX)
+            and not value.startswith(_PARSER_PROVENANCE_PREFIX)
+            for value in provenances
+        )
+    return any(value.startswith(_PARSER_PROVENANCE_PREFIX) for value in provenances)
 
 
 def _persist_source_manifest(db: Session, run_id: str, source_root: Path) -> None:

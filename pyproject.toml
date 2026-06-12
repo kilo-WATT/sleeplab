@@ -18,6 +18,11 @@ dependencies = [
     "tzdata>=2025.2; sys_platform == 'win32'",
 ]
 
+[project.optional-dependencies]
+parser = [
+    "cpap-parser[resmed] @ git+https://github.com/kilo-WATT/cpap-parser.git@6e015c4c95317683f68027099d7e998e36131eb2",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -29,6 +34,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "db: tests that require a Postgres database",
+    "private_card: tests that require a private local CPAP card path",
 ]
 
 [tool.ruff]

@@ -401,6 +401,16 @@ def trigger_local_import(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from importer.loaders.execution import use_cpap_parser
+
+    if use_cpap_parser():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Local DATALOG imports are legacy-only and are disabled while "
+                "SLEEPLAB_USE_CPAP_PARSER is enabled. Use the full-card /source upload flow."
+            ),
+        )
     row = (
         db.execute(
             text("SELECT * FROM user_import_settings WHERE user_id = CAST(:uid AS uuid)"),
@@ -444,6 +454,13 @@ def trigger_all_local_imports(
     db: Session = Depends(get_db),
     x_import_secret: str | None = Header(default=None),
 ):
+    from importer.loaders.execution import use_cpap_parser
+
+    if use_cpap_parser():
+        raise HTTPException(
+            status_code=409,
+            detail="Bulk local DATALOG imports are disabled while the cpap-parser backend is selected.",
+        )
     secret = os.environ.get("IMPORT_WEBHOOK_SECRET", "")
     if not secret or x_import_secret != secret:
         raise HTTPException(status_code=403, detail="Invalid or missing X-Import-Secret header.")
@@ -484,6 +501,13 @@ def webhook_per_user(
     db: Session = Depends(get_db),
     x_import_secret: str | None = Header(default=None),
 ):
+    from importer.loaders.execution import use_cpap_parser
+
+    if use_cpap_parser():
+        raise HTTPException(
+            status_code=409,
+            detail="Local DATALOG webhooks are disabled while the cpap-parser backend is selected.",
+        )
     """Per-user webhook fired by CPAP_data_uploader after each SMB sync session.
 
     Authenticates with the same IMPORT_WEBHOOK_SECRET as /trigger/all.
