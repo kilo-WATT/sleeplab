@@ -76,7 +76,9 @@ KNOWN_DIFFERENCES: dict[str, str] = {
     ),
     "session_blocks": (
         "block source differs (legacy: STR mask-interval + PLD recording-span "
-        "blocks; cpap-parser: cpap-py file-session blocks) — audit P1 #5"
+        "blocks; cpap-parser: cpap-py file-session blocks, now honestly labeled "
+        "source_kind='recording_span' — no longer mislabeled as "
+        "resmed_str_mask_interval) — audit P1 #5"
     ),
     "settings_snapshots": (
         "cpap-parser now persists loader-provided therapy_mode snapshots, but "
@@ -108,8 +110,13 @@ KNOWN_DIFFERENCES: dict[str, str] = {
         "paths — row counts only, no blobs compared; audit P1 #8 area"
     ),
     "nightly_therapy_aggregates": (
-        "derived view over sessions/blocks; differs because its inputs differ "
-        "(granularity + provenance) — audit P1 #6"
+        "derived view over sessions/blocks; usage differs because the parser path "
+        "has no STR mask intervals: summary-only nights now contribute STR-reported "
+        "therapy usage (recovered via the session-duration fallback), but detailed "
+        "nights still contribute recording spans rather than per-mask therapy time "
+        "(usage_source='recording_spans' vs legacy 'resmed_str_mask_intervals'). "
+        "Full numeric parity needs upstream mask intervals or a view/product "
+        "decision — audit P1 #6"
     ),
 }
 
@@ -195,6 +202,39 @@ def snapshot_parity_tables(conn: Any, *, machine_id: str, import_run_id: str) ->
             _safe_row(
                 conn,
                 "SELECT COALESCE(array_agg(DISTINCT b.block_kind ORDER BY b.block_kind), '{}') "
+                "FROM session_blocks b JOIN sessions s ON s.id = b.session_id WHERE s.machine_id = %s",
+                m,
+            )
+        ),
+        # ``source_kind`` is the authority label the nightly aggregate keys on:
+        # ``resmed_str_mask_interval`` (authoritative therapy) vs ``recording_span``
+        # (wall-clock recording extent, a usage *proxy* only). Capturing the distinct
+        # set makes it obvious whether a path is contributing real mask intervals or
+        # recording spans — the crux of the usage parity gap.
+        "source_kinds": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(array_agg(DISTINCT b.source_kind ORDER BY b.source_kind), '{}') "
+                "FROM session_blocks b JOIN sessions s ON s.id = b.session_id WHERE s.machine_id = %s",
+                m,
+            )
+        ),
+        # Recording-span seconds vs therapy seconds, summed across all blocks. These
+        # diverge exactly when a path stores recording spans without true per-mask
+        # therapy time, so reporting both keeps the "wrapper vs candy" distinction
+        # visible rather than collapsing it into one ambiguous total.
+        "total_recording_seconds": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(SUM(b.recording_duration_seconds), 0) "
+                "FROM session_blocks b JOIN sessions s ON s.id = b.session_id WHERE s.machine_id = %s",
+                m,
+            )
+        ),
+        "total_therapy_seconds": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(SUM(b.therapy_duration_seconds), 0) "
                 "FROM session_blocks b JOIN sessions s ON s.id = b.session_id WHERE s.machine_id = %s",
                 m,
             )
@@ -433,11 +473,47 @@ def snapshot_parity_tables(conn: Any, *, machine_id: str, import_run_id: str) ->
                 m,
             )
         ),
+        # The headline usage total the comparison turns red on. Read alongside
+        # ``usage_sources`` below: a total built from ``recording_spans`` is not the
+        # same quantity as one built from ``resmed_str_mask_intervals`` even when the
+        # numbers look comparable.
         "total_usage_seconds": _scalar(
             _safe_row(
                 conn,
                 "SELECT COALESCE(SUM(usage_seconds), 0) "
                 "FROM nightly_therapy_aggregates WHERE machine_id = %s",
+                m,
+            )
+        ),
+        # STR-reported usage carried on the view (authoritative therapy as the device
+        # reported it). Lets the report show how close each path's selected usage is
+        # to the device's own reported therapy time.
+        "total_summary_reported_seconds": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(SUM(summary_reported_usage_seconds), 0) "
+                "FROM nightly_therapy_aggregates WHERE machine_id = %s",
+                m,
+            )
+        ),
+        # Whether each night's usage came from mask intervals or recording spans —
+        # the single most important label for interpreting the totals above.
+        "usage_sources": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(array_agg(DISTINCT usage_source ORDER BY usage_source), '{}') "
+                "FROM nightly_therapy_aggregates WHERE machine_id = %s",
+                m,
+            )
+        ),
+        # Nights the view reports as zero therapy usage. This is the direct symptom of
+        # the dropped summary-only nights (was 37 on the parser side before the
+        # summary-reported fallback recovered their STR usage).
+        "zero_usage_nights": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM nightly_therapy_aggregates "
+                "WHERE machine_id = %s AND COALESCE(usage_seconds, 0) = 0",
                 m,
             )
         ),

@@ -437,10 +437,40 @@ def test_db_parity_harness(db, test_user):
     assert parser_snap["sessions"]["max_block_index"] == 0
     assert legacy_snap["session_blocks"]["row_count"] == 72
     assert parser_snap["session_blocks"]["row_count"] == 7
-    assert legacy_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 907380
-    assert parser_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 89820
     assert legacy_snap["session_events"]["row_count"] == parser_snap["session_events"]["row_count"] == 11
     assert report["sessions"]["category"] == cp.UNEXPECTED_DIFFERENCE
+
+    # (d1) Block source labels are now honest. The parser's file-session blocks are
+    # recording spans, not STR mask intervals, and must be labeled as such. Legacy
+    # carries both real STR mask intervals (the authoritative therapy source the
+    # nightly view selects) and PLD recording-span blocks.
+    assert parser_snap["session_blocks"]["source_kinds"] == ["recording_span"]
+    assert legacy_snap["session_blocks"]["source_kinds"] == [
+        "recording_span",
+        "resmed_str_mask_interval",
+    ]
+    # The parser carries recording-span seconds but no per-block therapy time (it
+    # does not invent mask intervals); legacy's authoritative STR therapy totals
+    # the night. These are different quantities and the snapshot keeps them apart.
+    assert parser_snap["session_blocks"]["total_recording_seconds"] == 89820
+    assert parser_snap["session_blocks"]["total_therapy_seconds"] == 0
+    assert legacy_snap["session_blocks"]["total_therapy_seconds"] == 907380
+
+    # (d2) Usage semantics. The fix recovers the 37 summary-only nights' STR-reported
+    # therapy usage (zero_usage_nights 37 -> 0) and stops counting recording spans as
+    # mask intervals, so the parser usage total jumps from 89,820 to 927,600 — close
+    # to legacy's 907,380 but NOT equal: the three detailed nights still contribute
+    # recording spans (89,820) instead of their ~69,600s of STR therapy because the
+    # view sums session_blocks when present and the parser exposes no per-mask
+    # intervals. The view honestly reports each path's usage source.
+    assert legacy_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 907380
+    assert parser_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 927600
+    assert legacy_snap["nightly_therapy_aggregates"]["usage_sources"] == [
+        "resmed_str_mask_intervals"
+    ]
+    assert parser_snap["nightly_therapy_aggregates"]["usage_sources"] == ["recording_spans"]
+    assert legacy_snap["nightly_therapy_aggregates"]["zero_usage_nights"] == 0
+    assert parser_snap["nightly_therapy_aggregates"]["zero_usage_nights"] == 0
 
     # (e) Genuine parity still exists for low-rate metrics and scored events.
     # The nightly view has equal row counts but unequal usage totals, so it must

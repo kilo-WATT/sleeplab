@@ -192,6 +192,18 @@ def persist_import_run(
             counts["summary_only_days"] += 1
 
         # -- Blocks -------------------------------------------------------
+        # The cpap-parser path builds one block per detailed file-session from
+        # ``CPAPSession.start_time -> end_time`` — i.e. a *recording span*, the
+        # wall-clock extent of an EDF recording, NOT a mask-on/off therapy
+        # interval. cpap-parser does not expose the granular STR mask intervals
+        # the legacy path reads, so these blocks must be labeled honestly as
+        # ``recording_span`` and must never masquerade as
+        # ``resmed_str_mask_interval`` (which the nightly aggregate treats as the
+        # authoritative therapy source). We record the span in
+        # ``recording_duration_seconds`` and deliberately leave
+        # ``therapy_duration_seconds`` NULL: per-block therapy time is not
+        # available from the parser, so we do not invent it. See
+        # docs/sleeplab_2_resmed_cutover_remaining_work.md ("session_blocks").
         for block in session.blocks:
             duration_seconds = int((block.end_time - block.start_time).total_seconds())
             # Invalid PLD recordings can yield a non-positive interval (e.g. an
@@ -219,8 +231,18 @@ def persist_import_run(
                 # yet map block files to persisted import_source_files rows, so
                 # we pass an empty array rather than non-UUID strings.
                 source_file_ids=[],
-                source_kind="resmed_str_mask_interval",
-                therapy_duration_seconds=duration_seconds,
+                source_kind="recording_span",
+                recording_duration_seconds=duration_seconds,
+                diagnostics=[
+                    {
+                        "code": "recording_span_not_mask_interval",
+                        "message": (
+                            "cpap-parser file-session recording span; not a "
+                            "mask-on/off therapy interval. Per-block therapy "
+                            "duration is unavailable from the parser."
+                        ),
+                    }
+                ],
             )
             counts["blocks"] += 1
 
@@ -592,10 +614,34 @@ def _event_tuples(session: Session, *, base: datetime) -> list[tuple[float, floa
 
 
 def _session_duration_seconds(session: Session, derived: dict[str, DerivedValue]) -> int:
-    """Therapy seconds: prefer computed usage hours, fall back to the span."""
+    """Therapy seconds for ``sessions.duration_seconds``.
+
+    Order of preference, most-to-least authoritative for *therapy* time:
+
+    1. ``computed_usage_hours`` — summed EDF therapy time, present on detailed
+       (DATALOG) nights.
+    2. ``summary_reported_usage_hours`` — STR.edf reported usage. This is the
+       *only* therapy number available for summary-only / ghost nights (no
+       DATALOG), and it is the same authoritative source the legacy path derives
+       its STR mask intervals from. Without this fallback those 37 summary-only
+       nights persisted ``duration_seconds = 0`` (start == end == midnight), so
+       the nightly aggregate — which reads ``sessions.duration_seconds`` for
+       block-less nights — dropped their entire therapy history. We never invent
+       a value: a night with no reported usage still falls through to the span.
+    3. The wall-clock span as a last resort.
+
+    Note: detailed nights also persist ``recording_span`` blocks, so the nightly
+    aggregate sums those blocks (recording spans) for them rather than this
+    column. Carrying the authoritative therapy total here keeps
+    ``sessions.duration_seconds`` truthful regardless, and is what recovers the
+    summary-only nights through the view's block-less session fallback.
+    """
     computed = _derived_scalar(derived, "computed_usage_hours", default=None)
     if isinstance(computed, (int, float)) and computed > 0:
         return int(round(computed * 3600))
+    reported = _derived_scalar(derived, "summary_reported_usage_hours", default=None)
+    if isinstance(reported, (int, float)) and reported > 0:
+        return int(round(reported * 3600))
     span = (session.end_time - session.start_time).total_seconds()
     return max(int(round(span)), 0)
 
