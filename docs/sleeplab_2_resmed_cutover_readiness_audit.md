@@ -20,6 +20,23 @@ For the concise owner/category/next-task view, see
 the target and is enabled with `SLEEPLAB_USE_CPAP_PARSER=1`; do not flip the
 *default* until the dedupe/runtime/routing/soak gates are met.
 
+## Beta-hardening update
+
+Same-card cpap-parser re-import is now closed as a duplicate-safety blocker. The
+AirSense 10/Postgres harness imports the same fixture twice under two durable
+`import_runs` and proves stable sessions, blocks, settings, events, signal
+metadata, derived values, metrics, waveform rows, and nightly aggregates.
+Parser-owned blocks and settings are authoritative replacements, so corrected
+input can remove stale children instead of only upserting new rows.
+
+The runtime default remains unchanged. Route tests now prove flag-on selects the
+parser task and flag-off selects legacy, while `/config` reports both the
+selected backend and parser runtime availability. Cross-path legacy-to-parser
+dedupe is still not automatic because deleting legacy sessions could silently
+discard notes, tags, oximetry, or other user-owned data. The supported alpha/beta
+transition is an explicit backup, clear, and SD-card re-import workflow documented
+in `docs/sleeplab_2_beta_readiness_plan.md`.
+
 ## 1. Scope and method
 
 Compared, path-by-path:
@@ -67,7 +84,7 @@ parity/polish. "Evidence" = what proves it today (or its absence).
 | 2 | **Legacy↔parser row diff** | n/a (oracle) | implemented | Automated redacted aggregate diff exists and classifies documented vs unexpected differences | **Done** | `tests/cutover_parity.py`; `tests/test_resmed_cutover_db_parity.py` |
 | 3 | **Oximetry (SpO2)** | parses SA2/SAD; writes `session_spo2` and sets `has_spo2` only when SpO2 samples are not all missing (`-1`) | `has_spo2=False` hardcoded; no `session_spo2` writes | New path has an oximetry save-path gap, but the committed card cannot prove it: all six SAD files contain only missing SpO2 sentinels, so both paths correctly produce 0 rows | **P0 (data-blocked evidence)** | parser-free SAD payload test + DB parity (0/0) |
 | 4 | **Settings snapshots** | `replace_resmed_str_day`→`upsert_settings_snapshot` writes full STR-derived `settings_snapshots` | persists loader-provided snapshots and flattens `therapy_mode` onto `sessions`; currently only `therapy_mode` is available | Therapy-mode persistence is closed, but full settings parity remains partial because cpap-parser exposes no mask/humidifier/temperature/pressure/EPR/ramp settings | **P1** | parser-backed DB parity harness; gap audit §11 |
-| 5 | **STR mask-interval blocks** | `replace_resmed_str_day` emits `resmed_str_mask_interval` blocks from STR.edf (`data_architecture.md:61-64`) | blocks come from cpap-parser file-sessions but are **labeled** `source_kind="resmed_str_mask_interval"` (`persist.py:208`); no real STR intervals | Block provenance is mislabeled and the STR mask-on/off intervals are absent | **P1** | `persist.py:208` vs architecture doc |
+| 5 | **STR mask-interval blocks** | `replace_resmed_str_day` emits `resmed_str_mask_interval` blocks from STR.edf | cpap-parser file-sessions are correctly labeled `source_kind="recording_span"`; no real per-mask STR intervals are exposed | Mislabeling is fixed. Per-mask interval detail remains unavailable, but nightly usage prefers source-reported therapy over recording spans | **P1 upstream gap** | persistence code + parser-backed parity harness |
 | 6 | **Session granularity** | one `sessions` row **per PLD recording** (`block_index` loop, `import_sessions.py:292-329`) | one `sessions` row **per night** (`persist.py:154`, one per `daily_summary`), `block_index=0` | Canonical model is decided: night-level session plus child blocks. Legacy compatibility, block reconciliation, and cross-path migration remain | **P1** | data architecture decision + conditional parity guard |
 | 7 | **Source-file provenance** | uses the upload-created manifest, resolves real relative paths, marks files used, and links blocks/events/channels/settings | receives the same manifest and now resolves the loader's exact `STR.edf` settings reference; block/event/channel ids remain synthetic because raw parser sessions expose no source path | Settings provenance is preserved, but parser-side session/file identity and row linkage remain the gap | **P1** | parser-backed DB parity: same 53 rows, legacy 25 used vs parser 1 |
 | 8 | **Signal-channel source** | from raw EDF header `replace_signal_channels(header=…)` (`import_sessions.py:388`) | from `ImportRun.signals` metadata (`persist.py:343`) | Different source; channel set/units/rates parity unproven | **P1** | both code paths |

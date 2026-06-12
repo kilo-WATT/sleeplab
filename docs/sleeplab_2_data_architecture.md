@@ -71,6 +71,14 @@ recordings and STR mask-on/mask-off intervals should be represented as stable
 blocks under the night-level session. Re-imports must update those blocks
 without duplicating the owning night.
 
+The cpap-parser persistence bridge treats each normalized night as authoritative
+for its generated children. On re-import it replaces blocks, parser settings,
+events, signal metadata, derived values, low-rate metrics, and event-window
+waveforms. A separate `import_runs` row and source manifest remain for every
+attempt. Legacy-to-parser transition is not automatic: users must currently
+clear and re-import because silently deleting legacy rows could also delete
+notes, tags, oximetry, or other user-owned data.
+
 `nightly_therapy_aggregates` derives a machine/night read model:
 
 - **session**: one machine-local therapy night;

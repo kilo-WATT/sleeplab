@@ -242,10 +242,12 @@ so **nightly usage totals now reconcile** and the session/block row-count
 differences are accepted 2.0 model differences in the parity harness. The runtime
 default stays off until the remaining *safety* gates pass — cross-path
 dedupe/migration, `cpap-py` dependency/runtime packaging, `/datalog/*` routing,
-route-level tests, real SpO2 evidence, and a second-card soak. Run 2.0 on
+database-backed route failure/status tests, real SpO2 evidence, and a second-card
+soak. Same-path parser re-import is now fixture-backed and duplicate-safe. Run 2.0 on
 cpap-parser today with `SLEEPLAB_USE_CPAP_PARSER=1`. See
 `docs/sleeplab_2_resmed_cutover_remaining_work.md` for the owner/category matrix
-and before-default gate.
+and before-default gate, and `docs/sleeplab_2_beta_readiness_plan.md` for the
+plain-English reset and release plan.
 
 **Phase 2 fixture-backed validation status (not RC/beta readiness):** the only
 *committed-fixture-backed* `expected.import` coverage today is the OSCAR

@@ -446,3 +446,13 @@ legacy/parser session row-count differences only when block, usage, and event
 totals match; the current fixture remains red on block and usage totals. Default
 routing remains off until those totals, dedupe, dependency/runtime, route
 integration, diagnostics, and soak gates are closed.
+
+**Post-Alpha 7 beta hardening:** same-card cpap-parser re-import is now
+fixture-backed against Postgres and stable across normalized patient/session
+tables. Parser-owned child sets are authoritative replacements, including stale
+block/settings removal. Route tests pin flag selection, and `/config` reports
+the selected ResMed backend plus parser runtime availability. Cross-path
+legacy-to-parser migration remains intentionally explicit: clear and re-import
+is the supported alpha/beta workflow until notes, tags, oximetry, and other
+user-owned data can be preserved automatically. See
+`docs/sleeplab_2_beta_readiness_plan.md`.
