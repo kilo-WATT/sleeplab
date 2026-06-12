@@ -471,6 +471,13 @@ def test_db_parity_harness(db, test_user):
     assert parser_snap["nightly_therapy_aggregates"]["usage_sources"] == ["recording_spans"]
     assert legacy_snap["nightly_therapy_aggregates"]["zero_usage_nights"] == 0
     assert parser_snap["nightly_therapy_aggregates"]["zero_usage_nights"] == 0
+    # The view also surfaces the authoritative STR-reported therapy total. Legacy
+    # carries it for all 40 nights; the parser now carries it for the detailed
+    # nights via their recording-span blocks' source_reported_duration_seconds
+    # (69,600s for the 3 detailed nights — was 0 before that field was populated).
+    # This is the "candy" number sitting next to the recording-span "wrapper".
+    assert legacy_snap["nightly_therapy_aggregates"]["total_summary_reported_seconds"] == 907380
+    assert parser_snap["nightly_therapy_aggregates"]["total_summary_reported_seconds"] == 69600
 
     # (e) Genuine parity still exists for low-rate metrics and scored events.
     # The nightly view has equal row counts but unequal usage totals, so it must

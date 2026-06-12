@@ -204,6 +204,24 @@ def persist_import_run(
         # ``therapy_duration_seconds`` NULL: per-block therapy time is not
         # available from the parser, so we do not invent it. See
         # docs/sleeplab_2_resmed_cutover_remaining_work.md ("session_blocks").
+        #
+        # We *do* carry the night's STR-reported usage in
+        # ``source_reported_duration_seconds`` (the same field legacy sets on its
+        # STR blocks). The nightly aggregate exposes this as
+        # ``summary_reported_usage_seconds`` via ``MAX(...)`` per night, so this
+        # surfaces the authoritative device-reported therapy total alongside the
+        # recording-span ``usage_seconds`` — giving consumers the "candy" number
+        # next to the "wrapper" number without changing the view or the
+        # recording-span usage. It is a per-night value repeated on each of the
+        # night's blocks (MAX collapses them), mirroring legacy semantics.
+        reported_usage_hours = _derived_scalar(
+            derived, "summary_reported_usage_hours", default=None
+        )
+        block_reported_seconds = (
+            int(round(reported_usage_hours * 3600))
+            if isinstance(reported_usage_hours, (int, float)) and reported_usage_hours > 0
+            else None
+        )
         for block in session.blocks:
             duration_seconds = int((block.end_time - block.start_time).total_seconds())
             # Invalid PLD recordings can yield a non-positive interval (e.g. an
@@ -233,6 +251,7 @@ def persist_import_run(
                 source_file_ids=[],
                 source_kind="recording_span",
                 recording_duration_seconds=duration_seconds,
+                source_reported_duration_seconds=block_reported_seconds,
                 diagnostics=[
                     {
                         "code": "recording_span_not_mask_interval",
