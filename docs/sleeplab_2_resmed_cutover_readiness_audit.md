@@ -7,6 +7,11 @@ current code, not aspiration, and cross-references the existing retirement-evide
 list in `docs/sleeplab_2_loader_and_conformance_plan.md` ("What evidence is
 required before retiring native ResMed").
 
+For the concise owner/category/next-task view, see
+`docs/sleeplab_2_resmed_cutover_remaining_work.md`. The current recommendation
+is unchanged: do not flip the default. Decide session granularity first, then
+settle cross-path dedupe, dependency/runtime packaging, routing, and soak gates.
+
 ## 1. Scope and method
 
 Compared, path-by-path:
@@ -207,6 +212,12 @@ items — dropped persisted data, the granularity model, and the operational
 dependency/routing/soak gates — are now each a measurable row against the harness,
 not a guess. This phase changes only the existing cpap-parser persistence bridge;
 no production routing, schema, default, or dependency changed.
+
+The remaining work is now organized by owner and cutover category in
+`docs/sleeplab_2_resmed_cutover_remaining_work.md`. The leading blocker is the
+session-row model: until per-recording versus per-night ownership is decided,
+block semantics, derived-value identity, and cross-path dedupe cannot be closed
+cleanly.
 
 ## 7. Cross-references
 

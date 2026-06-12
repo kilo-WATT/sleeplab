@@ -228,6 +228,16 @@ score, adherence, reports, trends, and AI duration inputs through that
 aggregate. One restricted AirSense 10 card and synthetic fixtures prove the
 implemented path, but do not justify a full ResMed validation claim.
 
+**Current ResMed cutover view:** the parser now persists fixture-backed
+`therapy_mode`, links `STR.edf` settings provenance, and matches persisted event
+rows, low-rate metric rows, and nightly aggregate row counts on the committed
+AirSense 10 fixture. The default route must still remain off. Session
+granularity and cross-path dedupe need decisions; real SpO2 evidence, broader
+settings, most row-level source links, dependency/runtime packaging,
+route-level tests, and a second-card soak remain open. See
+`docs/sleeplab_2_resmed_cutover_remaining_work.md` for the owner/category matrix
+and before-cutover gate.
+
 **Phase 2 fixture-backed validation status (not RC/beta readiness):** the only
 *committed-fixture-backed* `expected.import` coverage today is the OSCAR
 reference `export_hash` — a parser-free sha256 integrity pin on the AirSense 10

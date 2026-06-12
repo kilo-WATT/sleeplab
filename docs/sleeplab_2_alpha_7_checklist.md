@@ -427,3 +427,11 @@ resolves the loader's exact `STR.edf` settings reference, finalizing 1 used / 52
 skipped with one settings link. Block/event/channel ids remain synthetic because
 cpap-parser exposes no real source path, so those links remain upstream-blocked.
 No routing, schema, default, or dependency change.
+
+**ResMed cutover remaining-work matrix — LANDED (docs only):**
+`docs/sleeplab_2_resmed_cutover_remaining_work.md` separates parser-read
+evidence, database-save evidence, and production-route readiness. It assigns
+each remaining item to SleepLab, upstream parser work, test-data acquisition, or
+a product decision. The first next task is the session-shape decision; default
+routing remains off until dedupe, dependency/runtime, route integration,
+diagnostics, and soak gates are closed.
