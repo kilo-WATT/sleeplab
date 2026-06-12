@@ -131,7 +131,7 @@ anonymized reference CSVs in fixture #2.
 | settings values (other fields) | **cannot — not in parser schema** | min/max/set pressure, EPR, ramp, humidifier, mask_type are absent from cpap-parser; only `therapy_mode` exists (see §3) |
 | `expected.import` identity_hashes | **not committed** | DB-gated, synthetic only |
 | DB identity hashes | **not via this fixture** | exercised only by synthetic DB-row tests |
-| DB source-file provenance | **fixture-backed (`cpap-py` + DB gated)** | parity harness seeds the production-style 53-file manifest on both paths; legacy finalizes 25 used / 28 skipped and links block/event/channel/settings rows, parser finalizes 0 used / 53 skipped and links none |
+| DB source-file provenance | **fixture-backed (`cpap-py` + DB gated; partial)** | parity harness seeds the production-style 53-file manifest on both paths; legacy finalizes 25 used / 28 skipped with block/event/channel/settings links; parser resolves exact `STR.edf` settings provenance (1 used / 52 skipped, one settings link) but has no block/event/channel links |
 
 - **Now fixture-backed (value-level):** `warnings`, `session_blocks.block_count`,
   `therapy_aggregates` (usage/wall-clock/gap seconds), `events.count` (gap audit
@@ -251,7 +251,8 @@ injected `ImportRun`, a tmp-written manifest, or synthetic DB rows):
 weighted/time-based summaries, settings-value loader mapping **beyond
 `therapy_mode`** (the rest are absent from the cpap-parser schema), full settings
 parity beyond the persisted therapy mode, oximetry until a usable safe fixture
-exists, parser source-file linkage until real source paths survive normalization,
+exists, parser block/event/channel source-file linkage until real source paths
+survive normalization,
 Lowenstein persistence, ResMed `cpap-parser` production cutover, full-night /
 compressed-segment waveform storage, device-time-correction implementation.
 

@@ -83,7 +83,7 @@ For each vendor-neutral contract area on `Session` / `ImportRun`, what
 | `Session.events` | `events.count` / `.types` / `.events` | **Yes** (scored events always; large-leak only when `include_waveforms`) | `_session_events` from `CPAPSession.events` (`event_type`, `timestamp_sec`→absolute, `duration_sec`); `_large_leak_events` derived from leak signal | Injected-only (`validate_import`); event *counts* indirectly via AHI parity test | `count`/`types` **medium**; ordered `events` **low** | No manifest block; `cpap-py` absent; event **type vocabulary is raw cpap-parser strings** (`"Obstructive Apnea"`, …), not yet mapped to the OSCAR enum; ordered list embeds real timestamps | Start with `count` (and per-type `types`) on detailed nights; defer ordered `events`/timestamps until vocabulary + calendar are settled |
 | `Session.waveforms` | *(no comparator)* | **Yes** (when `include_waveforms`) | `_session_waveforms` → `WaveformSegment` metadata (`sample_count`/`sample_rate_hz`, no arrays) | Indirect: `resmed_waveform_absent` warning tested parser-free | n/a (no import-level comparator) | No waveform comparator; full-night/segment storage is deferred + stop-and-ask | None this milestone (waveform storage out of scope) |
 | `Session.derived_values` | `therapy_aggregates.*` | **Yes** | `_summary_derived_values`: `summary_reported_usage_hours`, `computed_usage_hours`, `recording_span_hours`, `has_detailed_data`, `ahi` (always); `_signal_metrics` (avg/p95 etc., `include_waveforms` only) | Injected-only (`validate_import`); `computed_usage` parity fixture-backed via separate test | **Medium** | No `therapy_aggregates` manifest block; `cpap-py` absent. `usage_seconds`←`computed_usage_hours`, `wall_clock_seconds`←`recording_span_hours`, `gap_seconds`=span−usage are all derived and observable | Author `therapy_aggregates` per detailed night once a run is obtainable; values are non-timestamped seconds (lower privacy surface) |
-| `Session.source_file_ids` / `ImportRun.source_files` / provenance | *(feeds `identity_hashes`)* | **Partial / No** | uploaded-root flow already persists the full source manifest before execution; loader `ImportRun.source_files=[]`, block/signal/event ids are synthetic, and raw parser sessions expose no source path | parser-backed DB parity now exercises the real manifest lifecycle | manifest **present**, parser row linkage **absent** | Loader/parser source-identity gap: synthetic ids cannot safely resolve to manifest relative paths | Preserve real source paths upstream or at the loader boundary, then map to existing manifest UUIDs; do not fabricate links |
+| `Session.source_file_ids` / `ImportRun.source_files` / provenance | *(feeds `identity_hashes`)* | **Partial** | uploaded-root flow persists the full manifest; settings carry exact `STR.edf` and the save path now resolves it, while `ImportRun.source_files=[]`, block/signal/event ids are synthetic, and raw parser sessions expose no source path | parser-backed DB parity exercises the real manifest lifecycle and exact-reference resolution | manifest **present**, settings linkage **present**, session-row linkage **absent** | Loader/parser source-identity gap: synthetic ids cannot safely resolve to manifest relative paths | Preserve real source paths upstream or at the loader boundary, then map remaining rows to existing manifest UUIDs; do not fabricate links |
 
 ## 4. The central question, answered
 
@@ -481,11 +481,14 @@ either execution path starts. The parser-backed parity harness now mirrors that
 setup. Both paths receive the same 53 manifest rows and role set. Legacy resolves
 real relative paths and finalizes 25 used / 28 skipped files, with source UUID
 links covering 25 block files, 3 event files, 6 channel files, and STR settings.
-The parser path finalizes 0 used / 53 skipped files and records 0 links.
+The parser save path now resolves the exact `STR.edf` reference already carried
+by each settings snapshot, so it finalizes 1 used / 52 skipped files and records
+one settings-file link. Block, event, and channel linkage remains zero.
 
-The blocker is therefore **not manifest persistence or test data**. cpap-parser
-merges BRP/PLD sessions and exposes no source path on its session objects; the
-loader emits synthetic ids such as `date:file_type:index`, while persistence
-requires UUIDs from the existing manifest. A trustworthy small save-path-only fix
-does not exist without preserving real file identity earlier. No paths, hashes,
-or private identifiers are emitted by the parity report.
+The remaining blocker is therefore **not manifest persistence, the SleepLab
+settings save path, or test data**. cpap-parser merges BRP/PLD sessions and
+exposes no source path on its session objects; the loader emits synthetic ids
+such as `date:file_type:index`, while persistence requires UUIDs from the
+existing manifest. More precise links require preserving real file identity
+earlier. No paths, hashes, or private identifiers are emitted by the parity
+report.

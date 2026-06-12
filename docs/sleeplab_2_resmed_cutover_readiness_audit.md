@@ -53,7 +53,7 @@ parity/polish. "Evidence" = what proves it today (or its absence).
 | 4 | **Settings snapshots** | `replace_resmed_str_day`→`upsert_settings_snapshot` writes full STR-derived `settings_snapshots` | persists loader-provided snapshots and flattens `therapy_mode` onto `sessions`; currently only `therapy_mode` is available | Therapy-mode persistence is closed, but full settings parity remains partial because cpap-parser exposes no mask/humidifier/temperature/pressure/EPR/ramp settings | **P1** | parser-backed DB parity harness; gap audit §11 |
 | 5 | **STR mask-interval blocks** | `replace_resmed_str_day` emits `resmed_str_mask_interval` blocks from STR.edf (`data_architecture.md:61-64`) | blocks come from cpap-parser file-sessions but are **labeled** `source_kind="resmed_str_mask_interval"` (`persist.py:208`); no real STR intervals | Block provenance is mislabeled and the STR mask-on/off intervals are absent | **P1** | `persist.py:208` vs architecture doc |
 | 6 | **Session granularity** | one `sessions` row **per PLD recording** (`block_index` loop, `import_sessions.py:292-329`); "PLD files remain durable source sessions" (`data_architecture.md:61`) | one `sessions` row **per night** (`persist.py:154`, one per `daily_summary`), `block_index=0` | Table shape + meaning of "a session" changes; diverges from documented model | **P1** | code + architecture doc |
-| 7 | **Source-file provenance** | uses the upload-created manifest, resolves real relative paths, marks files used, and links blocks/events/channels/settings | receives the same upload-created manifest, but normalized source ids are synthetic and raw parser sessions expose no source path; persistence therefore leaves all row links empty | Manifest creation works; parser-side source identity/linkage is the gap | **P1** | parser-backed DB parity: same 53 rows, legacy 25 used vs parser 0 |
+| 7 | **Source-file provenance** | uses the upload-created manifest, resolves real relative paths, marks files used, and links blocks/events/channels/settings | receives the same manifest and now resolves the loader's exact `STR.edf` settings reference; block/event/channel ids remain synthetic because raw parser sessions expose no source path | Settings provenance is preserved, but parser-side session/file identity and row linkage remain the gap | **P1** | parser-backed DB parity: same 53 rows, legacy 25 used vs parser 1 |
 | 8 | **Signal-channel source** | from raw EDF header `replace_signal_channels(header=…)` (`import_sessions.py:388`) | from `ImportRun.signals` metadata (`persist.py:343`) | Different source; channel set/units/rates parity unproven | **P1** | both code paths |
 | 9 | **Event-type vocabulary** | raw labels; AHI counts via `_AHI_EVENT_TYPES` | same raw labels + loader-derived `Large Leak` rows; **not** OSCAR enum | Persisted `session_events.event_type` vocabulary is SleepLab-normalized, not OSCAR parity; `Large Leak` becomes an event row | **P1** | gap audit §12; `persist.py:66,214` |
 | 10 | **`leak_unit` label** | `'L/s'` (`import_sessions.py:302`) | `'L/min'` (`persist.py:304`) | Direct metadata mismatch between paths (plan criterion: "leak unit/kind … match") | **P2** | both code paths |
@@ -101,9 +101,11 @@ Each step is small and safe on its own; persistence/routing/dependency steps are
    paths therefore write 0 rows. A safely redistributable fixture with real
    SpO2/pulse samples is required to prove `session_spo2` + `has_spo2`.
 5. **Map source-file identity into normalized/parser rows** (P1 #7). The upload
-   flow already creates `import_source_files`; do not duplicate it. The blocker is
-   that cpap-parser's merged sessions expose no real source path and the loader
-   emits synthetic ids. Fix upstream/at the loader boundary before linking UUIDs.
+   flow already creates `import_source_files`; do not duplicate it. The save path
+   now resolves exact manifest references, which safely preserves the loader's
+   `STR.edf` settings link. cpap-parser's merged sessions still expose no real
+   source path and the loader emits synthetic block/event/channel ids. Fix those
+   upstream/at the loader boundary before linking more UUIDs.
 6. **Reconcile parity polish** (P2 #8,#10,#12): `leak_unit`, signal-channel
    set/units/rates, TZ/DST + cross-midnight — each as a parity assertion in the
    harness; fix the cheap mismatches (e.g. `leak_unit`).
@@ -167,7 +169,7 @@ requirements.txt`), exactly the pattern used for the parser-backed conformance t
 | `derived_values` | expected_difference | 90 rows, event-count+stat keys | 520 rows, usage-semantics keys |
 | `session_waveform` | expected_difference | 81 485 | 81 410 (~0.1%) |
 | `session_spo2` | equal (**not usable evidence**) | 0; all SAD SpO2 samples missing | 0; no oximetry persistence |
-| `import_source_files` | **expected_difference (linkage)** | 53 rows; 25 used / 28 skipped; file links present | 53 rows; 0 used / 53 skipped; no row links |
+| `import_source_files` | **expected_difference (partial linkage)** | 53 rows; 25 used / 28 skipped; block/event/channel/settings links | 53 rows; 1 used / 52 skipped; one `STR.edf` settings link |
 
 Honest reads from the first run:
 - **Strong parity already exists** where it matters most: low-rate `session_metrics`
@@ -185,9 +187,10 @@ Honest reads from the first run:
 - **Source provenance is now exercised honestly.** The harness mirrors production
   manifest creation: both paths receive the same 53 rows/roles. Legacy marks 25
   files used and links source UUIDs (25 block, 3 event, 6 channel, 1 settings
-  source files), with 28 unconsumed files finalized as skipped; parser links none
-  and all 53 are finalized as skipped because its source ids are synthetic and
-  cannot be mapped safely to real relative paths.
+  source files), with 28 unconsumed files finalized as skipped. Parser now
+  resolves the exact `STR.edf` reference already carried by settings snapshots,
+  producing 1 used / 52 skipped and one settings link. Its synthetic
+  block/event/channel ids still cannot be mapped safely to real relative paths.
 - `derived_values` and `session_waveform` differ as a *consequence* of granularity /
   event-window rebasing — now classified as documented `expected_difference`s, so
   the harness fails only on a genuinely **new, undocumented** divergence.
