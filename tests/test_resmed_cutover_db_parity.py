@@ -55,11 +55,17 @@ def test_classify_equal_and_expected_and_unexpected():
     assert "session_metrics" not in cp.KNOWN_DIFFERENCES
     legacy = {
         "sessions": {"row_count": 3},
+        "session_blocks": {"row_count": 4},
+        "session_events": {"row_count": 8},
+        "nightly_therapy_aggregates": {"total_usage_seconds": 1000},
         "session_spo2": {"row_count": 0},
         "session_metrics": {"row_count": 100},
     }
     parser = {
         "sessions": {"row_count": 40},  # differs; sessions IS a known difference
+        "session_blocks": {"row_count": 4},
+        "session_events": {"row_count": 8},
+        "nightly_therapy_aggregates": {"total_usage_seconds": 1000},
         "session_spo2": {"row_count": 0},  # equal
         "session_metrics": {"row_count": 105},  # differs; NOT a known difference
     }
@@ -70,6 +76,48 @@ def test_classify_equal_and_expected_and_unexpected():
     assert report["sessions"]["reason"]  # carries the audit reason
     assert report["session_spo2"]["category"] == cp.EQUAL
     assert report["session_metrics"]["category"] == cp.UNEXPECTED_DIFFERENCE
+
+
+@pytest.mark.parametrize(
+    ("table", "field", "parser_value"),
+    (
+        ("session_blocks", "row_count", 5),
+        ("nightly_therapy_aggregates", "total_usage_seconds", 999),
+        ("session_events", "row_count", 9),
+    ),
+)
+def test_session_row_difference_requires_matching_block_usage_and_event_totals(
+    table, field, parser_value
+):
+    legacy = {
+        "sessions": {"row_count": 43},
+        "session_blocks": {"row_count": 72},
+        "nightly_therapy_aggregates": {"total_usage_seconds": 1000},
+        "session_events": {"row_count": 11},
+    }
+    parser = {
+        "sessions": {"row_count": 40},
+        "session_blocks": {"row_count": 72},
+        "nightly_therapy_aggregates": {"total_usage_seconds": 1000},
+        "session_events": {"row_count": 11},
+    }
+    parser[table][field] = parser_value
+
+    report = cp.classify_parity(legacy, parser, tables=("sessions",))
+
+    assert report["sessions"]["category"] == cp.UNEXPECTED_DIFFERENCE
+    assert "not accepted" in report["sessions"]["reason"]
+
+
+def test_session_row_difference_is_unexpected_without_comparison_totals():
+    report = cp.classify_parity(
+        {"sessions": {"row_count": 43}},
+        {"sessions": {"row_count": 40}},
+        tables=("sessions",),
+    )
+
+    assert report["sessions"]["category"] == cp.UNEXPECTED_DIFFERENCE
+    assert "unavailable" in report["sessions"]["reason"]
 
 
 def test_classify_missing_sides():
@@ -382,18 +430,30 @@ def test_db_parity_harness(db, test_user):
     assert parser_snap["sessions"]["has_spo2_count"] == 0
     assert report["session_spo2"]["category"] == cp.EQUAL
 
-    # (d) Granularity split is visible: legacy has per-PLD-block session rows
-    # (max_block_index >= 1); the cpap-parser path is one row per night (== 0).
+    # (d) SleepLab 2.0's target model is one session row per night plus explicit
+    # blocks. A row-count difference is accepted only after block, usage, and
+    # event totals reconcile; otherwise the harness must surface it as unexpected.
     assert legacy_snap["sessions"]["max_block_index"] >= 1
     assert parser_snap["sessions"]["max_block_index"] == 0
-    assert report["sessions"]["category"] == cp.EXPECTED_DIFFERENCE
+    assert legacy_snap["session_blocks"]["row_count"] == 72
+    assert parser_snap["session_blocks"]["row_count"] == 7
+    assert legacy_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 907380
+    assert parser_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 89820
+    assert legacy_snap["session_events"]["row_count"] == parser_snap["session_events"]["row_count"] == 11
+    assert report["sessions"]["category"] == cp.UNEXPECTED_DIFFERENCE
 
-    # (e) Genuine parity also exists — the harness is not all-noise. Low-rate
-    # metrics, scored events, and the nightly view agree exactly on this fixture.
+    # (e) Genuine parity still exists for low-rate metrics and scored events.
+    # The nightly view has equal row counts but unequal usage totals, so it must
+    # remain an expected difference rather than a false parity result.
     assert report["session_metrics"]["category"] == cp.EQUAL
     assert report["session_events"]["category"] == cp.EQUAL
-    assert report["nightly_therapy_aggregates"]["category"] == cp.EQUAL
+    assert report["nightly_therapy_aggregates"]["category"] == cp.EXPECTED_DIFFERENCE
 
-    # (f) First-version guarantee: nothing surfaces as an undocumented divergence.
-    unexpected = {t: v for t, v in report.items() if v["category"] == cp.UNEXPECTED_DIFFERENCE}
+    # (f) Nothing except a failed session-shape acceptance guard may surface as
+    # undocumented. That guard intentionally stays red until the totals reconcile.
+    unexpected = {
+        t: v
+        for t, v in report.items()
+        if v["category"] == cp.UNEXPECTED_DIFFERENCE and t != "sessions"
+    }
     assert not unexpected, f"undocumented DB divergence(s): {unexpected}"

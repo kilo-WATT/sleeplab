@@ -232,9 +232,11 @@ implemented path, but do not justify a full ResMed validation claim.
 `therapy_mode`, links `STR.edf` settings provenance, and matches persisted event
 rows, low-rate metric rows, and nightly aggregate row counts on the committed
 AirSense 10 fixture. The default route must still remain off. Session
-granularity and cross-path dedupe need decisions; real SpO2 evidence, broader
-settings, most row-level source links, dependency/runtime packaging,
-route-level tests, and a second-card soak remain open. See
+granularity is now decided as one night-level session plus `session_blocks`, but
+the comparison guard remains red because block rows and summed nightly usage do
+not match the legacy path. Cross-path dedupe, real SpO2 evidence, broader
+settings, most row-level source links, dependency/runtime packaging, route-level
+tests, and a second-card soak remain open. See
 `docs/sleeplab_2_resmed_cutover_remaining_work.md` for the owner/category matrix
 and before-cutover gate.
 

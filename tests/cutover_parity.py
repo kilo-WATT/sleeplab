@@ -70,9 +70,9 @@ PARITY_TABLES: tuple[str, ...] = (
 #: ``unexpected_difference``. Keyed by table; the reason is shown in the report.
 KNOWN_DIFFERENCES: dict[str, str] = {
     "sessions": (
-        "session granularity differs (legacy: one row per PLD recording block, "
-        "block_index 0..n; cpap-parser: one row per night, block_index 0) and "
-        "has_spo2/provenance/source_session_key differ — audit P1 #6/#11"
+        "SleepLab 2.0 uses one session row per machine-local night with therapy "
+        "intervals represented by session_blocks; legacy block-scoped row counts "
+        "are accepted only when block, usage, and event totals still match"
     ),
     "session_blocks": (
         "block source differs (legacy: STR mask-interval + PLD recording-span "
@@ -433,6 +433,14 @@ def snapshot_parity_tables(conn: Any, *, machine_id: str, import_run_id: str) ->
                 m,
             )
         ),
+        "total_usage_seconds": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(SUM(usage_seconds), 0) "
+                "FROM nightly_therapy_aggregates WHERE machine_id = %s",
+                m,
+            )
+        ),
     }
     return snap
 
@@ -486,6 +494,10 @@ def classify_parity(
 
         if legacy_side == parser_side:
             report[table] = _verdict(EQUAL, "", legacy_side, parser_side)
+        elif table == "sessions":
+            totals_match, reason = _session_shape_totals_match(legacy, parser)
+            category = EXPECTED_DIFFERENCE if totals_match else UNEXPECTED_DIFFERENCE
+            report[table] = _verdict(category, reason, legacy_side, parser_side)
         elif table in known_differences:
             report[table] = _verdict(EXPECTED_DIFFERENCE, known_differences[table], legacy_side, parser_side)
         else:
@@ -496,6 +508,37 @@ def classify_parity(
                 parser_side,
             )
     return report
+
+
+def _session_shape_totals_match(
+    legacy: dict[str, dict], parser: dict[str, dict]
+) -> tuple[bool, str]:
+    """Guard the accepted night-level-vs-block-scoped session row difference."""
+    comparisons = (
+        ("block rows", "session_blocks", "row_count"),
+        ("nightly usage seconds", "nightly_therapy_aggregates", "total_usage_seconds"),
+        ("event rows", "session_events", "row_count"),
+    )
+    mismatches: list[str] = []
+    for label, table, field in comparisons:
+        legacy_value = legacy.get(table, {}).get(field)
+        parser_value = parser.get(table, {}).get(field)
+        if legacy_value is None or parser_value is None:
+            mismatches.append(f"{label} unavailable ({legacy_value!r} vs {parser_value!r})")
+        elif legacy_value != parser_value:
+            mismatches.append(f"{label} differ ({legacy_value!r} vs {parser_value!r})")
+
+    if mismatches:
+        return (
+            False,
+            "session row-count difference is not accepted because "
+            + "; ".join(mismatches),
+        )
+    return (
+        True,
+        "SleepLab 2.0 uses night-level sessions plus session_blocks; differing "
+        "session row counts are accepted because block, usage, and event totals match",
+    )
 
 
 def _errored(side: dict) -> bool:

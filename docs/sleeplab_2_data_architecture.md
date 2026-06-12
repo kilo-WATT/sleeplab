@@ -49,23 +49,33 @@ is rejected if staged content changes after inspection.
 
 ### Machine-scoped sessions and blocks
 
+**SleepLab 2.0 session-model decision:** one `sessions` row represents one
+machine-local therapy night. Multiple mask-on periods, recording fragments, and
+source-file intervals belong in `session_blocks`; they do not create additional
+canonical session rows. Night-level consumers use `nightly_therapy_aggregates`
+for authoritative usage, wall-clock span, and gaps.
+
 Sessions now carry `machine_id`, `import_run_id`, `source_session_key`, and
 `provenance_status`. Machine plus source session key is the durable uniqueness
-boundary. The old user plus session ID unique index is removed because two
-machines can legitimately emit the same local source key.
+boundary. For canonical 2.0 imports, that source key identifies the machine-local
+night. The old user plus session ID unique index is removed because two machines
+can legitimately emit the same local source key.
 
 `session_blocks` stores explicit therapy intervals. Existing sessions receive
 one legacy block. Negative legacy durations are retained as zero-length blocks
 with failed validation and `legacy_invalid_duration` provenance.
 
-For native ResMed imports, PLD files remain durable source sessions and
-recording-span blocks. STR mask-on/mask-off intervals are stored separately as
-`resmed_str_mask_interval` blocks. Re-imports upsert stable source keys and
-remove only stale STR intervals for the same machine-local date.
+The legacy native ResMed importer still writes PLD-scoped session rows. That is
+a compatibility shape and migration input, not the canonical 2.0 model. PLD
+recordings and STR mask-on/mask-off intervals should be represented as stable
+blocks under the night-level session. Re-imports must update those blocks
+without duplicating the owning night.
 
 `nightly_therapy_aggregates` derives a machine/night read model:
 
-- **source session**: one durable source recording, currently keyed from PLD;
+- **session**: one machine-local therapy night;
+- **source recording**: a durable file/recording reference represented through
+  blocks and source provenance;
 - **therapy block**: a source-defined mask-on/mask-off interval;
 - **machine-local date**: the therapy date emitted in the machine timezone;
 - **usage duration**: sum of validated STR intervals, falling back to

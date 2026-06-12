@@ -432,6 +432,9 @@ No routing, schema, default, or dependency change.
 `docs/sleeplab_2_resmed_cutover_remaining_work.md` separates parser-read
 evidence, database-save evidence, and production-route readiness. It assigns
 each remaining item to SleepLab, upstream parser work, test-data acquisition, or
-a product decision. The first next task is the session-shape decision; default
-routing remains off until dedupe, dependency/runtime, route integration,
-diagnostics, and soak gates are closed.
+a product decision. The session-shape decision is now explicit: SleepLab 2.0
+uses one night-level session plus `session_blocks`. The parity harness accepts
+legacy/parser session row-count differences only when block, usage, and event
+totals match; the current fixture remains red on block and usage totals. Default
+routing remains off until those totals, dedupe, dependency/runtime, route
+integration, diagnostics, and soak gates are closed.
