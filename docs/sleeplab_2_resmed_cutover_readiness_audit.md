@@ -169,7 +169,7 @@ requirements.txt`), exactly the pattern used for the parser-backed conformance t
 | `sessions` | **unexpected_difference (guard failed)** | 43 rows, max_block_index 3 (per-PLD-block) | 40 rows, max_block_index 0 (per-night); not accepted until block/usage/event totals match |
 | `session_blocks` | expected_difference | 72; `source_kinds=[recording_span, resmed_str_mask_interval]`; therapy 907,380s | 7; `source_kinds=[recording_span]` (no longer mislabeled); recording 89,820s, therapy NULL |
 | `settings_snapshots` | **expected_difference (partial parity)** | **40 rows; 14 keys; `therapy_mode=apap`** | **40 rows; `therapy_mode` only; `therapy_mode=APAP`** |
-| `session_events` | **equal** on fixture; **expected_difference (event-window policy)** on real cards | 11 (CA/Hypopnea/Large Leak/Obstructive); clips events to PLD recording window | 11 (same types); retains full device-scored EVE list (parser ≥ legacy on real cards) |
+| `session_events` | **equal** on fixture; **expected_difference (accepted device-scored policy, Option A)** on real cards | 11 (CA/Hypopnea/Large Leak/Obstructive); clips events to PLD recording window (legacy behavior) | 11 (same types); retains full device-scored EVE list — SleepLab 2.0 target (parser ≥ legacy on real cards) |
 | `session_metrics` | **equal** | 34 710 | 34 710 |
 | `nightly_therapy_aggregates` | **expected_difference (usage)** | 40 rows; 907,380s; `usage_source=resmed_str_mask_intervals`; 0 zero-usage nights | 40 rows; **927,600s** (was 89,820); `usage_source=recording_spans`; 0 zero-usage nights (was 37) |
 | `signal_channels` | expected_difference | 54 rows; units incl. `L/s` | 33 rows; units incl. `L/min` |
@@ -182,30 +182,39 @@ Honest reads from the first run:
 - **Strong parity exists** for low-rate `session_metrics` (exact), scored
   `session_events` (count + type set), and `total_ahi_events` (9 = 9).
   The nightly view has matching row counts but not matching usage totals.
-- **Event-window policy difference (investigated, real cards only).** On the
-  fixture, event totals match exactly; a private multi-night soak showed a small
-  divergence. Root cause: **both EVE parsers read an identical raw scored-event
-  list** (legacy EDF parser and cpap-py agree type-for-type) and large-leak
-  derivation matches, but the legacy path clips device-scored events to each PLD
-  recording window (`events_for_block`) while the parser keeps the full
+- **Event-window policy — DECIDED (Option A: preserve the full device-scored
+  list).** On the fixture, event totals match exactly; a private multi-night soak
+  showed a small divergence. Root cause: **both EVE parsers read an identical raw
+  scored-event list** (legacy EDF parser and cpap-py agree type-for-type) and
+  large-leak derivation matches, but the legacy path clips device-scored events to
+  each PLD recording window (`events_for_block`) while the parser keeps the full
   device-scored list — so the parser persists the few events legacy drops in
   inter-block gaps / at boundaries (parser ≥ legacy). This is **not** a parser
-  overcount, parse error, type-mapping issue, or large-leak difference. The
-  harness now carries `session_events.type_counts` / `ahi_event_count` /
-  `zero_duration_count` to localize such gaps, and classifies the divergence as a
-  documented event-window-policy `expected_difference`. The remaining decision is
-  a product/clinical one: accept the fuller list (and disclose a marginally higher
-  AHI) or apply legacy-style clipping in the parser for exact parity.
+  overcount, parse error, type-mapping issue, or large-leak difference. **Decision:
+  SleepLab 2.0 keeps the full device-scored list** (aligning with the
+  machine/OSCAR-style interpretation that a device-scored event should be
+  preserved); legacy recording-window clipping is treated as legacy behavior, not
+  the target. AHI/event totals may be marginally higher than legacy on affected
+  nights — an **accepted known difference**, not a blocker, provided no duplicate
+  events are introduced. The harness carries `session_events.type_counts` /
+  `ahi_event_count` / `zero_duration_count` and a **policy-aware** classifier that
+  accepts the difference only while it matches the policy (equal type sets, parser
+  totals/AHI ≥ legacy) and keeps a type-set mismatch, a net-negative, or
+  duplication as `unexpected`. No exact OSCAR parity is claimed here without an
+  OSCAR reference; where OSCAR reference files exist, event parity should be
+  checked against them.
 - The settings row-count drop is closed (**40 → 40**) and parser sessions now
   populate `therapy_mode` (**40/40**). Full parity is still partial: legacy has
   14 setting keys and non-null mask/humidity/temperature values; parser has only
   `therapy_mode`, with those unavailable fields left `NULL`.
 - The **granularity split is visible** (per-PLD-block vs per-night; 43/72 vs
   40/7). The target model is now explicitly per-night. The parity classifier
-  accepts the session row-count difference only when block, total nightly usage,
-  and event totals match; otherwise it reports an unexpected difference. On the
-  current fixture it remains unexpected: blocks are 72 vs 7 and total nightly
-  usage is 907,380 vs 927,600 seconds, although event rows match 11 vs 11.
+  accepts the session row-count difference only when block and total nightly usage
+  totals match and any event-count difference is the accepted device-scored-event
+  policy (parser ≥ legacy, matching types); otherwise it reports an unexpected
+  difference. On the current fixture it remains unexpected: blocks are 72 vs 7 and
+  total nightly usage is 907,380 vs 927,600 seconds, although event rows match
+  11 vs 11.
 - **Therapy usage is now counted honestly, with one residual.** Parser
   file-session blocks are labeled `source_kind='recording_span'` (previously
   mislabeled `resmed_str_mask_interval`, which made recording spans masquerade as

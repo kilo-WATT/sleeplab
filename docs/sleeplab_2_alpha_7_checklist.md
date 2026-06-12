@@ -111,6 +111,14 @@ skipped, never faked). No routing or schema change. In priority order:
       Airway,5=User-flagged`) and the v10 `central→unclassified` correction, and
       sourcing the expected values directly from an OSCAR export, remain future
       work (see OSCAR numeric parity below).
+      **Event policy (decided):** SleepLab 2.0 preserves the **full device-scored
+      event list** (Option A) rather than clipping events to recording-block
+      windows the way the legacy importer did. The normalized `Session.events`
+      therefore intentionally keeps every device-scored event, which aligns with
+      OSCAR's device-scored interpretation — so OSCAR is the right future parity
+      reference for events, and legacy SleepLab's clipped totals are **not** the
+      target. Do not claim exact OSCAR event parity until checked against a
+      reference export. See the ResMed cutover docs (`session_events`).
 - [~] **(design recorded; implementation deferred)** **OSCAR reference
       comparison** beyond the export hash: numeric/row parity against OSCAR
       `session_summaries` / `daily_summaries` values (per-night), gated on
