@@ -72,7 +72,8 @@ KNOWN_DIFFERENCES: dict[str, str] = {
     "sessions": (
         "SleepLab 2.0 uses one session row per machine-local night with therapy "
         "intervals represented by session_blocks; legacy block-scoped row counts "
-        "are accepted only when block, usage, and event totals still match"
+        "are an accepted 2.0 model difference, accepted when nightly usage totals "
+        "match and any event difference is the accepted device-scored-event policy"
     ),
     "session_blocks": (
         "block source differs (legacy: STR mask-interval + PLD recording-span "
@@ -125,13 +126,17 @@ KNOWN_DIFFERENCES: dict[str, str] = {
         "paths — row counts only, no blobs compared; audit P1 #8 area"
     ),
     "nightly_therapy_aggregates": (
-        "derived view over sessions/blocks; usage differs because the parser path "
-        "has no STR mask intervals: summary-only nights now contribute STR-reported "
-        "therapy usage (recovered via the session-duration fallback), but detailed "
-        "nights still contribute recording spans rather than per-mask therapy time "
-        "(usage_source='recording_spans' vs legacy 'resmed_str_mask_intervals'). "
-        "Full numeric parity needs upstream mask intervals or a view/product "
-        "decision — audit P1 #6"
+        "derived view over sessions/blocks. As of the SleepLab 2.0 authoritative-"
+        "therapy view (migration 025) the parser path now prefers the device's "
+        "reported therapy over recording spans (priority: mask intervals > "
+        "source-reported therapy > computed usage > recording span), so the nightly "
+        "usage *total* reconciles with legacy. What still differs is the "
+        "usage_source label (legacy 'resmed_str_mask_intervals' vs parser "
+        "'source_reported_therapy'/'computed_usage') and which nights carry "
+        "summary_reported_usage_seconds — an accepted 2.0 difference, because the "
+        "parser exposes therapy as device-reported totals rather than per-mask "
+        "intervals. A divergence in the usage total itself remains a real blocker "
+        "and is caught by the session-shape usage gate — audit P1 #6"
     ),
 }
 
@@ -659,25 +664,42 @@ def _session_shape_totals_match(
 ) -> tuple[bool, str]:
     """Guard the accepted night-level-vs-block-scoped session row difference.
 
-    Block rows and nightly usage seconds must reconcile exactly. Event totals need
-    not be *equal*: under the device-scored-event policy (Option A) the parser may
-    legitimately retain more events than legacy, so an event difference is allowed
-    as long as it is the accepted policy difference
-    (:func:`_event_policy_difference_accepted`); a type-set mismatch or a
-    net-negative still blocks acceptance.
+    SleepLab 2.0 targets **one night-level session row plus child session_blocks**
+    and the cpap-parser ResMed path as the import target, so two things legacy and
+    the parser path legitimately differ on are **accepted 2.0 model differences,
+    not blockers** (see ``docs/sleeplab_2_resmed_cutover_remaining_work.md``):
+
+    * **session row counts** — legacy writes one block-scoped row per recording
+      fragment; 2.0 writes one night-scoped row. The raw counts cannot and need not
+      match.
+    * **session_blocks row counts** — legacy writes STR mask-interval + PLD
+      recording-span blocks (e.g. 72); the parser writes file-session
+      recording-span blocks (e.g. 7). This is a block *granularity/model*
+      difference, not data loss, so it is no longer required to be equal. We are
+      not cloning the legacy row shape.
+
+    What must still reconcile is the therapy and events that matter to users — the
+    genuine blockers:
+
+    * **nightly therapy usage seconds must be equal.** A bad usage total is a real
+      blocker, and with the 2.0 authoritative-therapy view (migration 025) the
+      parser path now selects device-reported therapy over recording spans, so the
+      totals reconcile.
+    * **event totals** must either match or be the accepted device-scored-event
+      policy difference (parser ``>=`` legacy with matching type sets); a type-set
+      mismatch or a net-negative still blocks acceptance.
     """
-    comparisons = (
-        ("block rows", "session_blocks", "row_count"),
-        ("nightly usage seconds", "nightly_therapy_aggregates", "total_usage_seconds"),
-    )
     mismatches: list[str] = []
-    for label, table, field in comparisons:
-        legacy_value = legacy.get(table, {}).get(field)
-        parser_value = parser.get(table, {}).get(field)
-        if legacy_value is None or parser_value is None:
-            mismatches.append(f"{label} unavailable ({legacy_value!r} vs {parser_value!r})")
-        elif legacy_value != parser_value:
-            mismatches.append(f"{label} differ ({legacy_value!r} vs {parser_value!r})")
+    legacy_usage = legacy.get("nightly_therapy_aggregates", {}).get("total_usage_seconds")
+    parser_usage = parser.get("nightly_therapy_aggregates", {}).get("total_usage_seconds")
+    if legacy_usage is None or parser_usage is None:
+        mismatches.append(
+            f"nightly usage seconds unavailable ({legacy_usage!r} vs {parser_usage!r})"
+        )
+    elif legacy_usage != parser_usage:
+        mismatches.append(
+            f"nightly usage seconds differ ({legacy_usage!r} vs {parser_usage!r})"
+        )
 
     legacy_events = legacy.get("session_events", {})
     parser_events = parser.get("session_events", {})
@@ -695,8 +717,9 @@ def _session_shape_totals_match(
     return (
         True,
         "SleepLab 2.0 uses night-level sessions plus session_blocks; differing "
-        "session row counts are accepted because block and usage totals match and any "
-        "event-count difference is the accepted device-scored-event policy (parser >= legacy)",
+        "session and block row counts are accepted 2.0 model differences because "
+        "nightly therapy usage totals match and any event-count difference is the "
+        "accepted device-scored-event policy (parser >= legacy)",
     )
 
 

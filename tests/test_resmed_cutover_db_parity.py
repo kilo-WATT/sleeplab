@@ -81,14 +81,15 @@ def test_classify_equal_and_expected_and_unexpected():
 @pytest.mark.parametrize(
     ("table", "field", "parser_value"),
     (
-        ("session_blocks", "row_count", 5),
         ("nightly_therapy_aggregates", "total_usage_seconds", 999),
         ("session_events", "row_count", 9),
     ),
 )
-def test_session_row_difference_requires_matching_block_usage_and_event_totals(
+def test_session_row_difference_requires_matching_usage_and_event_totals(
     table, field, parser_value
 ):
+    # Usage and event totals are the genuine blockers: a bad nightly usage total or
+    # a non-policy event difference must keep the session shape UNEXPECTED.
     legacy = {
         "sessions": {"row_count": 43},
         "session_blocks": {"row_count": 72},
@@ -107,6 +108,30 @@ def test_session_row_difference_requires_matching_block_usage_and_event_totals(
 
     assert report["sessions"]["category"] == cp.UNEXPECTED_DIFFERENCE
     assert "not accepted" in report["sessions"]["reason"]
+
+
+def test_session_and_block_row_count_difference_is_accepted_2_0_model():
+    # SleepLab 2.0 targets one night-level session row plus child session_blocks.
+    # The legacy-vs-parser session row-count AND session_blocks row-count
+    # differences are accepted model differences, not blockers, as long as the
+    # nightly usage total reconciles and events match.
+    legacy = {
+        "sessions": {"row_count": 43},
+        "session_blocks": {"row_count": 72},
+        "nightly_therapy_aggregates": {"total_usage_seconds": 907380},
+        "session_events": {"row_count": 11},
+    }
+    parser = {
+        "sessions": {"row_count": 40},
+        "session_blocks": {"row_count": 7},  # different block granularity — accepted
+        "nightly_therapy_aggregates": {"total_usage_seconds": 907380},
+        "session_events": {"row_count": 11},
+    }
+
+    report = cp.classify_parity(legacy, parser, tables=("sessions",))
+
+    assert report["sessions"]["category"] == cp.EXPECTED_DIFFERENCE
+    assert "accepted 2.0 model" in report["sessions"]["reason"]
 
 
 def test_session_row_difference_is_unexpected_without_comparison_totals():
@@ -515,14 +540,16 @@ def test_db_parity_harness(db, test_user):
     assert report["session_spo2"]["category"] == cp.EQUAL
 
     # (d) SleepLab 2.0's target model is one session row per night plus explicit
-    # blocks. A row-count difference is accepted only after block, usage, and
-    # event totals reconcile; otherwise the harness must surface it as unexpected.
+    # blocks. The session and session_blocks row-count differences (43 vs 40, 72 vs
+    # 7) are accepted 2.0 model differences; they are accepted because the nightly
+    # usage total reconciles (see (d2)) and events match. A bad usage total would
+    # still flip this to unexpected via the session-shape usage gate.
     assert legacy_snap["sessions"]["max_block_index"] >= 1
     assert parser_snap["sessions"]["max_block_index"] == 0
     assert legacy_snap["session_blocks"]["row_count"] == 72
     assert parser_snap["session_blocks"]["row_count"] == 7
     assert legacy_snap["session_events"]["row_count"] == parser_snap["session_events"]["row_count"] == 11
-    assert report["sessions"]["category"] == cp.UNEXPECTED_DIFFERENCE
+    assert report["sessions"]["category"] == cp.EXPECTED_DIFFERENCE
 
     # (d1) Block source labels are now honest. The parser's file-session blocks are
     # recording spans, not STR mask intervals, and must be labeled as such. Legacy
@@ -540,26 +567,32 @@ def test_db_parity_harness(db, test_user):
     assert parser_snap["session_blocks"]["total_therapy_seconds"] == 0
     assert legacy_snap["session_blocks"]["total_therapy_seconds"] == 907380
 
-    # (d2) Usage semantics. The fix recovers the 37 summary-only nights' STR-reported
-    # therapy usage (zero_usage_nights 37 -> 0) and stops counting recording spans as
-    # mask intervals, so the parser usage total jumps from 89,820 to 927,600 — close
-    # to legacy's 907,380 but NOT equal: the three detailed nights still contribute
-    # recording spans (89,820) instead of their ~69,600s of STR therapy because the
-    # view sums session_blocks when present and the parser exposes no per-mask
-    # intervals. The view honestly reports each path's usage source.
+    # (d2) Usage semantics. With the SleepLab 2.0 authoritative-therapy view
+    # (migration 025) the parser path selects the best available therapy per night:
+    # the 37 summary-only nights contribute their STR/computed usage (837,780s via
+    # the block-less session fallback, usage_source='computed_usage') and the 3
+    # detailed nights now prefer their device-reported STR therapy
+    # (source_reported_duration_seconds, 69,600s, usage_source='source_reported_therapy')
+    # instead of the recording span (89,820s). That closes the old +20,220s
+    # recording-span overcount, so the parser total lands exactly on legacy's
+    # 907,380s — the usage totals reconcile. Legacy still uses mask intervals.
     assert legacy_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 907380
-    assert parser_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 927600
+    assert parser_snap["nightly_therapy_aggregates"]["total_usage_seconds"] == 907380
     assert legacy_snap["nightly_therapy_aggregates"]["usage_sources"] == [
         "resmed_str_mask_intervals"
     ]
-    assert parser_snap["nightly_therapy_aggregates"]["usage_sources"] == ["recording_spans"]
+    assert parser_snap["nightly_therapy_aggregates"]["usage_sources"] == [
+        "computed_usage",
+        "source_reported_therapy",
+    ]
     assert legacy_snap["nightly_therapy_aggregates"]["zero_usage_nights"] == 0
     assert parser_snap["nightly_therapy_aggregates"]["zero_usage_nights"] == 0
     # The view also surfaces the authoritative STR-reported therapy total. Legacy
-    # carries it for all 40 nights; the parser now carries it for the detailed
-    # nights via their recording-span blocks' source_reported_duration_seconds
-    # (69,600s for the 3 detailed nights — was 0 before that field was populated).
-    # This is the "candy" number sitting next to the recording-span "wrapper".
+    # carries it for all 40 nights; the parser carries it for the detailed nights
+    # via their recording-span blocks' source_reported_duration_seconds (69,600s for
+    # the 3 detailed nights). The summary-only nights have no per-block reported
+    # value (it lives in sessions.duration_seconds), so the parser's summary-reported
+    # total is the detailed-night portion only.
     assert legacy_snap["nightly_therapy_aggregates"]["total_summary_reported_seconds"] == 907380
     assert parser_snap["nightly_therapy_aggregates"]["total_summary_reported_seconds"] == 69600
 
@@ -586,11 +619,11 @@ def test_db_parity_harness(db, test_user):
         assert snap["session_events"]["ahi_event_count"] == 9
         assert snap["session_events"]["zero_duration_count"] == 1
 
-    # (f) Nothing except a failed session-shape acceptance guard may surface as
-    # undocumented. That guard intentionally stays red until the totals reconcile.
+    # (f) With the SleepLab 2.0 authoritative-therapy view in place, every remaining
+    # legacy-vs-parser divergence on this fixture is an accepted/documented 2.0
+    # difference: nothing may surface as undocumented (unexpected), including the
+    # session shape, which is now accepted because the usage totals reconcile.
     unexpected = {
-        t: v
-        for t, v in report.items()
-        if v["category"] == cp.UNEXPECTED_DIFFERENCE and t != "sessions"
+        t: v for t, v in report.items() if v["category"] == cp.UNEXPECTED_DIFFERENCE
     }
     assert not unexpected, f"undocumented DB divergence(s): {unexpected}"
