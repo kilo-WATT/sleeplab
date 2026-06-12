@@ -486,6 +486,22 @@ def test_db_parity_harness(db, test_user):
     assert report["session_events"]["category"] == cp.EQUAL
     assert report["nightly_therapy_aggregates"]["category"] == cp.EXPECTED_DIFFERENCE
 
+    # (e1) Event breakdown parity on this fixture. The per-type / AHI / zero-duration
+    # fields are identical on both paths here, which is exactly why this fixture
+    # could not surface the event-window policy difference seen on real multi-night
+    # cards (where legacy clips device-scored events to the PLD recording window and
+    # the parser retains the full EVE list). Pinning the breakdown locks the fixture
+    # as an event regression oracle and documents the expected shape.
+    for snap in (legacy_snap, parser_snap):
+        assert snap["session_events"]["type_counts"] == [
+            "Central Apnea=3",
+            "Hypopnea=1",
+            "Large Leak=2",
+            "Obstructive Apnea=5",
+        ]
+        assert snap["session_events"]["ahi_event_count"] == 9
+        assert snap["session_events"]["zero_duration_count"] == 1
+
     # (f) Nothing except a failed session-shape acceptance guard may surface as
     # undocumented. That guard intentionally stays red until the totals reconcile.
     unexpected = {

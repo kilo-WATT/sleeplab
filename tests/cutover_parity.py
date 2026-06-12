@@ -89,6 +89,17 @@ KNOWN_DIFFERENCES: dict[str, str] = {
         "legacy parses SA2/SAD oximetry into session_spo2; cpap-parser path drops "
         "oximetry (has_spo2 hardcoded False) — audit P0 #3"
     ),
+    "session_events": (
+        "event-window assignment policy differs. Both paths read an identical raw "
+        "EVE event list (the EVE parsers agree exactly), but legacy clips device-"
+        "scored events to each PLD recording window (events_for_block), discarding "
+        "events that fall outside a recording block (inter-block gaps / boundaries), "
+        "while the cpap-parser path retains the full device-scored list. Net effect "
+        "on a real card: parser >= legacy, by the count of boundary/gap events; type "
+        "sets match and large-leak derivation agrees. Inspect type_counts / "
+        "ahi_event_count to confirm the gap is boundary-clipped scored events; a "
+        "net-negative or large divergence would still warrant review — audit P1 event-window policy"
+    ),
     "signal_channels": (
         "channel metadata source differs (legacy: raw EDF header; cpap-parser: "
         "normalized ImportRun.signals) — audit P1 #8"
@@ -318,6 +329,43 @@ def snapshot_parity_tables(conn: Any, *, machine_id: str, import_run_id: str) ->
                 conn,
                 "SELECT COALESCE(array_agg(DISTINCT e.event_type ORDER BY e.event_type), '{}') "
                 "FROM session_events e JOIN sessions s ON s.id = e.session_id WHERE s.machine_id = %s",
+                m,
+            )
+        ),
+        # Per-type counts as ``type=count`` labels (sorted). Safe aggregate: only
+        # event-type category names and integer counts, never timestamps or onsets.
+        # This is what localizes a total-count divergence to a specific event type
+        # (e.g. is the gap in Hypopnea, or in derived Large Leak?) without exposing
+        # any individual event.
+        "type_counts": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COALESCE(array_agg(t.event_type || '=' || t.cnt ORDER BY t.event_type), '{}') "
+                "FROM (SELECT e.event_type, COUNT(*) AS cnt FROM session_events e "
+                "JOIN sessions s ON s.id = e.session_id WHERE s.machine_id = %s "
+                "GROUP BY e.event_type) t",
+                m,
+            )
+        ),
+        # AHI-contributing events only (apnea/hypopnea family) — the medically
+        # load-bearing subset, kept separate from derived/annotation events.
+        "ahi_event_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM session_events e JOIN sessions s ON s.id = e.session_id "
+                "WHERE s.machine_id = %s AND e.event_type IN "
+                "('Central Apnea', 'Obstructive Apnea', 'Hypopnea', 'Apnea')",
+                m,
+            )
+        ),
+        # Zero-/null-duration events. A path that emits instantaneous markers the
+        # other does not will show here; isolates duration-semantics differences
+        # from genuine extra detections.
+        "zero_duration_count": _scalar(
+            _safe_row(
+                conn,
+                "SELECT COUNT(*) FROM session_events e JOIN sessions s ON s.id = e.session_id "
+                "WHERE s.machine_id = %s AND COALESCE(e.duration_seconds, 0) = 0",
                 m,
             )
         ),
