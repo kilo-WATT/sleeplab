@@ -25,13 +25,13 @@ def test_committed_version_is_not_stale_alpha2():
     """The committed VERSION must not regress to the stale alpha.2 footer value.
 
     Parses the `2.0.0-alpha.N` pre-release number and asserts it is at least the
-    alpha.8 milestone, so a forgotten bump (the original footer bug) fails loudly
-    rather than silently shipping an old version string to users.
+    current alpha.9 milestone, so a forgotten bump (the recurring footer bug) fails
+    loudly rather than silently shipping an old version string to users.
     """
     version = get_app_version()
     match = re.fullmatch(r"2\.0\.0-alpha\.(\d+)", version)
     assert match, f"VERSION semver must be a 2.0.0-alpha.N pre-release, got {version!r}"
-    assert int(match.group(1)) >= 8, f"VERSION {version!r} is stale (expected >= alpha.8)"
+    assert int(match.group(1)) >= 9, f"VERSION {version!r} is stale (expected >= alpha.9)"
 
 
 def test_sleeplab_version_env_override_wins(monkeypatch):
