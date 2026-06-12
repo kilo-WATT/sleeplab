@@ -45,6 +45,8 @@ def _seed_session(
     avg_spo2: float | None = None,
     min_spo2: float | None = None,
     start_datetime: datetime | None = None,
+    machine_id: str | None = None,
+    provenance_status: str = "legacy_backfilled",
 ):
     if folder_date is None:
         folder_date = date.today()
@@ -59,12 +61,14 @@ def _seed_session(
                 id, session_id, folder_date, start_datetime, pld_start_datetime,
                 duration_seconds, device_serial, has_spo2, machine_tz, user_id,
                 note, tags, total_ahi_events, avg_pressure, p95_pressure, avg_leak,
-                therapy_mode, mask_type, avg_spo2, min_spo2{manufacturer_column}
+                therapy_mode, mask_type, avg_spo2, min_spo2, machine_id,
+                provenance_status{manufacturer_column}
             ) VALUES (
                 CAST(:sid AS uuid), :sid, :fd, :start, :start,
                 :duration_seconds, :device_serial, :has_spo2, :machine_tz, CAST(:uid AS uuid),
                 :note, CAST(:tags AS text[]), :total_ahi_events, :avg_pressure, :p95_pressure, :avg_leak,
-                :therapy_mode, :mask_type, :avg_spo2, :min_spo2{manufacturer_value}
+                :therapy_mode, :mask_type, :avg_spo2, :min_spo2, CAST(:machine_id AS uuid),
+                :provenance_status{manufacturer_value}
             )
         """),
         {
@@ -87,6 +91,8 @@ def _seed_session(
             "has_spo2": has_spo2,
             "avg_spo2": avg_spo2,
             "min_spo2": min_spo2,
+            "machine_id": machine_id,
+            "provenance_status": provenance_status,
         },
     )
     db.commit()
@@ -133,6 +139,116 @@ class TestGetSession:
         assert data["therapy_score"]["total"] == 100
         assert data["therapy_score"]["grade"] == "A"
         assert data["score_vs_30d_avg"] is None
+        assert data["data_availability"] == {
+            "import_backend": "legacy",
+            "event_count": 0,
+            "metric_sample_count": 0,
+            "waveform_sample_count": 0,
+            "events_available": False,
+            "therapy_graphs_available": False,
+            "event_waveforms_available": False,
+            "full_night_flow_available": False,
+            "spo2_available": False,
+            "settings_available": False,
+        }
+
+    def test_parser_night_coverage_and_children_are_machine_scoped(
+        self,
+        client: TestClient,
+        auth_headers,
+        test_user,
+        db,
+    ):
+        folder_date = date(2026, 6, 4)
+        machine_ids = []
+        for suffix in ("A", "B"):
+            machine_ids.append(db.execute(
+                text("""
+                    INSERT INTO cpap_machines (
+                        user_id, manufacturer, family, model, adapter_id, identity_key,
+                        identity_confidence, support_status, validation_status
+                    ) VALUES (
+                        CAST(:uid AS uuid), 'ResMed', 'AirSense 10', 'AutoSet',
+                        'resmed-native-v2', :identity_key, 'exact', 'validated', 'validated'
+                    )
+                    RETURNING id::text
+                """),
+                {"uid": test_user["id"], "identity_key": f"test-machine-{suffix}"},
+            ).scalar_one())
+
+        selected_sid = _seed_session(
+            db,
+            test_user["id"],
+            folder_date=folder_date,
+            machine_id=machine_ids[0],
+            provenance_status="native_resmed_cpap_parser",
+            therapy_mode="APAP",
+            total_ahi_events=1,
+        )
+        other_sid = _seed_session(
+            db,
+            test_user["id"],
+            folder_date=folder_date,
+            machine_id=machine_ids[1],
+            provenance_status="native_resmed_cpap_parser",
+            total_ahi_events=1,
+        )
+        for sid, event_type, pressure in (
+            (selected_sid, "Obstructive Apnea", 9.0),
+            (other_sid, "Central Apnea", 14.0),
+        ):
+            db.execute(
+                text("""
+                    INSERT INTO session_events (
+                        session_id, event_type, onset_seconds, duration_seconds,
+                        event_datetime, source_event_key, source_event_type
+                    ) VALUES (
+                        CAST(:sid AS uuid), :event_type, 60, 12, :ts,
+                        :source_event_key, :event_type
+                    )
+                """),
+                {
+                    "sid": sid,
+                    "event_type": event_type,
+                    "ts": datetime(2026, 6, 5, 2, 1, tzinfo=UTC),
+                    "source_event_key": f"test:{sid}",
+                },
+            )
+            db.execute(
+                text("""
+                    INSERT INTO session_metrics (session_id, ts, pressure, leak)
+                    VALUES (CAST(:sid AS uuid), :ts, :pressure, 0.1)
+                """),
+                {"sid": sid, "ts": datetime(2026, 6, 5, 2, 1, tzinfo=UTC), "pressure": pressure},
+            )
+            db.execute(
+                text("""
+                    INSERT INTO session_waveform (session_id, ts, flow, pressure)
+                    VALUES (CAST(:sid AS uuid), :ts, 0.5, :pressure)
+                """),
+                {"sid": sid, "ts": datetime(2026, 6, 5, 2, 1, tzinfo=UTC), "pressure": pressure},
+            )
+        db.commit()
+
+        detail = client.get(f"/sessions/{selected_sid}", headers=auth_headers)
+        events = client.get(f"/sessions/{selected_sid}/events", headers=auth_headers)
+        metrics = client.get(f"/sessions/{selected_sid}/metrics?downsample=1", headers=auth_headers)
+
+        assert detail.status_code == 200
+        assert detail.json()["data_availability"] == {
+            "import_backend": "cpap-parser",
+            "event_count": 1,
+            "metric_sample_count": 1,
+            "waveform_sample_count": 1,
+            "events_available": True,
+            "therapy_graphs_available": True,
+            "event_waveforms_available": True,
+            "full_night_flow_available": False,
+            "spo2_available": False,
+            "settings_available": True,
+        }
+        assert [event["event_type"] for event in events.json()] == ["Obstructive Apnea"]
+        assert metrics.json()["pressure"] == [9.0]
 
     def test_get_detail_includes_score_vs_30d_avg(self, client: TestClient, auth_headers, test_user, db):
         _seed_session(

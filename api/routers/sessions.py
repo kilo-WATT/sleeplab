@@ -688,12 +688,14 @@ def get_session(
                 m.model AS machine_model,
                 m.validation_status AS machine_validation_status,
                 {manufacturer_select},
-                TRUE AS parser_validated,
+                BOOL_OR(s.provenance_status LIKE 'native_resmed_cpap_parser%') AS parser_validated,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
                 COALESCE((
                     SELECT s2.tags
                     FROM sessions s2
-                    JOIN night n2 ON s2.folder_date = n2.folder_date AND s2.user_id = n2.user_id
+                    JOIN night n2 ON s2.folder_date = n2.folder_date
+                                 AND s2.user_id = n2.user_id
+                                 AND s2.machine_id IS NOT DISTINCT FROM n2.machine_id
                     WHERE s2.duration_seconds >= 600
                       AND s2.tags IS NOT NULL
                     ORDER BY s2.duration_seconds DESC
@@ -801,7 +803,7 @@ def update_session_note(
     """Set or clear the user note for every block on the same calendar night as this session."""
     selected = db.execute(
         text("""
-            SELECT folder_date
+            SELECT folder_date, machine_id
             FROM sessions
             WHERE id::text = :id
               AND user_id = CAST(:uid AS uuid)
@@ -822,8 +824,14 @@ def update_session_note(
                 updated_at = NOW()
             WHERE user_id = CAST(:uid AS uuid)
               AND folder_date = :folder_date
+              AND machine_id IS NOT DISTINCT FROM CAST(:machine_id AS uuid)
         """),
-        {"note": note, "uid": current_user["id"], "folder_date": selected["folder_date"]},
+        {
+            "note": note,
+            "uid": current_user["id"],
+            "folder_date": selected["folder_date"],
+            "machine_id": str(selected["machine_id"]) if selected["machine_id"] else None,
+        },
     )
     db.commit()
     return get_session(session_id=session_id, current_user=current_user, db=db)
@@ -839,7 +847,7 @@ def update_session_tags(
     """Replace the tag list for every block on the same calendar night; validates against the allowed tag set."""
     selected = db.execute(
         text("""
-            SELECT folder_date
+            SELECT folder_date, machine_id
             FROM sessions
             WHERE id::text = :id
               AND user_id = CAST(:uid AS uuid)
@@ -863,8 +871,14 @@ def update_session_tags(
                 updated_at = NOW()
             WHERE user_id = CAST(:uid AS uuid)
               AND folder_date = :folder_date
+              AND machine_id IS NOT DISTINCT FROM CAST(:machine_id AS uuid)
         """),
-        {"tags": tags, "uid": current_user["id"], "folder_date": selected["folder_date"]},
+        {
+            "tags": tags,
+            "uid": current_user["id"],
+            "folder_date": selected["folder_date"],
+            "machine_id": str(selected["machine_id"]) if selected["machine_id"] else None,
+        },
     )
     db.commit()
     return get_session(session_id=session_id, current_user=current_user, db=db)
@@ -881,11 +895,17 @@ def get_session_events(
     rows = (
         db.execute(
             text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            )
             SELECT se.id, se.event_type, se.onset_seconds, se.duration_seconds, se.event_datetime
             FROM session_events se
             JOIN sessions s ON se.session_id = s.id
-            WHERE s.folder_date = (SELECT folder_date FROM sessions WHERE id = CAST(:sid AS uuid))
-              AND s.user_id = CAST(:uid AS uuid)
+            JOIN target t ON t.folder_date = s.folder_date
+                         AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+            WHERE s.user_id = CAST(:uid AS uuid)
             ORDER BY se.event_datetime
         """),
             {"sid": internal_session_id, "uid": current_user["id"]},
@@ -912,12 +932,18 @@ def get_event_window(
     event_row = (
         db.execute(
             text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            )
             SELECT se.id, se.event_type, se.onset_seconds, se.duration_seconds, se.event_datetime,
                    s.leak_kind, s.leak_unit
             FROM session_events se
             JOIN sessions s ON se.session_id = s.id
+            JOIN target t ON t.folder_date = s.folder_date
+                         AND t.machine_id IS NOT DISTINCT FROM s.machine_id
             WHERE se.id = :event_id
-              AND s.folder_date = (SELECT folder_date FROM sessions WHERE id = CAST(:sid AS uuid))
               AND s.user_id = CAST(:uid AS uuid)
         """),
             {"event_id": event_id, "sid": internal_session_id, "uid": current_user["id"]},
@@ -931,11 +957,17 @@ def get_event_window(
     neighboring_event_rows = (
         db.execute(
             text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            )
             SELECT se.id, se.event_type, se.onset_seconds, se.duration_seconds, se.event_datetime
             FROM session_events se
             JOIN sessions s ON se.session_id = s.id
-            WHERE s.folder_date = (SELECT folder_date FROM sessions WHERE id = CAST(:sid AS uuid))
-              AND s.user_id = CAST(:uid AS uuid)
+            JOIN target t ON t.folder_date = s.folder_date
+                         AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+            WHERE s.user_id = CAST(:uid AS uuid)
               AND se.event_datetime >= (:event_ts - (:before_seconds * INTERVAL '1 second'))
               AND se.event_datetime <= (:event_ts + (:after_seconds * INTERVAL '1 second'))
             ORDER BY se.event_datetime
@@ -955,12 +987,18 @@ def get_event_window(
     metric_rows = (
         db.execute(
             text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            )
             SELECT ts, mask_pressure, pressure, epr_pressure, leak,
                    resp_rate, tidal_vol, min_vent, snore, flow_lim
             FROM session_metrics sm
             JOIN sessions s ON sm.session_id = s.id
-            WHERE s.folder_date = (SELECT folder_date FROM sessions WHERE id = CAST(:sid AS uuid))
-              AND s.user_id = CAST(:uid AS uuid)
+            JOIN target t ON t.folder_date = s.folder_date
+                         AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+            WHERE s.user_id = CAST(:uid AS uuid)
               AND sm.ts >= (:event_ts - (:before_seconds * INTERVAL '1 second'))
               AND sm.ts <= (:event_ts + (:after_seconds * INTERVAL '1 second'))
             ORDER BY sm.ts
@@ -980,13 +1018,19 @@ def get_event_window(
     waveform_rows = (
         db.execute(
             text("""
-            WITH numbered AS (
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            ),
+            numbered AS (
                 SELECT sw.ts, sw.flow, sw.pressure,
                        ROW_NUMBER() OVER (ORDER BY sw.ts) AS rn
                 FROM session_waveform sw
                 JOIN sessions s ON sw.session_id = s.id
-                WHERE s.folder_date = (SELECT folder_date FROM sessions WHERE id = CAST(:sid AS uuid))
-                  AND s.user_id = CAST(:uid AS uuid)
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+                WHERE s.user_id = CAST(:uid AS uuid)
                   AND sw.ts >= (:event_ts - (:before_seconds * INTERVAL '1 second'))
                   AND sw.ts <= (:event_ts + (:after_seconds * INTERVAL '1 second'))
             )
@@ -1038,14 +1082,20 @@ def get_session_metrics(
     rows = (
         db.execute(
             text("""
-            WITH numbered AS (
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            ),
+            numbered AS (
                 SELECT ts, mask_pressure, pressure, epr_pressure, leak,
                        resp_rate, tidal_vol, min_vent, snore, flow_lim,
                        ROW_NUMBER() OVER (ORDER BY ts) AS rn
                 FROM session_metrics sm
                 JOIN sessions s ON sm.session_id = s.id
-                WHERE s.folder_date = (SELECT folder_date FROM sessions WHERE id = CAST(:sid AS uuid))
-                  AND s.user_id = CAST(:uid AS uuid)
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+                WHERE s.user_id = CAST(:uid AS uuid)
             )
             SELECT ts, mask_pressure, pressure, epr_pressure, leak,
                    resp_rate, tidal_vol, min_vent, snore, flow_lim
@@ -1316,8 +1366,77 @@ def _session_detail_response(row, user_id: str, db: Session) -> SessionDetail:
         current_score=therapy_score.total,
         db=db,
     )
+    data["data_availability"] = _night_data_availability(
+        session_id=data["id"],
+        user_id=user_id,
+        has_spo2=bool(data["has_spo2"]),
+        has_inline_settings=any(
+            data.get(field) is not None
+            for field in ("therapy_mode", "mask_type", "humidity_level", "temperature_c")
+        ),
+        db=db,
+    )
     data.pop("parser_validated", None)
     return SessionDetail.model_validate(data)
+
+
+def _night_data_availability(
+    *,
+    session_id: str,
+    user_id: str,
+    has_spo2: bool,
+    has_inline_settings: bool,
+    db: Session,
+) -> dict:
+    """Summarize persisted coverage for one machine-local night."""
+    row = db.execute(
+        text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:id AS uuid) AND user_id = CAST(:uid AS uuid)
+            ),
+            night_sessions AS (
+                SELECT s.id, s.provenance_status
+                FROM sessions s
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+                WHERE s.user_id = CAST(:uid AS uuid)
+            )
+            SELECT
+                COALESCE(BOOL_OR(ns.provenance_status LIKE 'native_resmed_cpap_parser%'), FALSE)
+                    AS parser_backed,
+                COALESCE((SELECT COUNT(*) FROM session_events se
+                          JOIN night_sessions x ON x.id = se.session_id), 0) AS event_count,
+                COALESCE((SELECT COUNT(*) FROM session_metrics sm
+                          JOIN night_sessions x ON x.id = sm.session_id), 0) AS metric_sample_count,
+                COALESCE((SELECT COUNT(*) FROM session_waveform sw
+                          JOIN night_sessions x ON x.id = sw.session_id), 0) AS waveform_sample_count,
+                EXISTS (
+                    SELECT 1
+                    FROM settings_snapshots ss
+                    JOIN target t ON t.machine_id = ss.machine_id
+                    WHERE ss.effective_at < (t.folder_date + INTERVAL '2 days')
+                ) AS has_settings_snapshot
+            FROM night_sessions ns
+        """),
+        {"id": session_id, "uid": user_id},
+    ).mappings().one()
+    event_count = int(row["event_count"])
+    metric_sample_count = int(row["metric_sample_count"])
+    waveform_sample_count = int(row["waveform_sample_count"])
+    return {
+        "import_backend": "cpap-parser" if row["parser_backed"] else "legacy",
+        "event_count": event_count,
+        "metric_sample_count": metric_sample_count,
+        "waveform_sample_count": waveform_sample_count,
+        "events_available": event_count > 0,
+        "therapy_graphs_available": metric_sample_count > 0,
+        "event_waveforms_available": waveform_sample_count > 0,
+        "full_night_flow_available": False,
+        "spo2_available": has_spo2,
+        "settings_available": has_inline_settings or bool(row["has_settings_snapshot"]),
+    }
 
 
 def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: Session) -> float | None:
@@ -1343,7 +1462,7 @@ def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: S
                 AVG(s.avg_spo2) AS avg_spo2,
                 MIN(s.min_spo2) AS min_spo2,
                 {manufacturer_select},
-                TRUE AS parser_validated
+                BOOL_OR(s.provenance_status LIKE 'native_resmed_cpap_parser%') AS parser_validated
             FROM sessions s
             JOIN nightly_therapy_aggregates nta
               ON nta.user_id = s.user_id
@@ -1449,14 +1568,16 @@ def get_session_by_date(
                 COALESCE((
                     SELECT s2.tags
                     FROM sessions s2
-                    JOIN night n2 ON s2.folder_date = n2.folder_date AND s2.user_id = n2.user_id
+                    JOIN night n2 ON s2.folder_date = n2.folder_date
+                                 AND s2.user_id = n2.user_id
+                                 AND s2.machine_id IS NOT DISTINCT FROM n2.machine_id
                     WHERE s2.duration_seconds >= 600
                       AND s2.tags IS NOT NULL
                     ORDER BY s2.duration_seconds DESC
                     LIMIT 1
                 ), ARRAY[]::text[]) AS tags,
                 {manufacturer_select},
-                TRUE AS parser_validated
+                BOOL_OR(s.provenance_status LIKE 'native_resmed_cpap_parser%') AS parser_validated
             FROM sessions s
             JOIN night n ON s.folder_date = n.folder_date AND s.user_id = n.user_id
                         AND s.machine_id IS NOT DISTINCT FROM n.machine_id

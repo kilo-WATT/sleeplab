@@ -414,6 +414,18 @@ export interface SessionDetail extends SessionSummary {
   machine_family?: string | null
   machine_model?: string | null
   machine_validation_status?: string | null
+  data_availability: {
+    import_backend: 'cpap-parser' | 'legacy' | 'unknown'
+    event_count: number
+    metric_sample_count: number
+    waveform_sample_count: number
+    events_available: boolean
+    therapy_graphs_available: boolean
+    event_waveforms_available: boolean
+    full_night_flow_available: boolean
+    spo2_available: boolean
+    settings_available: boolean
+  }
 }
 
 export interface SessionTherapyContext {

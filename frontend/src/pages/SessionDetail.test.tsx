@@ -73,6 +73,18 @@ function sessionDetail(machineTz: string | null) {
     mask_type: null,
     humidity_level: null,
     temperature_c: null,
+    data_availability: {
+      import_backend: 'cpap-parser',
+      event_count: 2,
+      metric_sample_count: 0,
+      waveform_sample_count: 0,
+      events_available: true,
+      therapy_graphs_available: false,
+      event_waveforms_available: false,
+      full_night_flow_available: false,
+      spo2_available: false,
+      settings_available: false,
+    },
   }
 }
 
@@ -134,5 +146,16 @@ describe('SessionDetail timezone display', () => {
 
     expect(await screen.findByText(/03:59 AM/)).toBeInTheDocument()
     expect(screen.getByText(/09:31 AM/)).toBeInTheDocument()
+  })
+
+  it('shows parser coverage and explicit unsupported signal messaging', async () => {
+    renderSessionDetail()
+
+    expect(await screen.findByText('Nightly data coverage')).toBeInTheDocument()
+    expect(screen.getAllByText('ResMed cpap-parser').length).toBeGreaterThan(0)
+    expect(screen.getByText('2 imported')).toBeInTheDocument()
+    expect(screen.getByText('Night graphs unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Oximetry unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/does not yet claim SpO2 or pulse support/)).toBeInTheDocument()
   })
 })

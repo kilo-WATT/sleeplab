@@ -124,6 +124,21 @@ class TherapyScore(BaseModel):
     components: TherapyScoreComponents
 
 
+class NightDataAvailability(BaseModel):
+    """Coverage metadata for the persisted data behind a nightly session."""
+
+    import_backend: Literal["cpap-parser", "legacy", "unknown"]
+    event_count: int
+    metric_sample_count: int
+    waveform_sample_count: int
+    events_available: bool
+    therapy_graphs_available: bool
+    event_waveforms_available: bool
+    full_night_flow_available: bool
+    spo2_available: bool
+    settings_available: bool
+
+
 class SessionDetail(SessionSummary):
     """Pydantic model representing detailed telemetry metrics of a CPAP session.
 
@@ -168,6 +183,7 @@ class SessionDetail(SessionSummary):
     machine_family: str | None = None
     machine_model: str | None = None
     machine_validation_status: str | None = None
+    data_availability: NightDataAvailability
 
 
 class TagInsight(BaseModel):

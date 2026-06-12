@@ -349,6 +349,8 @@ export default function SessionDetail() {
   const hasDeviceSettings = Boolean(session.therapy_mode || session.mask_type || session.humidity_level != null || session.temperature_c != null)
   const normalizedSettings = therapyContext?.settings?.normalized_settings
   const hasEquipment = Boolean(equipment && (equipment.cushion || equipment.headgear || equipment.tubing || equipment.humidifier_chamber || equipment.filter))
+  const availability = session.data_availability
+  const isParserBacked = availability.import_backend === 'cpap-parser'
 
   const statHelp = {
     ahi: 'AHI means apnea-hypopnea index: the average number of breathing events per hour during this session.',
@@ -396,9 +398,16 @@ export default function SessionDetail() {
       <Card className="overflow-hidden bg-[radial-gradient(circle_at_top_right,_rgba(106,161,54,0.10),_transparent_30%),radial-gradient(circle_at_top_left,_rgba(82,81,167,0.08),_transparent_24%),var(--surface-strong)]">
         <CardContent className="px-4 pb-5 pt-4 sm:px-6 sm:pb-6 sm:pt-5">
           <div className="flex justify-end">
-            <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${badge.className}`}>
-              {badge.label}
-            </span>
+            <div className="flex flex-wrap justify-end gap-2">
+              {isParserBacked ? (
+                <span className="shrink-0 rounded-full bg-[rgba(82,81,167,0.10)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
+                  ResMed cpap-parser import
+                </span>
+              ) : null}
+              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${badge.className}`}>
+                {badge.label}
+              </span>
+            </div>
           </div>
 
           {/* Date + time */}
@@ -477,6 +486,8 @@ export default function SessionDetail() {
           </div>
         </CardContent>
       </Card>
+
+      <NightDataCoverage session={session} />
 
       <SessionAICard sessionId={session.id} />
 
@@ -825,10 +836,24 @@ export default function SessionDetail() {
         </div>
       </div>
 
-      <MetricsChart metrics={metrics} events={events} leakKind={session.leak_kind} />
+      {metrics.timestamps.length > 0 ? (
+        <MetricsChart metrics={metrics} events={events} leakKind={session.leak_kind} />
+      ) : (
+        <UnavailableDataCard
+          title="Night graphs unavailable"
+          description="No detailed therapy signal samples were imported for this night. Summary usage, AHI, pressure, leak, settings, and events above remain available."
+        />
+      )}
 
-      {spo2 && (
+      {spo2 ? (
         <SpO2Chart spo2={spo2} wearable={wearableData} />
+      ) : (
+        <UnavailableDataCard
+          title="Oximetry unavailable"
+          description={isParserBacked
+            ? 'This ResMed cpap-parser workflow does not yet claim SpO2 or pulse support. SleepLab leaves those values unavailable instead of estimating them.'
+            : 'No SpO2 or pulse samples were imported for this night.'}
+        />
       )}
 
       {wearableData && wearableData.stages.length > 0 && (
@@ -836,6 +861,97 @@ export default function SessionDetail() {
       )}
 
     </div>
+  )
+}
+
+function NightDataCoverage({ session }: { session: SessionDetailType }) {
+  const availability = session.data_availability
+  const sourceLabel = availability.import_backend === 'cpap-parser'
+    ? 'ResMed cpap-parser'
+    : availability.import_backend === 'legacy'
+      ? 'Legacy importer'
+      : 'Unknown importer'
+  const items = [
+    {
+      label: 'Events',
+      value: availability.events_available
+        ? `${availability.event_count.toLocaleString()} imported`
+        : 'None imported',
+      available: availability.events_available,
+    },
+    {
+      label: 'Night graphs',
+      value: availability.therapy_graphs_available
+        ? `${availability.metric_sample_count.toLocaleString()} sample${availability.metric_sample_count === 1 ? '' : 's'}`
+        : 'No detailed signals',
+      available: availability.therapy_graphs_available,
+    },
+    {
+      label: 'Event waveforms',
+      value: availability.event_waveforms_available
+        ? `${availability.waveform_sample_count.toLocaleString()} sample${availability.waveform_sample_count === 1 ? '' : 's'}`
+        : 'Not available',
+      available: availability.event_waveforms_available,
+    },
+    {
+      label: 'Therapy settings',
+      value: availability.settings_available ? 'Available' : 'Not imported',
+      available: availability.settings_available,
+    },
+    {
+      label: 'SpO2 / pulse',
+      value: availability.spo2_available ? 'Available' : 'Not supported',
+      available: availability.spo2_available,
+    },
+    {
+      label: 'Full-night flow',
+      value: availability.full_night_flow_available ? 'Available' : 'Event windows only',
+      available: availability.full_night_flow_available,
+    },
+  ]
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle>Nightly data coverage</CardTitle>
+            <CardDescription>Persisted data available for this machine-local night.</CardDescription>
+          </div>
+          <span className="w-fit rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1 text-xs font-bold text-[var(--foreground)]">
+            {sourceLabel}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {items.map((item) => (
+            <div key={item.label} className="flex items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-3">
+              <span className="text-sm font-semibold text-[var(--foreground)]">{item.label}</span>
+              <span className={`text-right text-xs font-bold ${item.available ? 'text-[var(--green-700)]' : 'text-[var(--muted-foreground)]'}`}>
+                {item.value}
+              </span>
+            </div>
+          ))}
+        </div>
+        {availability.import_backend === 'cpap-parser' ? (
+          <p className="mt-3 text-xs leading-5 text-[var(--muted-foreground)]">
+            Summary values, scored events, and detailed signals come from the validated parser-backed import path. Unsupported channels are called out explicitly.
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
+function UnavailableDataCard({ title, description }: { title: string; description: string }) {
+  return (
+    <Card>
+      <CardContent className="p-5 sm:p-6">
+        <p className="text-base font-bold text-[var(--foreground)]">{title}</p>
+        <p className="mt-1.5 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">{description}</p>
+      </CardContent>
+    </Card>
   )
 }
 

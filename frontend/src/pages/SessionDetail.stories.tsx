@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react';
 import { Routes, Route } from 'react-router-dom';
 import SessionDetail from './SessionDetail';
 import { api } from '../api/client';
-import type { EquipmentType } from '../api/client';
+import type { EquipmentType, ImportSettings } from '../api/client';
 
 const mockSession = {
   id: 'sesh-123',
@@ -11,6 +11,12 @@ const mockSession = {
   block_index: 0,
   start_datetime: '2023-10-01T23:00:00Z',
   duration_seconds: 28800,
+  wall_clock_seconds: 28800,
+  gap_seconds: 0,
+  block_count: 1,
+  usage_source: 'summary_reported',
+  summary_reported_usage_seconds: 28800,
+  duration_validation_status: 'validated',
   duration_hours: 8,
   ahi: 1.5,
   central_apnea_count: 2,
@@ -22,21 +28,51 @@ const mockSession = {
   avg_pressure: 10.2,
   p95_pressure: 12.0,
   avg_leak: 0.05,
-  has_spo2: true,
+  manufacturer: 'ResMed',
+  leak_kind: 'total' as const,
+  leak_unit: 'L/s',
+  has_spo2: false,
   machine_tz: 'America/New_York',
   pld_start_datetime: '2023-10-01T23:00:00Z',
   device_serial: '12345678',
+  therapy_score: {
+    total: 96,
+    grade: 'A' as const,
+    low_confidence: false,
+    callout: 'Strong therapy night with low AHI and full usage.',
+    components: {
+      ahi: { score: 40, max_score: 40, label: 'AHI', value: 1.5, unit: 'events/hr', unavailable_reason: null },
+      leak: { score: 24, max_score: 25, label: 'Leak', value: 3, unit: 'L/min', unavailable_reason: null },
+      duration: { score: 20, max_score: 20, label: 'Duration', value: 8, unit: 'hours', unavailable_reason: null },
+      spo2: null,
+    },
+  },
+  score_vs_30d_avg: 4.2,
+  note: null,
+  tags: [],
   avg_resp_rate: 15.2,
   avg_tidal_vol: 0.5,
   avg_min_vent: 7.5,
   avg_snore: 0.1,
   avg_flow_lim: 0.05,
-  avg_spo2: 95.5,
-  min_spo2: 89.0,
+  avg_spo2: null,
+  min_spo2: null,
   therapy_mode: 'AutoSet',
   mask_type: 'Full Face',
   humidity_level: 4,
   temperature_c: 27,
+  data_availability: {
+    import_backend: 'cpap-parser' as const,
+    event_count: 2,
+    metric_sample_count: 2,
+    waveform_sample_count: 1,
+    events_available: true,
+    therapy_graphs_available: true,
+    event_waveforms_available: true,
+    full_night_flow_available: false,
+    spo2_available: false,
+    settings_available: true,
+  },
 };
 
 const mockEvents = [
@@ -109,6 +145,9 @@ const meta: Meta<typeof SessionDetail> = {
       api.getSessions = async () => [session];
       api.getSessionSpo2 = async () => mockSpo2;
       api.getInferredEquipment = async () => equipment;
+      api.getSessionTherapyContext = async () => {
+        throw new Error('Therapy context is not included in this story')
+      };
       api.getWearableData = async () => wearable;
       api.getEventWindow = async () => ({
         event: mockEvents[0],
@@ -128,7 +167,7 @@ const meta: Meta<typeof SessionDetail> = {
       });
       api.getImportSettings = async () => ({
         llm_configured: true,
-      } as any);
+      } as ImportSettings);
 
       if (context.parameters.loading) {
         api.getSessionByDate = () => new Promise(() => {}); // Never resolves
