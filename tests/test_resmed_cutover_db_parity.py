@@ -351,16 +351,17 @@ def test_db_parity_harness(db, test_user):
     assert report["settings_snapshots"]["category"] == cp.EXPECTED_DIFFERENCE
 
     # (b) Both paths start with the same uploaded-root source manifest. Legacy
-    # resolves and links real relative paths; parser synthetic ids are not
-    # persisted as fake UUID links.
+    # resolves and links real relative paths. Parser can now preserve its one
+    # exact loader reference (STR.edf); synthetic ids are still not persisted as
+    # fake UUID links.
     legacy_sources = legacy_snap["import_source_files"]
     parser_sources = parser_snap["import_source_files"]
     assert legacy_sources["row_count"] == parser_sources["row_count"] == manifest_count
     assert legacy_sources["roles"] == parser_sources["roles"]
     assert legacy_sources["used_count"] > 0
-    assert parser_sources["used_count"] == 0
+    assert parser_sources["used_count"] == 1
     assert legacy_sources["skipped_count"] == manifest_count - legacy_sources["used_count"]
-    assert parser_sources["skipped_count"] == manifest_count
+    assert parser_sources["skipped_count"] == manifest_count - parser_sources["used_count"]
     assert legacy_sources["unknown_count"] == parser_sources["unknown_count"] == 0
     assert legacy_sources["linked_blocks"] > 0
     assert legacy_sources["linked_events"] > 0
@@ -369,7 +370,7 @@ def test_db_parity_harness(db, test_user):
     assert parser_sources["linked_blocks"] == 0
     assert parser_sources["linked_events"] == 0
     assert parser_sources["linked_channels"] == 0
-    assert parser_sources["linked_settings"] == 0
+    assert parser_sources["linked_settings"] == 1
     assert report["import_source_files"]["category"] == cp.EXPECTED_DIFFERENCE
 
     # (c) This fixture cannot exercise oximetry samples: all SAD SpO2 values are

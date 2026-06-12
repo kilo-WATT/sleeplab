@@ -93,7 +93,7 @@ KNOWN_DIFFERENCES: dict[str, str] = {
     ),
     "import_source_files": (
         "both uploaded-root paths start with the same persisted source manifest, "
-        "but legacy resolves real relative paths and links/marks files used while "
+        "and parser preserves exact STR.edf settings linkage while "
         "cpap-parser emits synthetic source ids that cannot be mapped safely — audit P1 #7"
     ),
     "derived_values": (

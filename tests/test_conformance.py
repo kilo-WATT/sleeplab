@@ -2437,6 +2437,17 @@ def test_persist_import_run_writes_therapy_mode_settings_snapshot(db, test_user)
     raw_conn = db.connection().connection.driver_connection
     user_id = test_user["id"]
     machine_id, run_id = _new_machine_and_run(raw_conn, user_id=user_id, serial="SET-SNAP")
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO import_source_files (
+                import_run_id, relative_path, size_bytes, checksum, parser_role
+            ) VALUES (%s, 'STR.edf', 1, 'sha256:test-str', 'summary')
+            RETURNING id
+            """,
+            (run_id,),
+        )
+        str_source_id = str(cur.fetchone()[0])
 
     start = datetime(2026, 6, 1, 22, 0)
     session = Session(
@@ -2471,19 +2482,26 @@ def test_persist_import_run_writes_therapy_mode_settings_snapshot(db, test_user)
         cur.execute(
             """
             SELECT normalized_settings->>'therapy_mode', confidence, validation_status,
-                   adapter_id, source_names->>'therapy_mode'
+                   adapter_id, source_names->>'therapy_mode', source_file_ids
             FROM settings_snapshots WHERE machine_id = %s
             """,
             (machine_id,),
         )
         rows = cur.fetchall()
     assert len(rows) == 1
-    therapy_mode, confidence, validation_status, adapter_id, source_name = rows[0]
+    therapy_mode, confidence, validation_status, adapter_id, source_name, source_ids = rows[0]
     assert therapy_mode == "APAP"
     assert confidence == "probable"  # conservative, not overclaimed as 'strong'
     assert validation_status == "partial"
     assert adapter_id == "resmed-cpap-parser-v1"
     assert source_name == "pressure_mode"
+    assert [str(value) for value in source_ids] == [str_source_id]
+    with raw_conn.cursor() as cur:
+        cur.execute(
+            "SELECT disposition FROM import_source_files WHERE id = %s",
+            (str_source_id,),
+        )
+        assert cur.fetchone()[0] == "used"
 
     # Flattened onto the sessions row; unmapped settings stay NULL (not fabricated).
     with raw_conn.cursor() as cur:
@@ -2502,6 +2520,31 @@ def test_persist_import_run_writes_therapy_mode_settings_snapshot(db, test_user)
     with raw_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM settings_snapshots WHERE machine_id = %s", (machine_id,))
         assert cur.fetchone()[0] == 1
+
+
+def test_resolve_source_file_ids_keeps_only_exact_manifest_matches():
+    """Synthetic parser ids stay unlinked while exact paths resolve and dedupe."""
+    from importer.loaders.persist import _resolve_source_file_ids
+
+    calls = []
+
+    def resolve(_conn, run_id, source_ref):
+        calls.append((run_id, source_ref))
+        return "manifest-str-uuid" if source_ref.replace("\\", "/") == "STR.edf" else None
+
+    resolved = _resolve_source_file_ids(
+        object(),
+        import_run_id="run-1",
+        source_refs=("STR.edf", "2026-06-01:BRP+PLD:0", "STR.edf"),
+        resolve=resolve,
+    )
+
+    assert resolved == ["manifest-str-uuid"]
+    assert calls == [
+        ("run-1", "STR.edf"),
+        ("run-1", "2026-06-01:BRP+PLD:0"),
+        ("run-1", "STR.edf"),
+    ]
 
 
 def test_persist_import_run_writes_no_settings_when_session_has_none(db, test_user):

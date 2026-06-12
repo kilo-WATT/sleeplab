@@ -136,6 +136,7 @@ def persist_import_run(
     from importer.db import (
         replace_derived_values,
         replace_session_events,
+        source_file_id,
         upsert_session,
         upsert_session_block,
         upsert_settings_snapshot,
@@ -260,6 +261,7 @@ def persist_import_run(
             session_db_id=str(session_db_id),
             machine_tz=machine_tz,
             adapter_version=run.adapter_version,
+            resolve_source_file_id=source_file_id,
             upsert=upsert_settings_snapshot,
         )
 
@@ -494,6 +496,7 @@ def _write_settings_snapshots(
     session_db_id: str,
     machine_tz: ZoneInfo,
     adapter_version: str,
+    resolve_source_file_id: Any,
     upsert: Any,
 ) -> int:
     """Persist the loader-provided ``SettingsSnapshot``s into ``settings_snapshots``.
@@ -503,9 +506,9 @@ def _write_settings_snapshots(
     ``(machine_id, effective_at, adapter_id)``). Conservative by construction:
 
     * a snapshot with no real settings is **skipped** (no empty/placeholder row);
-    * ``vendor_settings`` is ``{}`` (cpap-parser exposes no raw vendor blob) and
-      ``source_file_ids`` is ``[]`` (the ``uuid[]`` column has no
-      ``import_source_files`` mapping on this path yet);
+    * ``vendor_settings`` is ``{}`` (cpap-parser exposes no raw vendor blob);
+    * exact loader references that match persisted manifest paths are linked.
+      Synthetic parser ids remain unlinked rather than being guessed;
     * the snapshot's own ``confidence`` (e.g. ``probable``) is preserved and the
       row is marked ``validation_status='partial'`` — a single device-reported
       field, not yet cross-validated, so nothing is overclaimed.
@@ -520,6 +523,12 @@ def _write_settings_snapshots(
             for key, value in dict(getattr(snapshot, "source_names", {}) or {}).items()
             if key in normalized
         }
+        source_file_ids = _resolve_source_file_ids(
+            db_conn,
+            import_run_id=import_run_id,
+            source_refs=getattr(snapshot, "source_file_ids", ()) or (),
+            resolve=resolve_source_file_id,
+        )
         written += upsert(
             db_conn,
             user_id=user_id,
@@ -530,7 +539,7 @@ def _write_settings_snapshots(
             normalized_settings=normalized,
             vendor_settings={},
             source_names=source_names,
-            source_file_ids=[],
+            source_file_ids=source_file_ids,
             adapter_id=_ADAPTER_ID,
             parser_id="sleeplab.resmed_cpap_parser",
             parser_version=str(adapter_version),
@@ -542,6 +551,22 @@ def _write_settings_snapshots(
 
 
 # -- Small helpers ---------------------------------------------------------
+
+
+def _resolve_source_file_ids(
+    db_conn: Any,
+    *,
+    import_run_id: str,
+    source_refs: tuple[str, ...],
+    resolve: Any,
+) -> list[str]:
+    """Resolve exact manifest paths without inventing links for synthetic ids."""
+    resolved: list[str] = []
+    for source_ref in source_refs:
+        source_id = resolve(db_conn, import_run_id, source_ref)
+        if source_id and source_id not in resolved:
+            resolved.append(source_id)
+    return resolved
 
 
 def _event_counts(session: Session) -> dict[str, int]:
