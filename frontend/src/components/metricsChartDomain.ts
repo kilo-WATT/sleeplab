@@ -33,7 +33,7 @@ export function metricsToPoints(metrics: MetricsResponse): MetricPoint[] {
   return metrics.timestamps.map((ts, i) => ({
     ts: new Date(ts).getTime(),
     pressure: metrics.pressure[i],
-    leak: leakToLpm(metrics.leak[i]),
+    leak: leakToLpm(metrics.leak[i], metrics.leak_unit),
     resp_rate: metrics.resp_rate[i],
     flow_lim: metrics.flow_lim[i],
     snore: metrics.snore[i],

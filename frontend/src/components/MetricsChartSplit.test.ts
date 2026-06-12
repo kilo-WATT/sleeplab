@@ -97,6 +97,25 @@ describe('computeMetricsDomain', () => {
     const timestamp = Date.UTC(2026, 5, 2, 4, 0)
     const metrics = metricsResponse([timestamp])
     metrics.leak = [0.2]
+    metrics.leak_unit = 'L/s'
+
+    expect(metricsToPoints(metrics)[0].leak).toBe(12)
+  })
+
+  it('passes parser leak samples through when already L/min (no x60)', () => {
+    const timestamp = Date.UTC(2026, 5, 2, 4, 0)
+    const metrics = metricsResponse([timestamp])
+    metrics.leak = [12]
+    metrics.leak_unit = 'L/min'
+
+    // Regression: a parser night's L/min sample must not be inflated to 720.
+    expect(metricsToPoints(metrics)[0].leak).toBe(12)
+  })
+
+  it('defaults to legacy L/s when no leak unit is provided', () => {
+    const timestamp = Date.UTC(2026, 5, 2, 4, 0)
+    const metrics = metricsResponse([timestamp])
+    metrics.leak = [0.2]
 
     expect(metricsToPoints(metrics)[0].leak).toBe(12)
   })

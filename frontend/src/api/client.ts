@@ -574,6 +574,7 @@ export interface MetricsResponse {
   min_vent: (number | null)[]
   snore: (number | null)[]
   flow_lim: (number | null)[]
+  leak_unit?: string | null
 }
 
 /**
@@ -634,6 +635,7 @@ export interface OverviewDailyStat {
   avg_pressure: number | null
   p95_pressure: number | null
   avg_leak: number | null
+  leak_unit?: string | null
   large_leak_minutes: number | null
   avg_flow_lim: number | null
   avg_tidal_vol: number | null

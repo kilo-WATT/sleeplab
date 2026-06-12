@@ -591,11 +591,10 @@ function humanizeEventType(eventType: string) {
  */
 function formatMetricValue(value: number | null | undefined, metric: TrendMetric) {
   if (value == null) return '-'
-  const displayValue = metric.key === 'avg_leak' ? leakToLpm(value) : value
-  if (displayValue == null) return '-'
+  // Leak is already normalized to L/min at ingestion (see normalizeNightLeak).
   if (metric.unit === 'clock') return formatClockHour(value)
   const precision = metric.precision ?? 1
-  const formatted = displayValue.toFixed(precision)
+  const formatted = value.toFixed(precision)
   return metric.unit ? `${formatted} ${metric.unit}` : formatted
 }
 
@@ -607,12 +606,10 @@ function formatMetricRange(low: number, high: number, metric: TrendMetric) {
     return `${formatClockHour(low)} / ${formatClockHour(high)}`
   }
 
-  const displayLow = metric.key === 'avg_leak' ? leakToLpm(low) : low
-  const displayHigh = metric.key === 'avg_leak' ? leakToLpm(high) : high
-  if (displayLow == null || displayHigh == null) return '-'
+  // Leak is already normalized to L/min at ingestion (see normalizeNightLeak).
   const precision = metric.precision ?? 1
-  const lowValue = displayLow.toFixed(precision)
-  const highValue = displayHigh.toFixed(precision)
+  const lowValue = low.toFixed(precision)
+  const highValue = high.toFixed(precision)
   return metric.unit ? `${lowValue} / ${highValue} ${metric.unit}` : `${lowValue} / ${highValue}`
 }
 
@@ -665,6 +662,16 @@ function getActiveSessionId(payload: unknown) {
  */
 function metricNumber(value: OverviewDailyStat[MetricKey]) {
   return typeof value === 'number' ? value : null
+}
+
+/**
+ * Normalize a night's leak to L/min using its own leak_unit, so every downstream
+ * aggregate (average, min/max, chart, table) works in a single unit. Legacy nights
+ * are stored in L/s and parser nights in L/min; converting here once avoids the old
+ * blanket leakToLpm() that assumed L/s and inflated parser nights 60x.
+ */
+function normalizeNightLeak(night: OverviewDailyStat): OverviewDailyStat {
+  return { ...night, avg_leak: leakToLpm(night.avg_leak, night.leak_unit), leak_unit: 'L/min' }
 }
 
 /**
@@ -765,9 +772,7 @@ function OverviewChart({
   const data = nights.map((night) => ({
     ...night,
     date: night.folder_date,
-    primary: metric.key === 'avg_leak'
-      ? leakToLpm(metricNumber(night[metric.key]))
-      : night[metric.key],
+    primary: night[metric.key],
     secondary: metric.secondaryKey ? night[metric.secondaryKey] : null,
   }))
 
@@ -834,9 +839,7 @@ function OverviewChart({
               formatter={(value, name) => {
                 const label = name === 'secondary' ? (metric.secondaryLabel ?? 'End') : metric.shortLabel
                 const numericValue = typeof value === 'number' ? value : null
-                const formattedValue = metric.key === 'avg_leak' && numericValue != null
-                  ? `${numericValue.toFixed(metric.precision ?? 1)} ${metric.unit}`
-                  : formatMetricValue(numericValue, metric)
+                const formattedValue = formatMetricValue(numericValue, metric)
                 return [formattedValue, label]
               }}
             />
@@ -953,7 +956,7 @@ export default function TrendsPage() {
           api.getOverviewStats(rangeDays),
         ])
         setSummary(data)
-        setOverview(overviewData.nights)
+        setOverview(overviewData.nights.map(normalizeNightLeak))
         setError(null)
       } catch (err) {
         setError(String(err))
