@@ -78,8 +78,11 @@ without duplicating the owning night.
   blocks and source provenance;
 - **therapy block**: a source-defined mask-on/mask-off interval;
 - **machine-local date**: the therapy date emitted in the machine timezone;
-- **usage duration**: sum of validated STR intervals, falling back to
-  recording spans only when explicit intervals are unavailable;
+- **usage duration**: the best available therapy time, selected by priority
+  (migration 025): (1) true mask/therapy intervals, (2) source-reported therapy
+  duration, (3) computed parser usage, (4) recording span only as a last resort.
+  `usage_source` names which tier was used. A recording span is never reported as
+  usage when a better therapy number exists;
 - **wall-clock span**: first therapy-on to last therapy-off;
 - **gap duration**: wall-clock span minus usage;
 - **summary-reported usage**: STR `Duration`, retained separately.
