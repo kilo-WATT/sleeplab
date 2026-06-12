@@ -50,6 +50,7 @@ const mockSession = {
   score_vs_30d_avg: 4.2,
   note: null,
   tags: [],
+  p95_leak: 0.04,
   avg_resp_rate: 15.2,
   avg_tidal_vol: 0.5,
   avg_min_vent: 7.5,

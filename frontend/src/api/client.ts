@@ -399,6 +399,7 @@ export interface SessionDetail extends SessionSummary {
   score_vs_30d_avg: number | null
   note: string | null
   tags: string[]
+  p95_leak: number | null
   avg_resp_rate: number | null
   avg_tidal_vol: number | null
   avg_min_vent: number | null

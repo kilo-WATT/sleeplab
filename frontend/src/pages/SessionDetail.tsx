@@ -481,7 +481,9 @@ export default function SessionDetail() {
               <p className="mt-1.5 text-3xl font-semibold text-[var(--foreground)]">
                 {session.avg_pressure?.toFixed(1) ?? '—'}
               </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">cmH₂O</p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                avg cmH₂O · P95 {session.p95_pressure?.toFixed(1) ?? '—'}
+              </p>
             </div>
           </div>
         </CardContent>
@@ -514,29 +516,29 @@ export default function SessionDetail() {
               </span>
               <InfoPopover title="Average leak">{statHelp.leak}</InfoPopover>
             </div>
-            <p className={secondaryStatNoteClass}>L/min · P95 {session.p95_pressure?.toFixed(1) ?? '—'} cmH₂O</p>
+            <p className={secondaryStatNoteClass}>avg L/min · P95 {leakToLpm(session.p95_leak, session.leak_unit)?.toFixed(1) ?? '—'} L/min</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className={secondaryStatContentClass}>
-            <p className={secondaryStatLabelClass}>Resp rate</p>
+            <p className={secondaryStatLabelClass}>Avg resp rate</p>
             <div className="mt-2 flex items-end gap-2">
               <span className={secondaryStatValueClass}>{session.avg_resp_rate?.toFixed(1) ?? '—'}</span>
               <InfoPopover title="Respiratory rate">{statHelp.respRate}</InfoPopover>
             </div>
-            <p className={secondaryStatNoteClass}>breaths per minute</p>
+            <p className={secondaryStatNoteClass}>avg breaths per minute</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className={secondaryStatContentClass}>
-            <p className={secondaryStatLabelClass}>Tidal volume</p>
+            <p className={secondaryStatLabelClass}>Avg tidal vol</p>
             <div className="mt-2 flex items-end gap-2">
               <span className={secondaryStatValueClass}>
                 {session.avg_tidal_vol != null ? (session.avg_tidal_vol * 1000).toFixed(0) : '—'}
               </span>
               <InfoPopover title="Tidal volume">{statHelp.tidalVolume}</InfoPopover>
             </div>
-            <p className={secondaryStatNoteClass}>mL</p>
+            <p className={secondaryStatNoteClass}>avg mL</p>
           </CardContent>
         </Card>
       </div>

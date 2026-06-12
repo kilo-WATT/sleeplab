@@ -44,6 +44,8 @@ function sessionDetail(machineTz: string | null) {
     avg_pressure: 4,
     p95_pressure: 6,
     avg_leak: 0.01,
+    p95_leak: 0.04,
+    leak_unit: 'L/s',
     has_spo2: false,
     machine_tz: machineTz,
     device_serial: 'SN12345',
@@ -146,6 +148,29 @@ describe('SessionDetail timezone display', () => {
 
     expect(await screen.findByText(/03:59 AM/)).toBeInTheDocument()
     expect(screen.getByText(/09:31 AM/)).toBeInTheDocument()
+  })
+
+  it('shows leak P95 in L/min and never pressure units or pressure P95 on the leak card', async () => {
+    // Regression: the leak card previously rendered `P95 {p95_pressure} cmH₂O`,
+    // bleeding the pressure 95th percentile (and its unit) onto the leak stat.
+    renderSessionDetail()
+
+    const leakLabel = await screen.findByText('Avg leak')
+    const leakCard = leakLabel.parentElement as HTMLElement
+    // p95_leak 0.04 L/s -> 2.4 L/min, matching OSCAR-style leak P95 reporting.
+    expect(leakCard.textContent).toMatch(/P95 2\.4 L\/min/)
+    // No pressure unit and no pressure P95 value (6) may appear on the leak card.
+    expect(leakCard.textContent).not.toMatch(/cmH₂O/)
+    expect(leakCard.textContent).not.toMatch(/P95 6/)
+  })
+
+  it('labels the pressure pill as average and surfaces pressure P95 there', async () => {
+    renderSessionDetail()
+
+    const pressureCaption = await screen.findByText(
+      (_, el) => el?.textContent === 'avg cmH₂O · P95 6.0',
+    )
+    expect(pressureCaption).toBeInTheDocument()
   })
 
   it('shows parser coverage and explicit unsupported signal messaging', async () => {
