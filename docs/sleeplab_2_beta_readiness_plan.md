@@ -2,95 +2,117 @@
 
 ## 1. What works now
 
-The ResMed `cpap-parser` path is the SleepLab 2.0 target. The old native
-importer remains available as a fallback and comparison reference.
+The `cpap-parser` ResMed path is the SleepLab 2.0 target. Root-folder `/source`
+imports select it with `SLEEPLAB_USE_CPAP_PARSER=1`. Same-card parser re-imports
+replace normalized data without duplication while retaining a durable
+`import_runs` record for every attempt.
 
-The parser path stores one nightly session with child recording blocks,
-preserves the full device-scored event list, replaces generated child data on
-same-card re-import, and records each import attempt separately. Re-importing
-the same card does not add duplicate sessions, blocks, settings, events,
-metrics, waveform rows, signal channels, derived values, or nightly summaries.
+Docker installs the parser runtime. Local `uv` users install the same pin with:
 
-Nightly therapy usage uses the best available value in this order:
+```bash
+uv sync --extra parser --group dev
+```
 
-1. true mask or therapy intervals;
-2. source-reported therapy duration;
-3. computed usage;
-4. recording span only as a fallback.
-
-`SLEEPLAB_USE_CPAP_PARSER=1` selects the parser path for the root-folder
-`/source` upload flow. `/config` reports the selected ResMed backend and whether
-the `cpap_parser` and `cpap_py` modules are installed. The public default remains
-the legacy path.
+Linux CI installs that extra, verifies `cpap_parser` and `cpap_py`, and runs the
+parser-backed suite. Tests skip clearly on hosts without the optional runtime.
+`/config` reports backend selection, parser availability/readiness, DATALOG
+posture, parser SpO2 status, and source-provenance level. A parser-selected
+import fails before creating an import run when the runtime is absent.
 
 ## 2. What intentionally changed in 2.0
 
-- A canonical session is one machine-local therapy night, not one row per EDF
-  recording.
+- A canonical session is one machine-local therapy night.
 - Recording fragments belong in `session_blocks`.
-- The full device-scored event list is retained. Counts can be slightly higher
-  than the legacy importer, which clipped events to recording windows.
-- The parser currently persists only `therapy_mode` from settings. Pressure
-  limits, EPR, ramp, humidifier, temperature, and mask type remain unavailable
-  because the parser schema does not expose them.
-- Full-night high-rate waveform storage is deferred. Beta keeps event-window
-  waveform storage.
+- The full device-scored event list is retained.
+- Nightly usage chooses mask intervals, source-reported therapy, computed usage,
+  then recording span.
+- Parser settings contain only values exposed upstream, currently
+  `therapy_mode`.
+- Beta keeps event-window waveform storage.
 
-## 3. What users may need to delete and re-import
+## 3. Delete and re-import policy
 
-Users who imported ResMed data through the legacy path should clear their
-existing SleepLab session data before switching to the parser path. Automatic
-cross-path deletion is intentionally not implemented because legacy sessions
-may own notes, tags, oximetry, or other user data that must not be silently
-discarded.
+Beta uses an explicit reset policy for backend switching. `/source` detects an
+existing ResMed history from the opposite backend and returns HTTP 409 before
+creating a new import run. It does not silently duplicate nights or delete
+notes, tags, oximetry, and other user-owned data.
 
-The supported alpha/beta reset workflow is:
+To switch:
 
 1. Back up the database.
-2. Use **Delete all session data** in the application (`DELETE /sessions/all`).
-3. Set `SLEEPLAB_USE_CPAP_PARSER=1` only in an environment where the parser
-   runtime is installed.
-4. Restart SleepLab and confirm `/config` reports
-   `resmed_import_backend: "cpap-parser"` and `cpap_parser_available: true`.
-5. Re-import from the original SD card through the root-folder source flow.
+2. Use **Delete all session data** (`DELETE /sessions/all`).
+3. Select one backend and restart SleepLab.
+4. Confirm `/config` reports the expected backend and readiness.
+5. Re-import the full card through `/source`.
 
-Deleting sessions cascades to session blocks, events, metrics, waveform rows,
-signal channels, derived values, session-linked settings, notes, tags, and
-oximetry. Machine and import-history records remain as an audit trail. This is a
-destructive workflow, so the backup step is required.
+Automatic preservation-aware migration remains RC work.
 
-## 4. What remains before beta
+## 4. What remains before beta.1
 
-- Package and test the pinned `cpap-parser[resmed]`/`cpap-py` runtime in clean
-  installs and normal CI.
-- Add route-level database coverage for parser success, parser failure, durable
-  run status, and temporary-upload cleanup.
-- Decide whether `/datalog/*` is retired, parser-routed, or explicitly
-  legacy-only.
-- Implement a preservation-aware legacy-to-nightly migration, or keep the
-  documented clear-and-reimport requirement for beta.
-- Run a second independent ResMed card soak.
-- Validate real SpO2/pulse data. The committed fixture contains only missing
-  SpO2 samples.
-- Make parser-consumed source-file dispositions understandable even where
-  upstream `cpap-parser` cannot provide real source paths.
+- Run a second independent private-card soak with the aggregate-only harness.
+- Obtain real SpO2/pulse evidence and implement parser persistence before
+  claiming parser oximetry support.
+- Run the new parser-enabled GitHub CI workflow and keep it green.
+- Complete database-backed route coverage for background failure status and
+  temporary-upload cleanup in the Linux/Postgres/parser matrix.
 
 ## 5. What remains before RC
 
-- Freeze the normalized setting, channel, event, and API contracts.
-- Test upgrade, backup, restore, rollback, cancellation, concurrency, and crash
-  recovery on realistic self-hosted installations.
-- Preserve notes, tags, oximetry, and other user-owned data through any automatic
-  legacy migration.
-- Validate reports, Therapy Score, adherence, trends, and AI inputs against the
-  final normalized model.
+- Preserve notes, tags, oximetry, and other user data through automatic
+  legacy-to-nightly migration.
+- Freeze normalized setting, channel, event, provenance, and API contracts.
+- Test upgrade, backup/restore, rollback, cancellation, concurrency, and crash
+  recovery.
+- Validate reports, Therapy Score, adherence, trends, and AI inputs.
 - Publish an exact capability-based supported-device matrix.
 
-## 6. What is explicitly out of scope for beta
+## 6. Out of scope for beta
 
-- Lowenstein persistence; it remains a separate validation track.
-- Broad unsupported-machine claims.
-- Full-night waveform row storage or a new waveform BLOB/segment schema.
-- Fabricating settings not exposed by `cpap-parser`.
-- Claiming oximetry support before a fixture with real SpO2 data passes.
-- Complete row-level source links before upstream parser support exists.
+- Lowenstein persistence.
+- Unsupported-machine claims.
+- Full-night waveform/BLOB storage.
+- Fabricated settings or source-file links.
+- Parser SpO2 support without real evidence.
+- Complete row-level provenance before upstream source paths exist.
+
+## 7. Parser-backed tests
+
+```bash
+uv sync --extra parser --group dev
+uv run pytest tests/conformance/test_resmed_airsense10.py -q
+uv run pytest tests/test_resmed_cutover_db_parity.py -q
+```
+
+The DB suite also needs `TEST_DATABASE_URL` pointing to a throwaway Postgres
+database. Never use a production database.
+
+## 8. Private-card soak
+
+The soak reads a private card in place, parses it twice, and prints only
+aggregate counts. It copies no files and writes no report:
+
+```powershell
+$env:SLEEPLAB_PRIVATE_RESMED_CARD = "D:\private\card"
+uv run pytest tests/test_resmed_private_card_soak.py -q -s
+```
+
+## 9. DATALOG posture
+
+`/datalog/*`, local DATALOG settings, scheduler triggers, and uploader webhooks
+remain legacy-only for beta. They return HTTP 409 while
+`SLEEPLAB_USE_CPAP_PARSER=1`; use `/source`. `/config` reports
+`datalog_import_backend: "legacy"` and current availability.
+
+## 10. SpO2 status
+
+The schema and legacy importer can store SpO2/pulse. The parser path has no
+validated real-sample fixture and writes no `session_spo2` rows. `/config`
+reports `cpap_parser_oximetry_supported: false`. This is schema-ready,
+parser-evidence-blocked behavior, not a support claim.
+
+## 11. Source provenance status
+
+The upload manifest remains exact. Exact references such as `STR.edf` link
+normally. Parser-consumed categories without stable upstream paths are marked
+used with `consumed_without_row_link`; row-level links remain empty instead of
+using synthetic paths. `/config` reports `manifest-level-partial`.

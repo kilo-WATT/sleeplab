@@ -240,10 +240,13 @@ granularity is one night-level session plus `session_blocks`, and as of migratio
 available therapy (mask intervals → source-reported → computed → recording span),
 so **nightly usage totals now reconcile** and the session/block row-count
 differences are accepted 2.0 model differences in the parity harness. The runtime
-default stays off until the remaining *safety* gates pass — cross-path
-dedupe/migration, `cpap-py` dependency/runtime packaging, `/datalog/*` routing,
-database-backed route failure/status tests, real SpO2 evidence, and a second-card
-soak. Same-path parser re-import is now fixture-backed and duplicate-safe. Run 2.0 on
+default stays off until the remaining evidence gates pass. Parser packaging is
+now explicit: Docker installs the pinned runtime, `uv` exposes a `parser` extra,
+and Linux CI installs and verifies it. Cross-path mixing is blocked by an
+explicit delete-and-reimport policy. `/datalog/*` and local DATALOG triggers are
+legacy-only and disabled in parser mode. Remaining beta gates are a green
+parser-enabled CI/DB matrix, real SpO2 evidence, and a second-card soak.
+Same-path parser re-import is fixture-backed and duplicate-safe. Run 2.0 on
 cpap-parser today with `SLEEPLAB_USE_CPAP_PARSER=1`. See
 `docs/sleeplab_2_resmed_cutover_remaining_work.md` for the owner/category matrix
 and before-default gate, and `docs/sleeplab_2_beta_readiness_plan.md` for the

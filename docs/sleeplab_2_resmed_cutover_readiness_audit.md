@@ -11,7 +11,8 @@ Status: **cpap-parser is the 2.0 target; runtime default not yet flipped.** The
 therapy-usage reconciliation that used to block this is now resolved (migration
 `025_prefer_authoritative_therapy_usage.sql` — best-available therapy priority).
 The remaining gates are cross-path dedupe/migration safety, the `cpap-py`
-dependency/runtime posture, the `/datalog/*` routing decision, and soak. This
+parser-enabled CI evidence, real SpO2 evidence, and the second-card soak. The
+dependency/runtime and `/datalog/*` policies are now implemented. This
 document inventories those, grounded in the current code, and cross-references the
 retirement-evidence list in `docs/sleeplab_2_loader_and_conformance_plan.md`.
 
@@ -90,10 +91,10 @@ parity/polish. "Evidence" = what proves it today (or its absence).
 | 8 | **Signal-channel source** | from raw EDF header `replace_signal_channels(header=…)` (`import_sessions.py:388`) | from `ImportRun.signals` metadata (`persist.py:343`) | Different source; channel set/units/rates parity unproven | **P1** | both code paths |
 | 9 | **Event-type vocabulary** | raw labels; AHI counts via `_AHI_EVENT_TYPES` | same raw labels + loader-derived `Large Leak` rows; **not** OSCAR enum | Persisted `session_events.event_type` vocabulary is SleepLab-normalized, not OSCAR parity; `Large Leak` becomes an event row | **P1** | gap audit §12; `persist.py:66,214` |
 | 10 | **`leak_unit` label** | `'L/s'` (`import_sessions.py:302`) | `'L/min'` (`persist.py:304`) | Direct metadata mismatch between paths (plan criterion: "leak unit/kind … match") | **P2** | both code paths |
-| 11 | **`session_id` / dedupe** | block-scoped id; `source_session_key` legacy | `cpapparser_{date}`; `source_session_key=resmed:{key}:{date}` (`persist.py:460`, `resmed_native.py:315`) | Cross-path re-import will **not** dedupe; mixed historical data after a flip | **P1** | code |
+| 11 | **`session_id` / dedupe** | block-scoped id; `source_session_key` legacy | `cpapparser_{date}`; `source_session_key=resmed:{key}:{date}` | Keys do not dedupe, so beta enforces delete-and-reimport and rejects mixed histories before run creation | **Closed beta policy / RC migration remains** | DB-backed route test |
 | 12 | **TZ/DST + cross-midnight** | localizes EDF instants with `machine_tz` | same localization (`persist.py:158`) | Not yet conformance-proven on the new path (plan criterion) | **P2** | no targeted test |
-| 13 | **`cpap-py` dependency** | not required | hard runtime requirement; absent from `pyproject`/`uv.lock`/CI | Production default would require a git-sourced native dep in the locked/CI closure | **P1** | gap audit §9; `execution.py:129` |
-| 14 | **`/datalog/*` endpoint** | legacy subprocess only | not wired to the flag (`upload.py:398`) | A second import entry point stays legacy-only; full cutover must route or retire it | **P1** | `upload.py` |
+| 13 | **`cpap-py` dependency** | not required | pinned optional extra, locked, installed in Docker/Linux CI | Runtime packaging is explicit; green CI evidence remains | **Closed implementation / evidence pending** | pyproject, lockfile, CI |
+| 14 | **`/datalog/*` endpoint** | legacy subprocess only | explicitly disabled in parser mode | Prevents mixed-path imports during beta | **Closed beta policy** | route/config tests |
 | 15 | **Second fixture / soak** | n/a | only one AirSense 10 fixture | Retirement evidence needs ≥2 independent fixtures + a real-import soak diff | **P1** | fixture matrix; plan "evidence" list |
 
 ## 4. What is already cutover-ready (not blockers)
@@ -142,11 +143,10 @@ Each step is small and safe on its own; persistence/routing/dependency steps are
 6. **Reconcile parity polish** (P2 #8,#10,#12): `leak_unit`, signal-channel
    set/units/rates, TZ/DST + cross-midnight — each as a parity assertion in the
    harness; fix the cheap mismatches (e.g. `leak_unit`).
-7. **Decide `cpap-py` production dependency posture** (P1 #13). Add to a
-   prod-locked path or keep `requirements.txt`-only with a documented install
-   gate; ensure CI can build it before any default flip. **Stop-and-ask**.
-8. **Route or retire `/datalog/*`** under the same flag (P1 #14). **Stop-and-ask**
-   (routing).
+7. **Keep parser packaging green** (P1 #13). Docker, the optional locked
+   `parser` extra, and Linux CI now share the immutable revision.
+8. **Keep `/datalog/*` legacy-only for beta** (P1 #14). It is disabled in parser
+   mode; use `/source`.
 9. **Acquire a second independent anonymized ResMed fixture** (P1 #15) for
    retirement evidence; blocked on a safe contributed/anonymized card.
 10. **Soak**: run both paths in parallel on real imports, diff, no parser-backed
@@ -202,7 +202,7 @@ requirements.txt`), exactly the pattern used for the parser-backed conformance t
 | `derived_values` | expected_difference | 90 rows, event-count+stat keys | 520 rows, usage-semantics keys |
 | `session_waveform` | expected_difference | 81 485 | 81 410 (~0.1%) |
 | `session_spo2` | equal (**not usable evidence**) | 0; all SAD SpO2 samples missing | 0; no oximetry persistence |
-| `import_source_files` | **expected_difference (partial linkage)** | 53 rows; 25 used / 28 skipped; block/event/channel/settings links | 53 rows; 1 used / 52 skipped; one `STR.edf` settings link |
+| `import_source_files` | **expected_difference (partial linkage)** | exact used/skipped paths plus row links | parser-consumed roles marked used with diagnostics; exact `STR.edf` settings link; other row links unavailable |
 
 Honest reads from the first run:
 - **Strong parity exists** for low-rate `session_metrics` (exact), scored
@@ -274,8 +274,10 @@ Honest reads from the first run:
   files used and links source UUIDs (25 block, 3 event, 6 channel, 1 settings
   source files), with 28 unconsumed files finalized as skipped. Parser now
   resolves the exact `STR.edf` reference already carried by settings snapshots,
-  producing 1 used / 52 skipped and one settings link. Its synthetic
-  block/event/channel ids still cannot be mapped safely to real relative paths.
+  marking parser-consumed source roles as used with
+  `consumed_without_row_link`, while preserving the exact `STR.edf` settings
+  link. Synthetic block/event/channel ids still cannot be mapped safely to real
+  relative paths.
 - `derived_values` and `session_waveform` differ as a *consequence* of granularity /
   event-window rebasing — now classified as documented `expected_difference`s, so
   the harness fails only on a genuinely **new, undocumented** divergence.

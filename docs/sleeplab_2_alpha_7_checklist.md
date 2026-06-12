@@ -456,3 +456,11 @@ legacy-to-parser migration remains intentionally explicit: clear and re-import
 is the supported alpha/beta workflow until notes, tags, oximetry, and other
 user-owned data can be preserved automatically. See
 `docs/sleeplab_2_beta_readiness_plan.md`.
+
+**Next beta-readiness pass:** parser packaging is now in the locked optional
+`parser` extra and Linux CI; Docker already installs the same pin. `/source`
+rejects a selected-but-missing runtime and mixed legacy/parser histories before
+creating an import run. DATALOG upload/local/webhook paths are legacy-only and
+return HTTP 409 in parser mode. `/config` reports these facts, parser SpO2 stays
+explicitly unsupported pending real evidence, and private second-card testing
+uses an aggregate-only environment-gated soak.

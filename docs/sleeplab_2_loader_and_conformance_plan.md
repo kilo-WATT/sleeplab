@@ -1,5 +1,15 @@
 # SleepLab 2.0 Loader and Conformance Plan
 
+## Beta runtime and private-card gates
+
+- Docker installs the pinned `cpap-parser[resmed]` runtime.
+- Local locked installs use `uv sync --extra parser --group dev`.
+- Linux CI installs the parser extra and verifies `cpap_parser` plus `cpap_py`.
+- Parser-backed tests skip visibly when the optional runtime is absent.
+- `SLEEPLAB_PRIVATE_RESMED_CARD` enables an aggregate-only second-card soak that
+  copies no source data and writes no report.
+- Parser SpO2 remains unvalidated until real samples prove persistence.
+
 ## Executive summary
 
 `cpap-parser` can reasonably become a shared parsing backend behind SleepLab

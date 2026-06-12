@@ -42,7 +42,10 @@ imported object counts.
 `import_source_files` stores every staged relative path, byte size, SHA-256
 hash, parser role, disposition, parser component, and structured warning/error
 state. Files not consumed by the execution adapter are explicitly marked
-`skipped` when the run finishes.
+`skipped` when the run finishes. Parser-consumed categories without stable
+upstream source paths are marked `used` with a
+`consumed_without_row_link` diagnostic; normalized rows remain unlinked rather
+than receiving synthetic or guessed source UUIDs.
 
 The source fingerprint protects the review-before-import boundary. Execution
 is rejected if staged content changes after inspection.
@@ -75,9 +78,11 @@ The cpap-parser persistence bridge treats each normalized night as authoritative
 for its generated children. On re-import it replaces blocks, parser settings,
 events, signal metadata, derived values, low-rate metrics, and event-window
 waveforms. A separate `import_runs` row and source manifest remain for every
-attempt. Legacy-to-parser transition is not automatic: users must currently
-clear and re-import because silently deleting legacy rows could also delete
-notes, tags, oximetry, or other user-owned data.
+attempt. Legacy-to-parser transition is not automatic. The `/source` route
+rejects an existing machine history from the opposite backend before it creates
+a new import run. Users must back up, clear imported session data, and re-import
+because silently deleting or merging legacy rows could lose notes, tags,
+oximetry, or other user-owned data.
 
 `nightly_therapy_aggregates` derives a machine/night read model:
 
