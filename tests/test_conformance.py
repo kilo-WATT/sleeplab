@@ -330,7 +330,7 @@ def test_validate_import_passes_and_skips_when_import_block_absent():
     assert "expected.import absent" in result.skipped[0]
 
 
-def test_validate_import_skips_clearly_when_no_parser_or_db(tmp_path):
+def test_validate_import_skips_clearly_when_no_parser_or_db(tmp_path, monkeypatch):
     """Plan Step 1: present ``expected.import`` blocks skip with clear reasons.
 
     With ``expected.import`` present but no parser/DB execution available, the
@@ -354,6 +354,7 @@ def test_validate_import_skips_clearly_when_no_parser_or_db(tmp_path):
         "identity_hashes": {"algorithm": "sha256", "sessions": "deadbeef"},
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    monkeypatch.setattr(conformance, "_import_parser_available", lambda: False)
 
     result = validate_import(fixture, conn=None)
 
@@ -2441,7 +2442,7 @@ def test_persist_import_run_writes_therapy_mode_settings_snapshot(db, test_user)
         cur.execute(
             """
             INSERT INTO import_source_files (
-                import_run_id, relative_path, size_bytes, checksum, parser_role
+                import_run_id, relative_path, size_bytes, content_hash, parser_role
             ) VALUES (%s, 'STR.edf', 1, 'sha256:test-str', 'summary')
             RETURNING id
             """,
