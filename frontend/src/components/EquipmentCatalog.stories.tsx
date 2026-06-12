@@ -10,6 +10,4 @@ const meta: Meta<typeof EquipmentCatalog> = {
 export default meta
 type Story = StoryObj<typeof EquipmentCatalog>
 
-export const Default: Story = {
-  args: {} as any,
-}
+export const Default: Story = {}

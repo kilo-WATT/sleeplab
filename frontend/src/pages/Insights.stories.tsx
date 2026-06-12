@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react'
+import type { Decorator, Meta, StoryObj } from '@storybook/react'
 
 import type { AISummaryResponse, ImportSettings, SummaryStats } from '../api/client'
 import { api } from '../api/client'
@@ -23,8 +23,8 @@ const createApiDecorator = (
   summaryData: Partial<SummaryStats> | Error | 'loading',
   settingsData: Partial<ImportSettings> | Error | 'loading',
   aiSummaryData?: Partial<AISummaryResponse> | Error | 'loading' | null
-) => {
-  return (Story: any) => {
+): Decorator => {
+  return (Story) => {
     // Mock getSummary
     if (summaryData === 'loading') {
       api.getSummary = () => new Promise(() => {})

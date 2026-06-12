@@ -11,5 +11,5 @@ export default meta
 type Story = StoryObj<typeof AISummaryCard>
 
 export const Default: Story = {
-  args: {} as any,
+  args: { enabled: true },
 }

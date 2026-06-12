@@ -69,7 +69,7 @@ const meta = {
       // Mock form submissions for interactivity
       api.updateProfile = async (payload) => ({ ...mockUser, ...payload })
       api.changePassword = async () => ({ status: 'ok' })
-      api.saveImportSettings = async (payload) => ({ ...mockSettings, ...payload } as any)
+      api.saveImportSettings = async (payload) => ({ ...mockSettings, ...payload } as ImportSettings)
       api.triggerSleepHQImport = async () => ({ status: 'ok', message: 'Import started successfully.' })
       api.deleteAllSessions = async () => {}
 

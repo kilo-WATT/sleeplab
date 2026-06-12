@@ -11,5 +11,5 @@ export default meta
 type Story = StoryObj<typeof SessionAICard>
 
 export const Default: Story = {
-  args: {} as any,
+  args: { sessionId: 'demo-session' },
 }
