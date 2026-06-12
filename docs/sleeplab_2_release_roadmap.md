@@ -228,17 +228,24 @@ score, adherence, reports, trends, and AI duration inputs through that
 aggregate. One restricted AirSense 10 card and synthetic fixtures prove the
 implemented path, but do not justify a full ResMed validation claim.
 
-**Current ResMed cutover view:** the parser now persists fixture-backed
-`therapy_mode`, links `STR.edf` settings provenance, and matches persisted event
-rows, low-rate metric rows, and nightly aggregate row counts on the committed
-AirSense 10 fixture. The default route must still remain off. Session
-granularity is now decided as one night-level session plus `session_blocks`, but
-the comparison guard remains red because block rows and summed nightly usage do
-not match the legacy path. Cross-path dedupe, real SpO2 evidence, broader
-settings, most row-level source links, dependency/runtime packaging, route-level
-tests, and a second-card soak remain open. See
+**Current ResMed cutover view:** **the `cpap-parser` ResMed path is the SleepLab
+2.0 target architecture.** We are not cloning the legacy importer's rows — exact
+old-vs-new parity is a safety comparison, not the goal, and breaking old importer
+assumptions (including users deleting/re-importing card data during alpha) is
+acceptable. The parser persists fixture-backed `therapy_mode`, links `STR.edf`
+settings provenance, and matches persisted event rows, low-rate metric rows, and
+nightly aggregate row counts on the committed AirSense 10 fixture. Session
+granularity is one night-level session plus `session_blocks`, and as of migration
+`025_prefer_authoritative_therapy_usage.sql` the nightly view selects the best
+available therapy (mask intervals → source-reported → computed → recording span),
+so **nightly usage totals now reconcile** and the session/block row-count
+differences are accepted 2.0 model differences in the parity harness. The runtime
+default stays off until the remaining *safety* gates pass — cross-path
+dedupe/migration, `cpap-py` dependency/runtime packaging, `/datalog/*` routing,
+route-level tests, real SpO2 evidence, and a second-card soak. Run 2.0 on
+cpap-parser today with `SLEEPLAB_USE_CPAP_PARSER=1`. See
 `docs/sleeplab_2_resmed_cutover_remaining_work.md` for the owner/category matrix
-and before-cutover gate.
+and before-default gate.
 
 **Phase 2 fixture-backed validation status (not RC/beta readiness):** the only
 *committed-fixture-backed* `expected.import` coverage today is the OSCAR

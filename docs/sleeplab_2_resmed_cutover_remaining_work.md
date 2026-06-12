@@ -1,10 +1,38 @@
 # SleepLab 2.0 ResMed Cutover Remaining Work
 
-Status: **planning only; ResMed is not ready for a default-route cutover.**
+## SleepLab 2.0 target: cpap-parser is the ResMed import path
+
+**The cpap-parser ResMed path is the SleepLab 2.0 target architecture.** We are no
+longer trying to clone the legacy importer's database rows. The legacy native
+importer is retained only as a *fallback/rollback* and as a *safety parity oracle*
+— exact old-vs-new row parity is **not** the goal.
+
+Because this is 2.0, **breaking old importer assumptions is acceptable during
+alpha**:
+
+- The session model is now one night-level `sessions` row plus child
+  `session_blocks` (not the legacy per-recording-block rows).
+- Device-scored events are preserved in full (Option A), not clipped to PLD
+  recording windows.
+- The parser exposes therapy primarily as device-reported totals, not per-mask
+  intervals; the nightly view selects the best available therapy accordingly.
+- **Users may need to delete and re-import their data from their SD cards during
+  the 2.0 alpha.** That is an accepted alpha cost.
+
+A "remaining gap" below is therefore only a **blocker** if it risks data loss,
+duplicate imports, bad usage totals, missing core events, broken import history,
+crashes, or database inconsistency. Differences that are merely "not identical to
+legacy" are accepted 2.0 model differences once documented.
+
+Status: **cpap-parser is the 2.0 ResMed target; the runtime default has not been
+flipped yet** — it is gated on the `cpap-py` dependency/runtime posture (see that
+row below). To run SleepLab 2.0 on cpap-parser today, set
+`SLEEPLAB_USE_CPAP_PARSER=1` (the `compose.override.yaml`/`.env.example` document
+this).
 
 This document is the short operational view of what remains before SleepLab can
-route ResMed imports through `cpap-parser` by default. It separates three
-questions that are easy to blur together:
+make `cpap-parser` the *default* ResMed route. It separates three questions that
+are easy to blur together:
 
 1. **Can the parser read the card correctly?**
 2. **Does SleepLab save the normalized result correctly?**
@@ -12,8 +40,8 @@ questions that are easy to blur together:
 
 The committed AirSense 10 fixture gives useful evidence for all three questions,
 but it is one card and it does not exercise usable oximetry. The legacy importer
-must remain the production default and regression oracle until the before-cutover
-gates below are met.
+remains the runtime default and parity oracle until the before-default gates below
+are met.
 
 ## What has improved
 
@@ -22,29 +50,37 @@ gates below are met.
 - The exact `STR.edf` settings source now links to the uploaded source manifest.
 - Event totals and SleepLab-normalized event-type totals are fixture-backed.
 - Persisted event rows and low-rate `session_metrics` match on the current
-  fixture. Nightly aggregate row counts match, but total usage does not.
+  fixture. Nightly aggregate row counts and, as of migration 025, total usage now
+  reconcile too.
 - Parser file-session blocks are now labeled `source_kind='recording_span'`
   instead of being mislabeled as `resmed_str_mask_interval`. The parity harness
   reports each path's `usage_source`, so a recording-span total is no longer
   silently compared against authoritative mask intervals.
 - Summary-only (STR-history) nights now carry their STR-reported therapy usage
   instead of persisting as zero-usage nights. On the fixture this recovers
-  ~837,780s of therapy across 37 nights (`zero_usage_nights` 37 → 0) and moves
-  the parser nightly usage total from 89,820s to 927,600s, within ~2.2% of
-  legacy's 907,380s. The residual is the three detailed nights, which still
-  contribute recording spans rather than per-mask therapy (see below).
-- The parser path now also carries each detailed night's STR-reported therapy
-  usage on its recording-span blocks (`source_reported_duration_seconds`, the
-  same field legacy sets), so `nightly_therapy_aggregates.summary_reported_usage_seconds`
-  surfaces the authoritative device-reported therapy total *next to* the
-  recording-span `usage_seconds`. Consumers and the parity harness can now read
-  the "candy" (authoritative therapy) and the "wrapper" (recording span) side by
-  side on a single view, without any schema or view change.
+  ~837,780s of therapy across 37 nights (`zero_usage_nights` 37 → 0).
+- **Therapy usage now follows a best-available priority (migration 025):** the
+  `nightly_therapy_aggregates` view selects per-night usage as mask intervals →
+  source-reported therapy → computed usage → recording span, and labels the chosen
+  tier in `usage_source`. The parser's detailed nights now prefer their
+  device-reported STR therapy (69,600s on the fixture) over the recording span
+  (89,820s), so the parser nightly total lands exactly on legacy's 907,380s (was
+  927,600s). Legacy is unaffected (its nights resolve to tier 1, mask intervals).
+  Nothing is fabricated: recording spans are still preserved as context in
+  `recording_duration_seconds`, only never used as usage when a better number
+  exists. Validated against Postgres with synthetic per-tier coverage.
+- The parser path also carries each detailed night's STR-reported therapy on its
+  recording-span blocks (`source_reported_duration_seconds`), which both feeds the
+  new tier-2 selection and is surfaced as
+  `nightly_therapy_aggregates.summary_reported_usage_seconds` for cross-checking.
 - The database parity harness reports expected differences instead of hiding
-  them. It measures both paths from the same 53-file source manifest.
+  them, and now treats the night-level session/block row-count differences as
+  accepted 2.0 model differences gated on usage totals reconciling. It measures
+  both paths from the same 53-file source manifest.
 
-These are real reductions in risk. They do not close the remaining cutover
-questions.
+These are real reductions in risk. The remaining open questions (cross-path
+dedupe/migration, `cpap-py` runtime posture, second card, oximetry) are listed
+below.
 
 ## Remaining-work matrix
 
@@ -55,7 +91,7 @@ questions.
 | Oximetry / SpO2 | **Unproven.** Parser save path writes no `session_spo2` rows and keeps `has_spo2=False`; current SAD files contain only `-1` missing values. | A 0-versus-0 result does not prove that real SpO2 and pulse samples survive import. | needs better test CPAP card data | test data needed | Parser-free SAD audit proves all six fixture files lack usable SpO2; DB parity is 0 rows on both paths. | Obtain a safe card with real SpO2/pulse samples, then implement and compare persistence. |
 | Source manifest registration and disposition | Both paths register the same 53 files. Parser marks `STR.edf` used through settings provenance, but the other 52 rows finalize as skipped because they lack resolvable links, even though the parser consumed card data from this set. | Import history must distinguish truly skipped files from consumed-but-unlinked files; it must not turn missing provenance into a false usage claim. | must fix before cutover | SleepLab | Legacy: 25 used / 28 skipped. Parser: 1 used / 52 skipped. The harness proves registration and linkage counts, not that all 52 files were genuinely ignored. | Define truthful disposition/diagnostic behavior for parser-consumed files without fabricating row links. |
 | Block/event/channel source links | Parser links none because its normalized references are synthetic; settings alone links `STR.edf`. | Without real links, row-level provenance and source drill-down are incomplete. | needs cpap-parser upstream change | cpap-parser/open-cpap | DB parity: parser linked blocks/events/channels = 0; linked settings = 1. | Draft an upstream issue requesting stable real source paths or source-file references on parsed sessions, events, and signals. |
-| Session row shape / granularity | **Decided:** SleepLab 2.0 uses one night-level `sessions` row plus child `session_blocks`. Legacy still writes 43 block-scoped rows; parser writes 40 night-scoped rows. | The canonical meaning of a session is now stable. Legacy compatibility and cross-path migration still need implementation. | must fix before cutover | SleepLab | DB parity: legacy `max_block_index=3`; parser `max_block_index=0`. The classifier accepts the row-count difference only when block and usage totals match and any event-count difference is the accepted device-scored-event policy (parser ≥ legacy, matching types). | Make the legacy-to-parser transition preserve one owning night and move recording fragments into stable blocks. |
+| Session row shape / granularity | **Decided + accepted as a 2.0 model difference.** SleepLab 2.0 uses one night-level `sessions` row plus child `session_blocks`. Legacy writes 43 block-scoped rows; parser writes 40 night-scoped rows, and the two paths' `session_blocks` counts differ by model (legacy STR+PLD blocks vs parser file-session recording-span blocks). | The canonical meaning of a session is stable. We are not cloning the legacy row shape; cross-path migration still needs implementation. | accepted 2.0 model difference (cross-path migration still to do) | SleepLab | DB parity: legacy `max_block_index=3`; parser `max_block_index=0`. The classifier now accepts both the session-row and the block-row count differences as 2.0 model differences, gated on the genuine blockers: nightly **usage totals must reconcile** (they now do, via migration 025) and any event-count difference must be the accepted device-scored-event policy (parser ≥ legacy, matching types). | Implement the legacy-to-night-level migration and cross-path dedupe (the remaining blocker here is dedupe/migration safety, not the row-count difference itself). |
 | `session_blocks` shape | **Mislabeling fixed.** Legacy writes 72 STR/PLD-derived blocks; parser writes 7 file-session blocks, now correctly `source_kind='recording_span'` with `recording_duration_seconds` set and `therapy_duration_seconds` left NULL (parser exposes no per-block therapy). Block *count* (72 vs 7) still reflects the granularity split. | Blocks now explicitly own mask-on periods and recording fragments, so their totals and semantics must reconcile even though session row counts need not. | reduced blocker | SleepLab | DB parity: parser `source_kinds=['recording_span']` (was mislabeled `resmed_str_mask_interval`); legacy `['recording_span','resmed_str_mask_interval']`; parser block recording seconds 89,820, therapy seconds 0; legacy therapy seconds 907,380. | Reconcile block *counts* under the night-level model; per-mask therapy intervals need upstream cpap-parser support. |
 | Persisted event rows | **DECIDED — accepted known difference (not a blocker).** SleepLab 2.0 adopts **Option A: preserve the full device-scored event list.** Background: both EVE parsers read an identical raw scored-event list (legacy EDF parser and cpap-py agree type-for-type) and large-leak derivation matches; the legacy path then **clips device-scored events to each PLD recording window** (`events_for_block`), dropping events in inter-block gaps / at boundaries, while the cpap-parser path keeps the full list. The new path is **not overcounting** — it preserves real device-scored events the old path dropped. Legacy recording-window clipping is treated as legacy behavior, **not** the target. AHI/event totals may be **slightly higher** than legacy SleepLab on affected nights. | Events drive AHI review and the event inspector. Preserving the device's own scoring aligns with the machine/OSCAR-style interpretation. | accepted known difference (decided) | SleepLab | DB parity marks `session_events` equal on the fixture and a policy-aware `expected_difference` on real cards; the harness accepts it **only** while consistent with the policy (matching type sets, parser totals/AHI ≥ legacy) and keeps a type-set mismatch, a net-negative, or unexplained shape as `unexpected`. `type_counts` / `ahi_event_count` / `zero_duration_count` localize the difference. | Keep the breakdown fields as the event regression oracle and ensure no duplicate events are introduced. Do not claim exact OSCAR parity without an OSCAR reference; where OSCAR reference files are available, check event parity against them. |
 | Event type counts | Counts for Central Apnea, Obstructive Apnea, Hypopnea, and loader-derived Large Leak are fixture-backed. They are SleepLab-normalized, not OSCAR enum parity. | Stable counts prove useful parser behavior, but vocabulary claims must remain precise. | acceptable known difference for early cutover | SleepLab | `expected.import.events.types` and parser-backed conformance tests pin the three detailed nights. | Retain the current vocabulary for cutover unless a separate product decision authorizes normalization changes. |
@@ -64,7 +100,7 @@ questions.
 | Event-window waveform rows | Parser writes 81,410 rows versus legacy 81,485, a roughly 0.1% difference. | Small boundary differences can change the event-inspector window even when full signal content is present. | acceptable known difference for early cutover | SleepLab | DB parity records row counts only and documents event-window rebasing as the likely cause. | Compare selected event-window boundaries and document an accepted tolerance before cutover. |
 | `derived_values` | Legacy writes 90 rows; parser writes 520 because vocabulary and ownership differ. | Reports and scores must consume equivalent night-level semantics, not merely non-empty rows. | must fix before cutover | SleepLab | DB parity classifies the difference as expected; nightly aggregate row counts still match. | Define the authoritative night-level derived-value vocabulary and compare values, not just counts. |
 | Signal channels and leak unit | Parser and legacy differ in channel inventory, units, and source metadata. Legacy includes `L/s`; parser includes `L/min`. | A wrong unit or semantic label can corrupt charts, thresholds, and downstream calculations. | must fix before cutover | SleepLab | DB parity: 54 legacy channels versus 33 parser channels; distinct unit sets differ. | Audit normalized channel mapping and reconcile leak unit/kind and required channel metadata. |
-| `nightly_therapy_aggregates` | **Summary-only usage recovered; detailed-night recording-span overcount remains and is data-dependent.** Both paths produce one row per night. Summary-only nights now contribute STR-reported therapy via the session-duration fallback (`zero_usage_nights` → 0). Detailed nights still contribute recording spans (`usage_source='recording_spans'`) rather than per-mask therapy. The view also now surfaces the authoritative `summary_reported_usage_seconds` on the parser path for detailed nights. | This view feeds duration-sensitive features; matching row counts do not protect against missing therapy usage. | must fix before cutover | SleepLab | On the 3-detailed-of-40-night fixture the overcount is small (parser `usage_seconds` 927,600 vs legacy 907,380, ~2.2%), **but this understates the gap**: the overcount equals Σ(recording span − therapy) over *detailed* nights, so on a typical card where most or all nights are detailed it is materially larger (tens of percent). A private real-card soak confirmed this scaling. `summary_reported_usage_seconds` now provides the authoritative reference for cross-checking. | Close the detailed-night overcount: either upstream per-mask intervals, or a product/schema decision letting the view prefer authoritative per-night therapy (`summary_reported`/`computed`) over recording spans. Both are out of scope for a no-schema/no-view-change fix. |
+| `nightly_therapy_aggregates` | **CLOSED for usage totals (migration 025).** The 2.0 authoritative-therapy view now selects per-night usage by priority — (1) true mask/therapy intervals, (2) source-reported therapy, (3) computed usage, (4) recording span — so detailed parser nights prefer their device-reported STR therapy over the recording span. Summary-only nights still contribute their STR/computed usage via the block-less session fallback. `usage_source` names the tier that won. | This view feeds duration-sensitive features; usage must reflect the best available therapy, never a recording span when a better number exists. | accepted 2.0 difference (usage total reconciles) | SleepLab | On the 3-detailed-of-40-night fixture the parser total now lands exactly on legacy's 907,380s (was 927,600s; the +20,220s recording-span overcount on the 3 detailed nights is gone). `usage_source` is `resmed_str_mask_intervals` (legacy) vs `source_reported_therapy`/`computed_usage` (parser); the totals match. Validated against Postgres with synthetic tier coverage and the parity harness. | Keep the usage-total reconciliation as the parity gate (a divergent total is still a real blocker). Per-mask interval *labels* still need upstream cpap-parser support, but that no longer affects the usage number. |
 | Duplicate import / same-path re-import safety | Shared upserts and replacement writers are designed to be idempotent; synthetic tests cover stable session/block identities and settings re-import. The full real-card parser path is not yet run twice in the parity harness. | A retry or repeated card upload must not duplicate sessions, events, blocks, settings, or samples. | must fix before cutover | SleepLab | Synthetic DB tests prove duplicate/incremental stability; persistence helpers delete/replace samples and upsert normalized rows. | Extend the parser-backed DB harness to import the same real fixture twice and then with an expanded fixture/card view. |
 | Cross-path dedupe after a flag change | **Not safe today.** Legacy and parser use different `source_session_key` and session-id shapes. | Enabling the flag for a user with legacy history can create parallel rows for the same therapy night. | must fix before cutover | SleepLab | Code audit: legacy keys are block-scoped; parser keys are `resmed:{machine}:{date}` and `cpapparser_{date}`. | Define a migration/matching strategy and add a legacy-then-parser re-import test before any default flip. |
 | `cpap-py` dependency/runtime posture | Parser-backed ResMed works in Linux/Docker, but the dependency is git-sourced/native and absent from `pyproject.toml`, `uv.lock`, and normal CI. Windows installation needs a compiler when no wheel is available. | The default route cannot depend on an optional runtime that clean installs and CI do not reliably provide. | must fix before cutover | SleepLab | Linux Docker parser tests pass; host tests skip cleanly because `cpap-py` is absent. | Decide supported platforms, immutable packaging, CI coverage, failure behavior, and rollback posture. |
@@ -77,12 +113,14 @@ questions.
 
 ## Immediate next tasks
 
-1. Reconcile legacy and parser block/usage totals under the decided night-level
-   session model. (Event totals are **decided**: SleepLab 2.0 preserves the full
-   device-scored list, so parser ≥ legacy is the accepted policy, not a gap to
-   close — just guard against duplicates.)
+1. ~~Reconcile legacy and parser usage totals under the night-level session
+   model.~~ **Done (migration 025):** the 2.0 authoritative-therapy view selects
+   the best available therapy per night, so usage totals reconcile and the session
+   row-shape difference is an accepted 2.0 model difference. (Event totals are
+   **decided**: SleepLab 2.0 preserves the full device-scored list, so parser ≥
+   legacy is the accepted policy — just guard against duplicates.)
 2. Define and test the legacy-to-night-level migration and cross-path dedupe
-   strategy.
+   strategy (**the remaining hard blocker** for flipping the default safely).
 3. Decide the supported `cpap-py` runtime, packaging, and CI posture.
 4. Add a private-card, local-only dual-path soak report if suitable data is
    available. Do not commit the card or identifying output.
@@ -90,9 +128,11 @@ questions.
 6. Draft an upstream `cpap-parser` issue requesting stable real source-path or
    source-file references.
 
-## Before-cutover gate
+## Before-default gate
 
-Do not flip the default until all of the following are true:
+cpap-parser is already the 2.0 target; this gate is specifically about flipping
+the *runtime default*. Do not flip the default until all of the following are
+true:
 
 - The database comparison harness is green enough that every remaining
   difference is explicitly accepted, tested, and documented.
@@ -116,21 +156,22 @@ Do not flip the default until all of the following are true:
 
 ## Recommended next task
 
-Summary-only usage is now recovered and block labeling is honest, so the
-remaining usage gap is narrow and well understood: the three detailed nights
-report recording spans (89,820s) instead of their STR therapy (~69,600s), a
-+20,220s overcount that keeps the parser total at 927,600s vs legacy 907,380s.
+The therapy-usage gap is **closed**. SleepLab 2.0 took **Option B (view/product)**:
+migration `025_prefer_authoritative_therapy_usage.sql` rewrites
+`nightly_therapy_aggregates` to select per-night usage by priority — true mask
+intervals → source-reported therapy → computed usage → recording span — and names
+the winning tier in `usage_source`. On the fixture the parser detailed nights now
+use their device-reported STR therapy (69,600s) instead of the recording span
+(89,820s), so the parser total lands exactly on legacy's 907,380s. This is **not**
+a no-view-change fix; it intentionally changes the view, and the legacy path is
+unaffected because legacy nights still resolve to tier 1 (mask intervals).
 
-Closing it is a **product/schema decision**, not a bug fix, and is intentionally
-out of scope for a no-schema/no-view-change change:
+Option A (upstream per-mask STR intervals so the parser can persist
+`resmed_str_mask_interval` blocks) is still desirable for *block-level* labeling,
+but it no longer affects the usage number.
 
-- Option A (upstream): have cpap-parser expose per-mask STR intervals so the
-  parser path can persist `resmed_str_mask_interval` blocks like legacy.
-- Option B (view/product): let `nightly_therapy_aggregates` prefer authoritative
-  per-night therapy (`computed_usage`/STR-reported) over recording spans when a
-  night has only recording-span blocks. This changes the view and needs its own
-  migration + tests.
-
-Until one is chosen, the parser's detailed-night usage remains a recording-span
-proxy, honestly labeled `usage_source='recording_spans'`. After that, implement
-cross-path dedupe and migration around the night-level ownership rules.
+The next real blocker is **cross-path dedupe and the legacy-to-night-level
+migration**: enabling the flag for a user with legacy history must not create
+parallel rows for the same therapy night. Implement and test that around the
+night-level ownership rules before flipping the runtime default. During 2.0 alpha,
+the accepted interim is that **users may delete and re-import their card data**.

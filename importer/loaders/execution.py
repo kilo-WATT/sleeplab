@@ -1,12 +1,21 @@
 """Execution handoff for approved SleepLab 2.0 import plans.
 
+**Target architecture (SleepLab 2.0):** the cpap-parser path is the intended
+ResMed import path for SleepLab 2.0. The legacy native subprocess is retained as a
+fallback / rollback and as the parity oracle, not as the long-term target.
+
 Two execution paths exist:
 
-* The default **legacy** path returns an :class:`ExecutionRequest` describing the
-  ResMed native subprocess (``importer/import_sessions.py``); the API spawns it.
-* The opt-in **cpap-parser** path (:func:`run_cpap_parser_import`, gated behind
-  ``SLEEPLAB_USE_CPAP_PARSER=1``) drives :class:`ResMedNativeLoader` in-process and
-  persists its :class:`ImportRun` via :func:`importer.loaders.persist.persist_import_run`.
+* The **cpap-parser** path (:func:`run_cpap_parser_import`) is the SleepLab 2.0
+  ResMed target. It drives :class:`ResMedNativeLoader` in-process and persists its
+  :class:`ImportRun` via :func:`importer.loaders.persist.persist_import_run`. It is
+  enabled with ``SLEEPLAB_USE_CPAP_PARSER=1``.
+* The **legacy** path returns an :class:`ExecutionRequest` describing the ResMed
+  native subprocess (``importer/import_sessions.py``); the API spawns it. It is the
+  current *runtime default* only because the ``cpap-py`` dependency/runtime posture
+  is not yet settled for clean installs and CI (see
+  ``docs/sleeplab_2_resmed_cutover_remaining_work.md``). Once that gate is met the
+  default flips to cpap-parser; until then legacy is the safe fallback.
 
 Detection/planning are unchanged regardless of the flag: the detected device is
 still ``resmed-native-v2``. Only the *execution* step differs, so existing
@@ -29,10 +38,17 @@ class ImportPlanError(ValueError):
 
 
 def use_cpap_parser() -> bool:
-    """Return whether the opt-in cpap-parser execution path is enabled.
+    """Return whether the cpap-parser execution path (the SleepLab 2.0 ResMed
+    target) is enabled.
 
-    Controlled by ``SLEEPLAB_USE_CPAP_PARSER``; defaults to off so the legacy
-    native subprocess remains the default execution path.
+    cpap-parser is the intended 2.0 ResMed import path; this flag is the switch
+    that selects it. Controlled by ``SLEEPLAB_USE_CPAP_PARSER`` and currently
+    defaults to *off* so the legacy native subprocess remains the runtime default
+    until the ``cpap-py`` dependency/runtime posture is settled for clean installs
+    and CI. Set ``SLEEPLAB_USE_CPAP_PARSER=1`` to run SleepLab 2.0 on cpap-parser
+    (recommended for 2.0 dev/alpha environments where cpap-py is installed). When
+    the runtime gate is met, the default is expected to flip to on, with legacy
+    retained as the rollback path.
     """
 
     return os.environ.get("SLEEPLAB_USE_CPAP_PARSER", "0").strip().lower() in {"1", "true", "yes", "on"}

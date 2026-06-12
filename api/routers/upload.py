@@ -484,9 +484,12 @@ def finish_source_import(
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)
     # Detection/planning always run through the registry; only execution differs.
-    # When SLEEPLAB_USE_CPAP_PARSER=1, route through the in-process cpap-parser
-    # loader (ResMedNativeLoader.import_data -> persist_import_run). Otherwise keep
-    # the legacy native importer subprocess as the default fallback.
+    # cpap-parser is the SleepLab 2.0 ResMed target: when SLEEPLAB_USE_CPAP_PARSER=1
+    # we route through the in-process cpap-parser loader
+    # (ResMedNativeLoader.import_data -> persist_import_run). The legacy native
+    # importer subprocess is retained as the fallback/rollback path and stays the
+    # runtime default until the cpap-py runtime posture is settled (see
+    # docs/sleeplab_2_resmed_cutover_remaining_work.md).
     if use_cpap_parser():
         logger.info(
             "Routing import run %s through the cpap-parser loader (SLEEPLAB_USE_CPAP_PARSER=1).",

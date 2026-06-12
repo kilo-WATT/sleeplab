@@ -1,18 +1,24 @@
 # SleepLab 2.0 — ResMed `cpap-parser` Cutover Readiness Audit
 
-Status: **Audit only. No routing/schema/persistence/dependency change.** This
-document inventories what stands between today's state and routing production
-ResMed imports through the `cpap-parser` loader by default. It is grounded in the
-current code, not aspiration, and cross-references the existing retirement-evidence
-list in `docs/sleeplab_2_loader_and_conformance_plan.md` ("What evidence is
-required before retiring native ResMed").
+**SleepLab 2.0 target:** the `cpap-parser` ResMed path **is** the 2.0 target
+architecture. The legacy native importer is a fallback/rollback and a parity
+oracle, not the goal — **exact old-vs-new row parity is no longer required**, and
+**breaking old importer assumptions (including users having to delete/re-import
+card data during alpha) is acceptable.** This audit therefore measures *safety to
+flip the runtime default*, not fidelity to legacy rows.
+
+Status: **cpap-parser is the 2.0 target; runtime default not yet flipped.** The
+therapy-usage reconciliation that used to block this is now resolved (migration
+`025_prefer_authoritative_therapy_usage.sql` — best-available therapy priority).
+The remaining gates are cross-path dedupe/migration safety, the `cpap-py`
+dependency/runtime posture, the `/datalog/*` routing decision, and soak. This
+document inventories those, grounded in the current code, and cross-references the
+retirement-evidence list in `docs/sleeplab_2_loader_and_conformance_plan.md`.
 
 For the concise owner/category/next-task view, see
-`docs/sleeplab_2_resmed_cutover_remaining_work.md`. The current recommendation
-is unchanged: do not flip the default. The session model is now decided as one
-night-level session plus `session_blocks`; next reconcile block/usage/event
-totals, then settle cross-path dedupe, dependency/runtime packaging, routing,
-and soak gates.
+`docs/sleeplab_2_resmed_cutover_remaining_work.md`. Recommendation: cpap-parser is
+the target and is enabled with `SLEEPLAB_USE_CPAP_PARSER=1`; do not flip the
+*default* until the dedupe/runtime/routing/soak gates are met.
 
 ## 1. Scope and method
 
@@ -34,7 +40,10 @@ conformance (already strong) is necessary but not sufficient.
 ## 2. Current routing state (no change proposed here)
 
 - A feature flag already exists: `use_cpap_parser()` reads
-  `SLEEPLAB_USE_CPAP_PARSER` (`execution.py:31`), **default off**.
+  `SLEEPLAB_USE_CPAP_PARSER` (`execution.py`), **default off** at runtime even
+  though cpap-parser is the 2.0 target — the default stays off only until the
+  `cpap-py` runtime gate is met. `compose.override.yaml` and `.env.example`
+  document enabling it (`SLEEPLAB_USE_CPAP_PARSER=1`) for 2.0 dev/alpha.
 - `POST /source/{id}/finish` (`upload.py:461`) honors the flag — flag on →
   `run_cpap_parser_import` (in-process loader → `persist_import_run`); flag off →
   legacy subprocess. Detection/planning are shared (`resmed-native-v2`) regardless.

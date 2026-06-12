@@ -80,6 +80,13 @@ services:
       # Comma-separated origins allowed for CORS.  * allows all (dev only).
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
 
+      # --- SleepLab 2.0 ResMed import path -----------------------------------
+      # cpap-parser is the SleepLab 2.0 ResMed import target. Set to "1" to route
+      # ResMed imports through the in-process cpap-parser loader (requires the
+      # cpap-py backend in the image). Defaults to off so the legacy native
+      # importer remains the fallback until the cpap-py runtime posture is settled.
+      SLEEPLAB_USE_CPAP_PARSER: ${SLEEPLAB_USE_CPAP_PARSER:-0}
+
       # --- Optional: OpenAI --------------------------------------------------
       # Enables AI-powered session summaries.  Get a key at https://platform.openai.com
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
