@@ -167,11 +167,11 @@ requirements.txt`), exactly the pattern used for the parser-backed conformance t
 | Table | Verdict | Legacy | Parser |
 |---|---|---|---|
 | `sessions` | **unexpected_difference (guard failed)** | 43 rows, max_block_index 3 (per-PLD-block) | 40 rows, max_block_index 0 (per-night); not accepted until block/usage/event totals match |
-| `session_blocks` | expected_difference | 72 | 7 |
+| `session_blocks` | expected_difference | 72; `source_kinds=[recording_span, resmed_str_mask_interval]`; therapy 907,380s | 7; `source_kinds=[recording_span]` (no longer mislabeled); recording 89,820s, therapy NULL |
 | `settings_snapshots` | **expected_difference (partial parity)** | **40 rows; 14 keys; `therapy_mode=apap`** | **40 rows; `therapy_mode` only; `therapy_mode=APAP`** |
 | `session_events` | **equal** | 11 (CA/Hypopnea/Large Leak/Obstructive) | 11 (same types) |
 | `session_metrics` | **equal** | 34 710 | 34 710 |
-| `nightly_therapy_aggregates` | **expected_difference (usage)** | 40 rows; 907,380 total usage seconds | 40 rows; 89,820 total usage seconds |
+| `nightly_therapy_aggregates` | **expected_difference (usage)** | 40 rows; 907,380s; `usage_source=resmed_str_mask_intervals`; 0 zero-usage nights | 40 rows; **927,600s** (was 89,820); `usage_source=recording_spans`; 0 zero-usage nights (was 37) |
 | `signal_channels` | expected_difference | 54 rows; units incl. `L/s` | 33 rows; units incl. `L/min` |
 | `derived_values` | expected_difference | 90 rows, event-count+stat keys | 520 rows, usage-semantics keys |
 | `session_waveform` | expected_difference | 81 485 | 81 410 (~0.1%) |
@@ -191,7 +191,20 @@ Honest reads from the first run:
   accepts the session row-count difference only when block, total nightly usage,
   and event totals match; otherwise it reports an unexpected difference. On the
   current fixture it remains unexpected: blocks are 72 vs 7 and total nightly
-  usage is 907,380 vs 89,820 seconds, although event rows match 11 vs 11.
+  usage is 907,380 vs 927,600 seconds, although event rows match 11 vs 11.
+- **Therapy usage is now counted honestly, with one residual.** Parser
+  file-session blocks are labeled `source_kind='recording_span'` (previously
+  mislabeled `resmed_str_mask_interval`, which made recording spans masquerade as
+  the view's authoritative therapy source). Summary-only nights recover their
+  STR-reported therapy through the session-duration fallback, so
+  `zero_usage_nights` drops 37 → 0 and the parser nightly total rises from
+  89,820s to 927,600s — within ~2.2% of legacy's 907,380s. The remaining +20,220s
+  is the three detailed nights: they still report recording spans (89,820s)
+  rather than ~69,600s of STR therapy, because the view sums `session_blocks`
+  when present and cpap-parser exposes no per-mask intervals. Closing it requires
+  upstream mask intervals or a view/product decision (out of scope here, no
+  schema/view change). The harness now reports `usage_source` so a recording-span
+  total is never silently compared against authoritative mask intervals.
 - **Oximetry is not provable with this fixture.** It contains six SAD files and
   valid Pulse/SpO2 headers, but every SpO2 sample is the `-1` missing sentinel.
   `parse_sa2` returns `None`, so legacy correctly writes 0 rows and keeps
