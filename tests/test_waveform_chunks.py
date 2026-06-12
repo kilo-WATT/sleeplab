@@ -14,6 +14,7 @@ from importer.waveform_chunks import (
     build_chunks,
     decode_samples,
     decode_window,
+    downsample_extrema,
     encode_samples,
 )
 
@@ -101,6 +102,26 @@ def test_decode_window_marks_recording_gaps_instead_of_connecting_sessions():
     points = decode_window(rows)
 
     assert [point.value for point in points] == [1.0, 2.0, None, 3.0, 4.0]
+
+
+def test_downsample_extrema_respects_limit_and_preserves_local_spikes():
+    start = datetime(2026, 6, 11, 22, 0, tzinfo=UTC)
+    samples = [0.0] * 50 + [-9.0] + [0.0] * 48 + [12.0] + [0.0] * 100
+    payload, _ = encode_samples(samples)
+    points = decode_window(
+        [{
+            "sample_rate_hz": 1,
+            "start_time": start,
+            "sample_count": len(samples),
+            "payload": payload,
+        }]
+    )
+
+    reduced = downsample_extrema(points, 20)
+
+    assert len(reduced) <= 20
+    assert min(point.value for point in reduced if point.value is not None) == -9.0
+    assert max(point.value for point in reduced if point.value is not None) == 12.0
 
 
 def test_waveform_migration_is_repeat_safe_and_constrained():
@@ -248,8 +269,29 @@ def test_parser_waveform_persistence_is_idempotent_and_api_reads_windows(
     assert body["unit"] == "L/s"
     assert body["sample_rate_hz"] == 25
     assert body["sample_count"] == 51
+    assert body["returned_sample_count"] == 51
     assert body["timestamps"][0].startswith("2026-06-11T22:00:02")
     assert body["timestamps"][-1].startswith("2026-06-11T22:00:04")
+
+    downsampled = client.get(
+        f"/sessions/{session_id}/waveforms/flow_rate",
+        params={"max_points": 100},
+        headers=auth_headers,
+    )
+    assert downsampled.status_code == 200
+    downsampled_body = downsampled.json()
+    assert downsampled_body["sample_count"] == 300
+    assert downsampled_body["returned_sample_count"] <= 100
+
+    invalid_window = client.get(
+        f"/sessions/{session_id}/waveforms/flow_rate",
+        params={
+            "start_time": "2026-06-11T22:00:04Z",
+            "end_time": "2026-06-11T22:00:02Z",
+        },
+        headers=auth_headers,
+    )
+    assert invalid_window.status_code == 400
 
     unavailable = client.get(
         f"/sessions/{session_id}/waveforms/spo2",

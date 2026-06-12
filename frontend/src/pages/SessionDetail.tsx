@@ -120,6 +120,10 @@ export default function SessionDetail() {
   const [events, setEvents] = useState<EventRecord[]>([])
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null)
   const [fullNightFlow, setFullNightFlow] = useState<WaveformSignalResponse | null>(null)
+  const [waveformBounds, setWaveformBounds] = useState<[number, number] | null>(null)
+  const [waveformWindow, setWaveformWindow] = useState<[number, number] | null>(null)
+  const [waveformLoading, setWaveformLoading] = useState(false)
+  const [waveformError, setWaveformError] = useState<string | null>(null)
   const [spo2, setSpo2] = useState<SpO2Response | null>(null)
   const [equipment, setEquipment] = useState<InferredEquipment | null>(null)
   const [therapyContext, setTherapyContext] = useState<SessionTherapyContext | null>(null)
@@ -146,6 +150,7 @@ export default function SessionDetail() {
   const [eventWindowLoading, setEventWindowLoading] = useState(false)
   const [eventWindowMinutes, setEventWindowMinutes] = useState(3)
   const eventWindowCacheRef = useRef<Map<string, EventWindowResponse>>(new Map())
+  const eventInspectorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     // These resets intentionally clear the previous session while the new route loads.
@@ -153,6 +158,10 @@ export default function SessionDetail() {
     setLoading(true)
     setSpo2(null)
     setFullNightFlow(null)
+    setWaveformBounds(null)
+    setWaveformWindow(null)
+    setWaveformLoading(false)
+    setWaveformError(null)
     setEquipment(null)
     setTherapyContext(null)
     setSettingsHistory([])
@@ -172,6 +181,7 @@ export default function SessionDetail() {
     Promise.all([
       api.getSessionByDate(sessionDate),
     ]).then(([s]) => {
+      setWaveformLoading(s.data_availability.full_night_flow_available)
       setSession(s)
       setTimezoneDraft(s.machine_tz ?? '')
       setNoteDraft(s.note ?? '')
@@ -179,13 +189,9 @@ export default function SessionDetail() {
       return Promise.all([
         api.getEvents(s.id),
         api.getMetrics(s.id, 15),
-        s.data_availability.full_night_flow_available
-          ? api.getWaveform(s.id, 'flow_rate', { max_points: 4000 }).catch(() => null)
-          : Promise.resolve(null),
-      ]).then(([e, m, flow]) => {
+      ]).then(([e, m]) => {
         setEvents(e)
         setMetrics(m)
-        setFullNightFlow(flow)
         setLoading(false)
         if (s.has_spo2) {
           api.getSessionSpo2(s.id).then(setSpo2).catch(() => setSpo2(null))
@@ -214,6 +220,40 @@ export default function SessionDetail() {
       setSessionNavigation(getSessionNavigation(all, sessionDate))
     })
   }, [session, sessionDate])
+
+  useEffect(() => {
+    if (!session?.data_availability.full_night_flow_available) return
+
+    let cancelled = false
+    const params = waveformWindow
+      ? {
+          start_time: new Date(waveformWindow[0]).toISOString(),
+          end_time: new Date(waveformWindow[1]).toISOString(),
+          max_points: 6000,
+        }
+      : { max_points: 4000 }
+
+    api.getWaveform(session.id, 'flow_rate', params).then((flow) => {
+      if (cancelled) return
+      setFullNightFlow(flow)
+      if (!waveformWindow) {
+        setWaveformBounds([
+          new Date(flow.start_time).getTime(),
+          new Date(flow.end_time).getTime(),
+        ])
+      }
+    }).catch((error) => {
+      if (cancelled) return
+      setFullNightFlow(null)
+      setWaveformError(error instanceof Error ? error.message : 'Could not load waveform data')
+    }).finally(() => {
+      if (!cancelled) setWaveformLoading(false)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [session, waveformWindow])
 
   useEffect(() => {
     if (!session || !selectedEventId) return
@@ -247,8 +287,31 @@ export default function SessionDetail() {
     }
   }, [eventWindowMinutes, selectedEventId, session])
 
+  useEffect(() => {
+    if (!isEventInspectorOpen) return
+    window.requestAnimationFrame(() => {
+      eventInspectorRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    })
+  }, [isEventInspectorOpen, selectedEventId])
+
+  function clampWaveformWindow(center: number, minutes: number): [number, number] {
+    const duration = minutes * 60_000
+    const fallbackStart = session ? new Date(session.start_datetime).getTime() : center - duration / 2
+    const fallbackEnd = session
+      ? new Date(session.end_datetime ?? fallbackStart + session.duration_seconds * 1000).getTime()
+      : center + duration / 2
+    const [boundStart, boundEnd] = waveformBounds ?? [fallbackStart, fallbackEnd]
+    if (boundEnd - boundStart <= duration) return [boundStart, boundEnd]
+    const start = Math.min(Math.max(center - duration / 2, boundStart), boundEnd - duration)
+    return [start, start + duration]
+  }
+
   function inspectEvent(event: EventRecord) {
     setSelectedEventId(event.id)
+    setIsEventInspectorOpen(true)
+    setWaveformLoading(true)
+    setWaveformError(null)
+    setWaveformWindow(clampWaveformWindow(new Date(event.event_datetime).getTime(), 5))
   }
 
   const selectedEventIndex = selectedEventId == null
@@ -264,6 +327,33 @@ export default function SessionDetail() {
     }
   }
 
+  function selectWaveformWindow(minutes: number | null) {
+    if (minutes == null && waveformWindow == null) return
+    setWaveformLoading(true)
+    setWaveformError(null)
+    if (minutes == null) {
+      setWaveformWindow(null)
+      return
+    }
+    const selectedCenter = selectedEvent
+      ? new Date(selectedEvent.event_datetime).getTime()
+      : waveformWindow
+        ? waveformWindow[0] + (waveformWindow[1] - waveformWindow[0]) / 2
+        : waveformBounds
+          ? waveformBounds[0] + (waveformBounds[1] - waveformBounds[0]) / 2
+          : new Date(session?.start_datetime ?? 0).getTime()
+    setWaveformWindow(clampWaveformWindow(selectedCenter, minutes))
+  }
+
+  function panWaveformWindow(direction: -1 | 1) {
+    if (!waveformWindow) return
+    setWaveformLoading(true)
+    setWaveformError(null)
+    const duration = waveformWindow[1] - waveformWindow[0]
+    const center = waveformWindow[0] + duration / 2 + direction * duration * 0.8
+    setWaveformWindow(clampWaveformWindow(center, duration / 60_000))
+  }
+
   async function handleTimezoneSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!session) return
@@ -276,6 +366,7 @@ export default function SessionDetail() {
         api.getEvents(updated.id),
         api.getMetrics(updated.id, 15),
       ])
+      setWaveformLoading(updated.data_availability.full_night_flow_available)
       setSession(updated)
       setTimezoneDraft(updated.machine_tz ?? '')
       setEvents(nextEvents)
@@ -351,6 +442,11 @@ export default function SessionDetail() {
   const mins  = Math.floor((session.duration_seconds % 3600) / 60)
   const endTime = session.end_datetime ?? new Date(new Date(session.start_datetime).getTime() + session.duration_seconds * 1000).toISOString()
   const metricsTimeDomain = computeMetricsDomain(metricsToPoints(metrics))
+  const sessionTimeDomain: [number, number] = [
+    new Date(session.start_datetime).getTime(),
+    new Date(endTime).getTime(),
+  ]
+  const reviewTimeDomain = waveformWindow ?? waveformBounds ?? metricsTimeDomain ?? sessionTimeDomain
   const badge = ahiBadge(session.ahi)
   const tagsChanged = !sameTags(tagsDraft, session.tags ?? [])
   const hasDeviceSettings = Boolean(session.therapy_mode || session.mask_type || session.humidity_level != null || session.temperature_c != null)
@@ -562,7 +658,7 @@ export default function SessionDetail() {
                 events={events}
                 durationSeconds={session.duration_seconds}
                 startDatetime={session.start_datetime}
-                timeDomain={metricsTimeDomain}
+                timeDomain={reviewTimeDomain}
                 selectedEventId={selectedEventId}
                 onSelectEvent={inspectEvent}
               />
@@ -602,7 +698,7 @@ export default function SessionDetail() {
         </div>
 
         {isEventInspectorOpen && selectedEvent ? (
-          <div className="lg:col-span-2 lg:row-start-2">
+          <div ref={eventInspectorRef} className="scroll-mt-4 lg:col-span-2 lg:row-start-2">
             <EventInspector
               data={eventWindow}
               loading={eventWindowLoading}
@@ -846,7 +942,12 @@ export default function SessionDetail() {
       </div>
 
       {metrics.timestamps.length > 0 ? (
-        <MetricsChart metrics={metrics} events={events} leakKind={session.leak_kind} />
+        <MetricsChart
+          metrics={metrics}
+          events={events}
+          leakKind={session.leak_kind}
+          timeDomain={reviewTimeDomain}
+        />
       ) : (
         <UnavailableDataCard
           title="Night graphs unavailable"
@@ -855,11 +956,27 @@ export default function SessionDetail() {
       )}
 
       {fullNightFlow ? (
-        <FullNightFlowChart waveform={fullNightFlow} />
+        <FullNightFlowChart
+          waveform={fullNightFlow}
+          events={events}
+          timeDomain={reviewTimeDomain}
+          wholeNight={waveformWindow == null}
+          loading={waveformLoading}
+          onSelectEvent={inspectEvent}
+          onSelectWindow={selectWaveformWindow}
+          onPan={panWaveformWindow}
+        />
+      ) : waveformLoading ? (
+        <UnavailableDataCard
+          title="Loading full-night flow"
+          description="Reading the overlapping compressed waveform chunks and reducing them to a browser-safe point count."
+        />
       ) : (
         <UnavailableDataCard
           title="Full-night flow unavailable"
-          description={isParserBacked
+          description={waveformError
+            ? `The stored flow chunks could not be read: ${waveformError}`
+            : isParserBacked
             ? 'No full-night ResMed Flow.40ms chunks were stored for this night. SleepLab does not synthesize missing waveform data.'
             : 'This night was imported before full-night waveform chunk storage was available. Re-import the CPAP card to populate it when the source includes flow data.'}
         />

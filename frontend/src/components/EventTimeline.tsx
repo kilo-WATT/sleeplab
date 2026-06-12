@@ -55,8 +55,6 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
     durationLabel: string
     leftPct: number
   } | null>(null)
-  const eventTypes = [...new Set(events.map(e => e.event_type))]
-
   if (events.length === 0) {
     return (
       <div className="rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-soft)] p-6">
@@ -73,15 +71,19 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
   })
   const requestedDomainStart = timeDomain?.[0]
   const requestedDomainEnd = timeDomain?.[1]
-  const domainStart = Math.min(
-    Number.isFinite(requestedDomainStart) ? requestedDomainStart! : fallbackStartTs,
-    ...eventRanges.map(([start]) => start),
-  )
-  const domainEnd = Math.max(
-    Number.isFinite(requestedDomainEnd) ? requestedDomainEnd! : fallbackStartTs + durationSeconds * 1000,
-    ...eventRanges.map(([, end]) => end),
-  )
+  const domainStart = timeDomain && Number.isFinite(requestedDomainStart)
+    ? requestedDomainStart!
+    : Math.min(fallbackStartTs, ...eventRanges.map(([start]) => start))
+  const domainEnd = timeDomain && Number.isFinite(requestedDomainEnd)
+    ? requestedDomainEnd!
+    : Math.max(fallbackStartTs + durationSeconds * 1000, ...eventRanges.map(([, end]) => end))
   const timelineDurationMs = Math.max(domainEnd - domainStart, 1)
+  const visibleEvents = events.filter((event) => {
+    const end = eventTimestamp(event, fallbackStartTs)
+    const start = end - (event.duration_seconds ?? 0) * 1000
+    return end >= domainStart && start <= domainEnd
+  })
+  const eventTypes = [...new Set(visibleEvents.map(e => e.event_type))]
 
   return (
     <div className="space-y-4">
@@ -116,7 +118,7 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
         ) : null}
 
         <div className="relative h-6 rounded-full bg-[rgba(125,105,93,0.14)]">
-          {events.map((evt) => {
+          {visibleEvents.map((evt) => {
             const isSelected = selectedEventId === evt.id
             const ts = eventTimestamp(evt, fallbackStartTs)
             const markerStartTs = evt.duration_seconds
@@ -166,6 +168,11 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
               />
             )
           })}
+          {!visibleEvents.length ? (
+            <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-[var(--muted-foreground)]">
+              No events in selected window
+            </span>
+          ) : null}
         </div>
       </div>
     </div>

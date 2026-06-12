@@ -79,4 +79,36 @@ describe('EventTimeline', () => {
     expect(Number.parseFloat(marker.style.left)).toBeCloseTo(30)
     expect(Number.parseFloat(marker.style.width)).toBeCloseTo(20)
   })
+
+  it('honors a selected window without expanding it to include off-window events', () => {
+    const domainStart = new Date('2026-06-02T04:00:00Z').getTime()
+    const domainEnd = new Date('2026-06-02T04:10:00Z').getTime()
+
+    render(
+      <EventTimeline
+        startDatetime="2026-06-02T04:00:00Z"
+        durationSeconds={3600}
+        timeDomain={[domainStart, domainEnd]}
+        events={[
+          {
+            id: 1,
+            event_type: 'Hypopnea',
+            onset_seconds: 300,
+            duration_seconds: 10,
+            event_datetime: '2026-06-02T04:05:00Z',
+          },
+          {
+            id: 2,
+            event_type: 'Obstructive Apnea',
+            onset_seconds: 1800,
+            duration_seconds: 10,
+            event_datetime: '2026-06-02T04:30:00Z',
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /hypopnea/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /obstructive apnea/i })).not.toBeInTheDocument()
+  })
 })

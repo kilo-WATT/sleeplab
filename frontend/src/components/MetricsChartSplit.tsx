@@ -14,6 +14,7 @@ interface Props {
   metrics: MetricsResponse
   events?: EventRecord[]
   leakKind?: 'total' | 'unintentional' | 'large_leak' | 'unknown' | null
+  timeDomain?: [number, number] | null
 }
 
 type PanelDefinition = {
@@ -30,9 +31,9 @@ type PanelDefinition = {
  *
  * @returns The rendered React element.
  */
-export default function MetricsChartSplit({ metrics, events = [], leakKind }: Props) {
+export default function MetricsChartSplit({ metrics, events = [], leakKind, timeDomain }: Props) {
   const rawData = metricsToPoints(metrics)
-  const xDomain = computeMetricsDomain(rawData)
+  const xDomain = timeDomain ?? computeMetricsDomain(rawData)
   const domainStart = xDomain?.[0] ?? 0
   const domainEnd = xDomain?.[1] ?? 0
 
@@ -43,11 +44,19 @@ export default function MetricsChartSplit({ metrics, events = [], leakKind }: Pr
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: getDisplayTz() })
   }
 
-  const TICK_INTERVAL_MS = 60 * 60 * 1000
+  const spanMs = domainEnd - domainStart
+  const TICK_INTERVAL_MS = spanMs <= 10 * 60_000
+    ? 60_000
+    : spanMs <= 30 * 60_000
+      ? 5 * 60_000
+      : spanMs <= 2 * 60 * 60_000
+        ? 15 * 60_000
+        : 60 * 60_000
   const xTicks: number[] = []
   if (xDomain) {
     const firstTick = Math.ceil(domainStart / TICK_INTERVAL_MS) * TICK_INTERVAL_MS
     for (let t = firstTick; t <= domainEnd; t += TICK_INTERVAL_MS) xTicks.push(t)
+    if (xTicks.length < 2) xTicks.splice(0, xTicks.length, domainStart, domainEnd)
   }
 
   function makeTicks(dataKey: MetricKey, padding: number): { domain: [number, number], ticks: number[] } {
@@ -82,6 +91,7 @@ export default function MetricsChartSplit({ metrics, events = [], leakKind }: Pr
       dataKey="ts"
       type="number"
       domain={xDomain ?? ['dataMin', 'dataMax']}
+      allowDataOverflow
       scale="time"
       tick={{ fill: '#7d695d', fontSize: 10 }}
       tickFormatter={fmtTs}

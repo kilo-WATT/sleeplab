@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -213,5 +213,66 @@ describe('SessionDetail timezone display', () => {
     expect(await screen.findByText('Full-night flow rate')).toBeInTheDocument()
     expect(screen.getByText(/ResMed Flow.40ms at 25 Hz/)).toBeInTheDocument()
     expect(screen.queryByText('Full-night flow unavailable')).not.toBeInTheDocument()
+  })
+
+  it('opens the event inspector and requests a focused chunk window from a flow marker', async () => {
+    const session = sessionDetail('America/New_York')
+    session.data_availability.full_night_flow_available = true
+    const event = {
+      id: 7,
+      event_type: 'Obstructive Apnea',
+      onset_seconds: 300,
+      duration_seconds: 12,
+      event_datetime: '2026-06-02T04:05:00Z',
+    }
+    apiMock.getSessionByDate.mockResolvedValue(session)
+    apiMock.getEvents.mockResolvedValue([event])
+    apiMock.getWaveform.mockResolvedValue({
+      signal_name: 'flow_rate',
+      unit: 'L/s',
+      sample_rate_hz: 25,
+      start_time: '2026-06-02T04:00:00Z',
+      end_time: '2026-06-02T09:00:00Z',
+      sample_count: 450_000,
+      chunk_count: 60,
+      encoding: 'float32-le-zlib-v1',
+      returned_sample_count: 3,
+      timestamps: [
+        '2026-06-02T04:00:00Z',
+        '2026-06-02T06:30:00Z',
+        '2026-06-02T09:00:00Z',
+      ],
+      values: [-0.5, 0, 0.7],
+    })
+    apiMock.getEventWindow.mockResolvedValue({
+      event,
+      neighboring_events: [event],
+      metrics: emptyMetrics,
+      waveform: { timestamps: [], flow: [], pressure: [] },
+      leak_kind: 'total',
+      leak_unit: 'L/s',
+    })
+
+    renderSessionDetail()
+
+    fireEvent.click(await screen.findByRole('button', { name: /inspect obstructive apnea/i }))
+
+    expect(await screen.findByText('Event Inspector')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(apiMock.getEventWindow).toHaveBeenCalledWith(
+        session.id,
+        event.id,
+        expect.any(Object),
+      )
+      expect(apiMock.getWaveform).toHaveBeenCalledWith(
+        session.id,
+        'flow_rate',
+        expect.objectContaining({
+          start_time: '2026-06-02T04:02:30.000Z',
+          end_time: '2026-06-02T04:07:30.000Z',
+          max_points: 6000,
+        }),
+      )
+    })
   })
 })
