@@ -819,16 +819,17 @@ def replace_derived_values(
     ]
     with conn.cursor() as cur:
         cur.execute("DELETE FROM derived_values WHERE session_id = %s", (session_db_id,))
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO derived_values (
-                user_id, machine_id, session_id, import_run_id, key, value, unit,
-                method, method_version, input_refs, adapter_id, validation_status
-            ) VALUES %s
-            """,
-            rows,
-        )
+        if rows:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO derived_values (
+                    user_id, machine_id, session_id, import_run_id, key, value, unit,
+                    method, method_version, input_refs, adapter_id, validation_status
+                ) VALUES %s
+                """,
+                rows,
+            )
     return len(rows)
 
 

@@ -191,6 +191,13 @@ def persist_import_run(
         if not has_detailed:
             counts["summary_only_days"] += 1
 
+        # The normalized session is authoritative for parser-owned child rows.
+        # Upserts alone cannot remove a block or settings snapshot that vanished
+        # from a corrected parse, so clear those generated sets before rewriting
+        # them. Events, channels, metrics, waveforms, and derived values use
+        # their own replace writers below.
+        _clear_parser_session_children(db_conn, str(session_db_id))
+
         # -- Blocks -------------------------------------------------------
         # The cpap-parser path builds one block per detailed file-session from
         # ``CPAPSession.start_time -> end_time`` — i.e. a *recording span*, the
@@ -308,16 +315,15 @@ def persist_import_run(
 
         # -- Derived values ----------------------------------------------
         summary = {key: _jsonable(value.value) for key, value in derived.items()}
-        if summary:
-            counts["derived_values"] += replace_derived_values(
-                db_conn,
-                user_id=user_id,
-                machine_id=machine_id,
-                session_db_id=str(session_db_id),
-                import_run_id=import_run_id,
-                adapter_id=_ADAPTER_ID,
-                summary=summary,
-            )
+        counts["derived_values"] += replace_derived_values(
+            db_conn,
+            user_id=user_id,
+            machine_id=machine_id,
+            session_db_id=str(session_db_id),
+            import_run_id=import_run_id,
+            adapter_id=_ADAPTER_ID,
+            summary=summary,
+        )
 
         # -- Per-sample tables (session_metrics / session_waveform) -------
         # Populated only when the raw CPAPDirectory is available; the decoded
@@ -499,6 +505,22 @@ def _replace_signal_channel_metadata(
             rows,
         )
     return len(rows)
+
+
+def _clear_parser_session_children(db_conn: Any, session_db_id: str) -> None:
+    """Remove parser-generated child sets that are rewritten by this import.
+
+    ``session_blocks`` has no adapter column, but a canonical cpap-parser
+    night-level session owns its entire block set. Settings are adapter-scoped
+    because other importers may legitimately attach independent snapshots to
+    the same session.
+    """
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM session_blocks WHERE session_id = %s", (session_db_id,))
+        cur.execute(
+            "DELETE FROM settings_snapshots WHERE session_id = %s AND adapter_id = %s",
+            (session_db_id, _ADAPTER_ID),
+        )
 
 
 # -- Settings ---------------------------------------------------------------

@@ -469,6 +469,46 @@ def test_db_parity_harness(db, test_user):
             _run_parser(raw, fixture_root=_FIXTURE, user_id=user_id, machine_id=mp, run_id=rp)
             _finalize_source_manifest(raw, run_id=rp)
             parser_snap = cp.snapshot_parity_tables(raw, machine_id=mp, import_run_id=rp)
+
+            # Import the same card again as a distinct durable attempt. Patient
+            # data and normalized child rows must remain stable; import_runs and
+            # each run's source manifest intentionally record both attempts.
+            _same_machine, rp2 = _new_machine_and_run(
+                raw,
+                user_id=user_id,
+                serial="PARITY-PARSER",
+                adapter_id=_CPAP_PARSER_ADAPTER,
+            )
+            assert _same_machine == mp
+            assert _register_source_manifest(raw, run_id=rp2, fixture_root=_FIXTURE) == manifest_count
+            _run_parser(raw, fixture_root=_FIXTURE, user_id=user_id, machine_id=mp, run_id=rp2)
+            _finalize_source_manifest(raw, run_id=rp2)
+            parser_reimport_snap = cp.snapshot_parity_tables(
+                raw, machine_id=mp, import_run_id=rp2
+            )
+            for table in (
+                "sessions",
+                "session_blocks",
+                "settings_snapshots",
+                "session_events",
+                "session_spo2",
+                "signal_channels",
+                "derived_values",
+                "session_metrics",
+                "session_waveform",
+                "nightly_therapy_aggregates",
+                "import_source_files",
+            ):
+                assert parser_reimport_snap[table] == parser_snap[table], (
+                    f"same-card re-import changed {table}: "
+                    f"{parser_snap[table]} != {parser_reimport_snap[table]}"
+                )
+            with raw.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM import_runs WHERE machine_id = %s",
+                    (mp,),
+                )
+                assert cur.fetchone()[0] == 2
         except Exception as exc:  # noqa: BLE001
             with raw.cursor() as cur:
                 cur.execute("ROLLBACK TO SAVEPOINT parser_sp")

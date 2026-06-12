@@ -356,6 +356,50 @@ def test_upsert_session_reimport_is_idempotent(db, test_user):
         assert total_ahi_events == 13
 
 
+def test_parser_child_cleanup_removes_stale_blocks_and_settings():
+    """Corrected parser output replaces generated child sets, including removals."""
+    from importer.loaders import persist
+
+    conn = FakeConn()
+
+    persist._clear_parser_session_children(conn, "session-1")
+
+    assert conn.cursor_obj.statements == [
+        ("DELETE FROM session_blocks WHERE session_id = %s", ("session-1",)),
+        (
+            "DELETE FROM settings_snapshots WHERE session_id = %s AND adapter_id = %s",
+            ("session-1", "resmed-cpap-parser-v1"),
+        ),
+    ]
+
+
+def test_replace_derived_values_accepts_empty_corrected_summary(monkeypatch):
+    """A re-import with no derived values clears stale rows without bulk inserting."""
+    calls = []
+    monkeypatch.setattr(
+        importer_db.psycopg2.extras,
+        "execute_values",
+        lambda *_args, **_kwargs: calls.append(True),
+    )
+    conn = FakeConn()
+
+    count = importer_db.replace_derived_values(
+        conn,
+        user_id="user-1",
+        machine_id="machine-1",
+        session_db_id="session-1",
+        import_run_id="run-1",
+        adapter_id="resmed-cpap-parser-v1",
+        summary={},
+    )
+
+    assert count == 0
+    assert calls == []
+    assert conn.cursor_obj.statements == [
+        ("DELETE FROM derived_values WHERE session_id = %s", ("session-1",))
+    ]
+
+
 def test_normalized_signal_inventory_classifies_brp_and_pld_channels():
     """Alpha 6 item 1: pin the native ResMed BRP/PLD channel inventory.
 

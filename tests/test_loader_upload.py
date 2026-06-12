@@ -6,6 +6,7 @@ from io import BytesIO
 import pytest
 from fastapi import BackgroundTasks, HTTPException, UploadFile
 
+from api.routers import upload
 from api.routers.upload import (
     UPLOAD_SESSIONS,
     StartSourceUploadRequest,
@@ -137,3 +138,46 @@ def test_source_upload_can_be_discarded_after_inspection():
 
     assert result == {"status": "discarded"}
     assert upload_id not in UPLOAD_SESSIONS
+
+
+@pytest.mark.parametrize(
+    ("flag_value", "expected_task"),
+    [
+        ("1", upload._run_cpap_parser_import),
+        ("0", upload._run_import),
+    ],
+)
+def test_source_finish_routes_by_cpap_parser_flag(monkeypatch, flag_value, expected_task):
+    upload_id = _start("route-user", "RESMED-SD")
+    temp_root = UPLOAD_SESSIONS[upload_id].temp_root
+    try:
+        upload_source_batch(
+            upload_id,
+            [
+                _file("STR.edf", b"summary"),
+                _file("DATALOG/20260601/20260601_220000_PLD.edf", b"session"),
+            ],
+            current_user={"id": "route-user"},
+        )
+        inspect_uploaded_source(upload_id, current_user={"id": "route-user"})
+        monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", flag_value)
+        monkeypatch.setattr(
+            upload,
+            "create_import_run",
+            lambda *_args, **_kwargs: ("run-id", "machine-id"),
+        )
+        tasks = BackgroundTasks()
+
+        result = finish_source_import(
+            upload_id,
+            tasks,
+            current_user={"id": "route-user"},
+            db=object(),
+        )
+
+        assert result["import_run_id"] == "run-id"
+        assert len(tasks.tasks) == 1
+        assert tasks.tasks[0].func is expected_task
+    finally:
+        UPLOAD_SESSIONS.pop(upload_id, None)
+        shutil.rmtree(temp_root, ignore_errors=True)
