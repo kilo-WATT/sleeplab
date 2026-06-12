@@ -159,6 +159,34 @@ def test_upsert_session_defaults_unknown_manufacturer_to_null():
     assert params["manufacturer"] is None
 
 
+def test_upsert_session_persists_p95_leak_and_defaults_it_when_absent():
+    """The leak 95th percentile is its own column, defaulted (not required).
+
+    Regression for the nightly leak card showing the pressure percentile: leak
+    must carry a dedicated ``p95_leak`` column. Callers that predate it (legacy
+    importer, STR-only days) omit the key, so ``upsert_session`` must default it
+    to NULL rather than KeyError, while still threading a supplied value through.
+    """
+    conn = FakeConn(rows=[("machine-1",), (123,)])
+    data = _session_data(p95_leak=2.4)
+    assert importer_db.upsert_session(conn, data) == 123
+
+    sql, params = conn.cursor_obj.statements[1]
+    # The column and its bind parameter are present and distinct from pressure.
+    assert "p95_leak" in sql
+    assert "%(p95_leak)s" in sql
+    assert "p95_leak                = EXCLUDED.p95_leak" in sql
+    assert params["p95_leak"] == 2.4
+
+    # A caller that never sets p95_leak (legacy path) still upserts cleanly.
+    legacy_conn = FakeConn(rows=[("machine-1",), (124,)])
+    legacy_data = _session_data()
+    legacy_data.pop("p95_leak", None)
+    assert importer_db.upsert_session(legacy_conn, legacy_data) == 124
+    _legacy_sql, legacy_params = legacy_conn.cursor_obj.statements[1]
+    assert legacy_params["p95_leak"] is None
+
+
 def test_resmed_str_persistence_is_duplicate_safe_and_incremental(db, test_user):
     raw_conn = db.connection().connection.driver_connection
     machine_id = importer_db.reconcile_machine(
@@ -1237,6 +1265,39 @@ def test_build_session_emits_blocks_and_events_for_detailed_night():
     # mapped to the OSCAR enum — a documented vocabulary gap in the audit).
     assert [e.event_type for e in session.events] == ["Obstructive Apnea"]
     assert session.events[0].start_time == datetime(2026, 6, 1, 22, 2)  # start + 120s
+
+
+def test_signal_metrics_derives_leak_p95_distinct_from_pressure_p95():
+    """The loader emits a leak 95th percentile from the leak channel, not pressure.
+
+    Regression for the nightly leak card displaying ``p95_pressure``. ``_signal_metrics``
+    must derive ``p95_leak`` from the concatenated ``timeseries.leak`` samples, in the
+    leak channel's own units (L/min), and keep it independent from the set-pressure
+    percentile so the API/UI can label the leak stat honestly.
+    """
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    # Leak 95th percentile (2.4) differs from both its mean and the pressure p95 (10.0),
+    # so a regression that aliased one onto the other would be caught.
+    leak = [0.0] * 19 + [2.4]
+    timeseries = SimpleNamespace(
+        set_pressure=[10.0] * 20,
+        leak=leak,
+        respiratory_rate=[],
+        tidal_volume=[],
+        minute_ventilation=[],
+        snore=[],
+        flow_limitation=[],
+    )
+    detailed = [SimpleNamespace(timeseries=timeseries)]
+
+    derived = {dv.key: (dv.value, dv.unit) for dv in ResMedNativeLoader._signal_metrics(detailed)}
+
+    assert derived["p95_leak"] == (2.4, "L/min")
+    assert derived["avg_leak"][0] == 0.12  # mean of the leak channel, not the percentile
+    assert derived["p95_pressure"] == (10.0, "cmH2O")
+    # The leak percentile is not the pressure percentile.
+    assert derived["p95_leak"][0] != derived["p95_pressure"][0]
 
 
 def test_dedupe_events_preserves_zero_duration_arousal():

@@ -399,6 +399,7 @@ def _session_row(
         "avg_pressure": _derived_scalar(derived, "avg_pressure", default=None),
         "p95_pressure": _derived_scalar(derived, "p95_pressure", default=None),
         "avg_leak": _derived_scalar(derived, "avg_leak", default=None),
+        "p95_leak": _derived_scalar(derived, "p95_leak", default=None),
         "avg_resp_rate": _derived_scalar(derived, "avg_resp_rate", default=None),
         "avg_tidal_vol": _derived_scalar(derived, "avg_tidal_vol", default=None),
         "avg_min_vent": _derived_scalar(derived, "avg_min_vent", default=None),

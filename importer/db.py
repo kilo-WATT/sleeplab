@@ -307,13 +307,16 @@ def upsert_session(conn: Any, data: dict) -> int:
     data.setdefault("import_run_id", None)
     data.setdefault("source_session_key", data["session_id"])
     data.setdefault("provenance_status", "legacy_unknown")
+    # p95_leak is only computed by the cpap-parser path; older/legacy callers
+    # omit it, so default it here rather than requiring every caller to supply it.
+    data.setdefault("p95_leak", None)
     sql = """
     INSERT INTO sessions (
         session_id, folder_date, block_index, start_datetime, pld_start_datetime,
         duration_seconds, device_serial, ahi,
         central_apnea_count, obstructive_apnea_count, hypopnea_count,
         apnea_count, arousal_count, total_ahi_events,
-        avg_pressure, p95_pressure, avg_leak, avg_resp_rate, avg_tidal_vol,
+        avg_pressure, p95_pressure, avg_leak, p95_leak, avg_resp_rate, avg_tidal_vol,
         avg_min_vent, avg_snore, avg_flow_lim, has_spo2,
         therapy_mode, mask_type, humidity_level, temperature_c,
         machine_tz, manufacturer, leak_kind, leak_unit, user_id,
@@ -323,7 +326,7 @@ def upsert_session(conn: Any, data: dict) -> int:
         %(duration_seconds)s, %(device_serial)s, %(ahi)s,
         %(central_apnea_count)s, %(obstructive_apnea_count)s, %(hypopnea_count)s,
         %(apnea_count)s, %(arousal_count)s, %(total_ahi_events)s,
-        %(avg_pressure)s, %(p95_pressure)s, %(avg_leak)s, %(avg_resp_rate)s, %(avg_tidal_vol)s,
+        %(avg_pressure)s, %(p95_pressure)s, %(avg_leak)s, %(p95_leak)s, %(avg_resp_rate)s, %(avg_tidal_vol)s,
         %(avg_min_vent)s, %(avg_snore)s, %(avg_flow_lim)s, %(has_spo2)s,
         %(therapy_mode)s, %(mask_type)s, %(humidity_level)s, %(temperature_c)s,
         %(machine_tz)s, %(manufacturer)s, %(leak_kind)s, %(leak_unit)s, %(user_id)s,
@@ -348,6 +351,7 @@ def upsert_session(conn: Any, data: dict) -> int:
         avg_pressure            = EXCLUDED.avg_pressure,
         p95_pressure            = EXCLUDED.p95_pressure,
         avg_leak                = EXCLUDED.avg_leak,
+        p95_leak                = EXCLUDED.p95_leak,
         avg_resp_rate           = EXCLUDED.avg_resp_rate,
         avg_tidal_vol           = EXCLUDED.avg_tidal_vol,
         avg_min_vent            = EXCLUDED.avg_min_vent,

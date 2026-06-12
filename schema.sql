@@ -30,6 +30,7 @@ CREATE TABLE sessions (
     avg_pressure            NUMERIC(6,2),
     p95_pressure            NUMERIC(6,2),
     avg_leak                NUMERIC(8,4),
+    p95_leak                NUMERIC(8,4),
     avg_resp_rate           NUMERIC(6,2),
     avg_tidal_vol           NUMERIC(8,4),
     avg_min_vent            NUMERIC(6,2),

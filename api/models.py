@@ -168,6 +168,7 @@ class SessionDetail(SessionSummary):
     score_vs_30d_avg: float | None = None
     note: str | None = None
     tags: list[str] = Field(default_factory=list)
+    p95_leak: float | None = None
     avg_resp_rate: float | None
     avg_tidal_vol: float | None
     avg_min_vent: float | None
