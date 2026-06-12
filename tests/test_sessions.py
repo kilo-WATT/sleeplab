@@ -444,12 +444,12 @@ class TestGetSession:
         assert leak["unit"] == "L/min"
         assert leak["unavailable_reason"] is None
 
-    def test_get_by_date_parser_lpm_leak_is_not_inflated(self, client: TestClient, auth_headers, test_user, db):
-        """A cpap-parser night (leak_unit='L/min') must score leak in L/min, not * 60.
+    def test_get_by_date_parser_ls_leak_scaled_to_lpm(self, client: TestClient, auth_headers, test_user, db):
+        """A cpap-parser night stores leak in L/s; the API surfaces it as L/min.
 
-        Regression: the leak component used to assume L/s. A parser night at
-        10.22 L/min would have been read as 613 L/min and scored as severe leak.
-        Stored as L/min, it must surface as 10.22 L/min with full credit.
+        Regression (alpha.10): the parser persisted raw L/s leak but mislabeled it
+        'L/min', so it rendered ~60x too low. Stored truthfully as 'L/s', avg_leak
+        0.1704 must surface as 10.22 L/min (0.1704 * 60), not 0.17.
         """
         db.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS manufacturer TEXT"))
         folder_date = date(2026, 7, 1)
@@ -459,8 +459,8 @@ class TestGetSession:
             folder_date=folder_date,
             duration_seconds=8 * 3600,
             total_ahi_events=0,
-            avg_leak=10.22,
-            leak_unit="L/min",
+            avg_leak=0.1704,
+            leak_unit="L/s",
             manufacturer="ResMed",
             include_manufacturer=True,
             provenance_status="native_resmed_cpap_parser",
@@ -470,7 +470,7 @@ class TestGetSession:
 
         assert resp.status_code == 200
         leak = resp.json()["therapy_score"]["components"]["leak"]
-        assert leak["value"] == 10.22  # not 613.2
+        assert leak["value"] == 10.22  # 0.1704 * 60, not 0.17
         assert leak["unit"] == "L/min"
         assert leak["score"] == leak["max_score"]
 
@@ -514,9 +514,9 @@ class TestExportSessionPdf:
     def test_mean_leak_lpm_normalizes_mixed_unit_nights(self):
         """Each night is converted to L/min by its own unit before averaging.
 
-        A legacy night (0.2 L/s = 12 L/min) and a parser night (10 L/min) must
-        average to 11 L/min — not (0.2 + 10)/2 * 60, which the old blanket * 60
-        would have produced when the two import paths were mixed.
+        An L/s night (0.2 L/s = 12 L/min) and an explicit L/min night (10 L/min)
+        must average to 11 L/min — not (0.2 + 10)/2 * 60, which the old blanket
+        * 60 would have produced when units were mixed.
         """
         nights = [
             {"avg_leak": 0.2, "leak_unit": "L/s"},

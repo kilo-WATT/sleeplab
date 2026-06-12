@@ -93,22 +93,26 @@ describe('computeMetricsDomain', () => {
     expect(blockThree.every((ts) => plottedSampleTimes.has(ts))).toBe(true)
   })
 
-  it('converts canonical leak samples from L/s to L/min', () => {
+  it('scales ResMed leak samples from L/s to L/min for both import paths', () => {
+    // Legacy and cpap-parser both deliver leak in L/s (raw Leak.2s magnitude);
+    // a 0.04 L/s sample is OSCAR's 2.4 L/min, a 0.2 L/s sample is 12 L/min.
     const timestamp = Date.UTC(2026, 5, 2, 4, 0)
-    const metrics = metricsResponse([timestamp])
-    metrics.leak = [0.2]
+    const metrics = metricsResponse([timestamp, timestamp + 1])
+    metrics.leak = [0.2, 0.04]
     metrics.leak_unit = 'L/s'
 
-    expect(metricsToPoints(metrics)[0].leak).toBe(12)
+    const points = metricsToPoints(metrics)
+    expect(points[0].leak).toBe(12)
+    expect(points[1].leak).toBeCloseTo(2.4, 5)
   })
 
-  it('passes parser leak samples through when already L/min (no x60)', () => {
+  it('does not multiply an explicit L/min sample (defensive branch)', () => {
     const timestamp = Date.UTC(2026, 5, 2, 4, 0)
     const metrics = metricsResponse([timestamp])
     metrics.leak = [12]
     metrics.leak_unit = 'L/min'
 
-    // Regression: a parser night's L/min sample must not be inflated to 720.
+    // No SleepLab path stores L/min today, but a true L/min value must not become 720.
     expect(metricsToPoints(metrics)[0].leak).toBe(12)
   })
 

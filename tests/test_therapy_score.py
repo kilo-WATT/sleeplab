@@ -96,15 +96,15 @@ def test_unconfirmed_manufacturer_redistributes_leak_weight():
     assert score.components.ahi.max_score + score.components.duration.max_score + score.components.spo2.max_score == 100
 
 
-def test_parser_lpm_leak_is_not_inflated_by_60():
-    """A cpap-parser session (leak_unit='L/min') must not be treated as L/s.
+def test_parser_ls_leak_scaled_to_lpm_not_under_or_over_scaled():
+    """A cpap-parser session stores leak in L/s; the component shows it in L/min.
 
-    Regression: therapy_score previously multiplied avg_leak by 60 unconditionally,
-    so a parser night at 12 L/min was shown as 720 L/min and scored as catastrophic
-    leak. With the leak_unit respected, 12 L/min stays 12 L/min and (being below the
-    24 L/min ResMed threshold) keeps full leak credit.
+    Regression (alpha.10): parser leak is the raw Leak.2s magnitude (L/s). A night
+    with avg_leak 0.2 L/s must display as 12 L/min — not 0.2 (the alpha.9 bug, which
+    mislabeled it L/min and so under-scaled ~60x) and not 720 (the original blanket
+    pre-alpha.9 over-scale). 12 L/min is below the 24 L/min threshold -> full credit.
     """
-    score = compute_therapy_score(_session(avg_leak=12.0, leak_unit="L/min"))
+    score = compute_therapy_score(_session(avg_leak=0.2, leak_unit="L/s"))
 
     assert score.components.leak is not None
     assert score.components.leak.value == 12.0
@@ -112,24 +112,24 @@ def test_parser_lpm_leak_is_not_inflated_by_60():
     assert score.components.leak.score == score.components.leak.max_score
 
 
-def test_parser_and_legacy_same_physical_leak_score_identically():
+def test_same_physical_leak_scores_identically_across_units():
     """The same physical leak scores the same regardless of stored unit.
 
-    0.5 L/s (legacy) and 30 L/min (parser) are the same leak; both exceed the
-    24 L/min threshold and must produce the same leak component value and score.
+    0.5 L/s and an explicit 30 L/min are the same leak; both exceed the 24 L/min
+    threshold and must produce the same leak component value and score.
     """
-    legacy = compute_therapy_score(_session(avg_leak=0.5, leak_unit="L/s", ahi=8.0))
-    parser = compute_therapy_score(_session(avg_leak=30.0, leak_unit="L/min", ahi=8.0))
+    via_lps = compute_therapy_score(_session(avg_leak=0.5, leak_unit="L/s", ahi=8.0))
+    via_lpm = compute_therapy_score(_session(avg_leak=30.0, leak_unit="L/min", ahi=8.0))
 
-    assert legacy.components.leak is not None and parser.components.leak is not None
-    assert legacy.components.leak.value == parser.components.leak.value == 30.0
-    assert legacy.components.leak.score == parser.components.leak.score
-    assert legacy.components.leak.score < legacy.components.leak.max_score
+    assert via_lps.components.leak is not None and via_lpm.components.leak is not None
+    assert via_lps.components.leak.value == via_lpm.components.leak.value == 30.0
+    assert via_lps.components.leak.score == via_lpm.components.leak.score
+    assert via_lps.components.leak.score < via_lps.components.leak.max_score
 
 
 def test_parser_large_leak_reduces_component_and_flags_callout():
-    """A genuinely large parser leak (48 L/min) still penalizes the leak component."""
-    score = compute_therapy_score(_session(avg_leak=48.0, leak_unit="L/min", ahi=2.0))
+    """A genuinely large parser leak (0.8 L/s = 48 L/min) still penalizes the component."""
+    score = compute_therapy_score(_session(avg_leak=0.8, leak_unit="L/s", ahi=2.0))
 
     assert score.components.leak is not None
     assert score.components.leak.value == 48.0

@@ -1194,6 +1194,44 @@ def test_persist_session_row_flattens_only_present_settings():
     assert persist._session_settings_map(_session([placeholder])) == {}
 
 
+def test_persist_session_row_labels_parser_leak_as_lps():
+    """The cpap-parser bridge must persist leak_unit='L/s', matching the raw values.
+
+    Regression: it previously stored 'L/min' while the values were raw Leak.2s
+    (L/s) magnitude, which made every leak figure read ~60x too low. cpap-py leak
+    is numerically identical to the legacy 'L/s' channel, so the row must carry the
+    truthful 'L/s' unit (same as importer.import_sessions) for display to scale it.
+    """
+    from importer.loaders import persist
+    from importer.loaders.models import Session
+
+    start = datetime(2026, 6, 1, 22, 0)
+    session = Session(
+        source_session_key="resmed:LEAK:2026-06-01",
+        machine_key="LEAK",
+        start_time=start,
+        end_time=start + timedelta(hours=8),
+        machine_local_date="2026-06-01",
+        timezone_basis="machine_local",
+    )
+    row = persist._session_row(
+        session=session,
+        user_id="u",
+        machine_id="m",
+        import_run_id="r",
+        folder_date=date(2026, 6, 1),
+        start_dt=start,
+        duration_seconds=28800,
+        derived={},
+        serial="SER",
+        manufacturer="ResMed",
+        machine_tz_name="UTC",
+        has_detailed=True,
+    )
+    assert row["leak_unit"] == "L/s"
+    assert row["leak_kind"] == "unintentional"
+
+
 def test_build_session_emits_therapy_aggregate_derived_values():
     """The ``therapy_aggregates`` comparator's source values ARE emitted.
 
@@ -1271,15 +1309,17 @@ def test_signal_metrics_derives_leak_p95_distinct_from_pressure_p95():
     """The loader emits a leak 95th percentile from the leak channel, not pressure.
 
     Regression for the nightly leak card displaying ``p95_pressure``. ``_signal_metrics``
-    must derive ``p95_leak`` from the concatenated ``timeseries.leak`` samples, in the
-    leak channel's own units (L/min), and keep it independent from the set-pressure
-    percentile so the API/UI can label the leak stat honestly.
+    must derive ``p95_leak`` from the concatenated ``timeseries.leak`` samples, tagged with
+    the raw Leak.2s unit (``L/s`` — cpap-py's leak is numerically identical to the legacy
+    channel), and keep it independent from the set-pressure percentile so the API/UI can
+    label the leak stat honestly and scale it correctly.
     """
     from importer.loaders.resmed_native import ResMedNativeLoader
 
-    # Leak 95th percentile (2.4) differs from both its mean and the pressure p95 (10.0),
-    # so a regression that aliased one onto the other would be caught.
-    leak = [0.0] * 19 + [2.4]
+    # Leak 95th percentile (0.04 L/s) differs from both its mean and the pressure p95
+    # (10.0); a regression that aliased one onto the other would be caught. 0.04 L/s is
+    # the OSCAR-style 2.4 L/min p95 *before* display scaling — stored verbatim, not x60.
+    leak = [0.0] * 19 + [0.04]
     timeseries = SimpleNamespace(
         set_pressure=[10.0] * 20,
         leak=leak,
@@ -1293,8 +1333,9 @@ def test_signal_metrics_derives_leak_p95_distinct_from_pressure_p95():
 
     derived = {dv.key: (dv.value, dv.unit) for dv in ResMedNativeLoader._signal_metrics(detailed)}
 
-    assert derived["p95_leak"] == (2.4, "L/min")
-    assert derived["avg_leak"][0] == 0.12  # mean of the leak channel, not the percentile
+    # Raw L/s magnitude is stored verbatim (display layer multiplies by 60 -> 2.4 L/min).
+    assert derived["p95_leak"] == (0.04, "L/s")
+    assert derived["avg_leak"][1] == "L/s"
     assert derived["p95_pressure"] == (10.0, "cmH2O")
     # The leak percentile is not the pressure percentile.
     assert derived["p95_leak"][0] != derived["p95_pressure"][0]

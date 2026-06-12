@@ -500,8 +500,8 @@ class ResMedNativeLoader(LoaderAdapter):
           decodes ``Press.2s`` into ``set_pressure``; before that it was dropped
           and we fell back to ``mask_pressure``.)
         * ``timeseries.leak`` (``Leak.2s``)               -> ``avg_leak`` /
-          ``p95_leak`` (mean + 95th-percentile leak, both in the leak channel's
-          own units — never the pressure percentile).
+          ``p95_leak`` (mean + 95th-percentile leak in L/s — the raw Leak.2s
+          magnitude, never the pressure percentile; display scales it to L/min).
         * ``timeseries.respiratory_rate`` (``RespRate.2s``) -> ``avg_resp_rate``
         * ``timeseries.tidal_volume`` (``TidVol.2s``)     -> ``avg_tidal_vol``
         * ``timeseries.minute_ventilation`` (``MinVent.2s``) -> ``avg_min_vent``
@@ -545,8 +545,10 @@ class ResMedNativeLoader(LoaderAdapter):
         metrics: list[tuple[str, NormalizedScalar, str | None]] = [
             ("avg_pressure", safe_mean(positive_pressure), "cmH2O"),
             ("p95_pressure", percentile(positive_pressure, 0.95), "cmH2O"),
-            ("avg_leak", safe_mean(channels["leak"]), "L/min"),
-            ("p95_leak", percentile(channels["leak"], 0.95), "L/min"),
+            # Leak is liters/second (raw Leak.2s magnitude), same as the legacy path;
+            # stored verbatim and normalized to L/min only for display.
+            ("avg_leak", safe_mean(channels["leak"]), "L/s"),
+            ("p95_leak", percentile(channels["leak"], 0.95), "L/s"),
             ("avg_resp_rate", safe_mean(resp_rate), "1/min"),
             ("avg_tidal_vol", safe_mean(tidal_volume), "mL"),
             ("avg_min_vent", safe_mean(minute_ventilation), "L/min"),

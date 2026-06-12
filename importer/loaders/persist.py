@@ -384,7 +384,14 @@ def _session_row(
         "device_serial": serial,
         "manufacturer": manufacturer,
         "leak_kind": "unintentional",
-        "leak_unit": "L/min",
+        # cpap-py's ``timeseries.leak`` is numerically identical to the raw ResMed
+        # ``Leak.2s`` channel (see ResMedNativeLoader._signal_metrics / _large_leak_events,
+        # which apply the same 0.4 L/s threshold), i.e. liters/second — the same unit
+        # and magnitude the legacy importer persists (import_sessions.py: 'L/s'). Storing
+        # 'L/min' here mislabeled it and made every leak read ~60x too low; the truthful
+        # unit is 'L/s', which the L/min-normalizing consumers (api/leak_units.py,
+        # frontend leakToLpm) then scale correctly for display.
+        "leak_unit": "L/s",
         "ahi": ahi,
         "central_apnea_count": event_counts["Central Apnea"],
         "obstructive_apnea_count": event_counts["Obstructive Apnea"],
