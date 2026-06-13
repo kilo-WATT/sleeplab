@@ -165,14 +165,14 @@ export default function EventTimeline({
           onPointerUp={finishWindowDrag}
           onPointerCancel={finishWindowDrag}
         >
-          <div
-            className={`absolute inset-y-0 rounded-[10px] border-2 border-[var(--accent)] bg-[rgba(82,81,167,0.10)] ${
-              selectedTimeDomain ? 'cursor-grab active:cursor-grabbing' : ''
-            }`}
-            style={{ left: `${windowLeftPct}%`, width: `${Math.min(windowWidthPct, 100 - windowLeftPct)}%` }}
-            aria-label="Selected graph window"
-            onPointerDown={handleWindowPointerDown}
-          />
+          {selectedTimeDomain ? (
+            <div
+              className="absolute inset-y-0 cursor-grab rounded-[10px] border-2 border-[var(--accent)] bg-[rgba(82,81,167,0.10)] active:cursor-grabbing"
+              style={{ left: `${windowLeftPct}%`, width: `${Math.min(windowWidthPct, 100 - windowLeftPct)}%` }}
+              aria-label="Selected graph window"
+              onPointerDown={handleWindowPointerDown}
+            />
+          ) : null}
           {events.map((evt) => {
             const isSelected = selectedEventId === evt.id
             const ts = eventTimestamp(evt, fallbackStartTs)

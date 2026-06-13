@@ -202,6 +202,7 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByRole('heading', { name: 'Events' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Whole-night navigator' })).toBeInTheDocument()
     expect(screen.getByLabelText('Event picker')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Selected graph window')).not.toBeInTheDocument()
     expect(screen.getByText(/Pressure, leak, flow limitation, respiratory rate/)).toBeInTheDocument()
     expect(screen.getByText('Notes & tags')).toBeInTheDocument()
     expect(screen.getByText('Therapy score')).toBeInTheDocument()
@@ -259,6 +260,11 @@ describe('SessionDetail timezone display', () => {
     expect(summary.className).toContain('space-y-3')
     expect(metrics.className).toContain('md:grid-cols-6')
     expect(metrics.className).toContain('xl:grid-cols-5')
+    for (const metricCard of Array.from(metrics.children)) {
+      expect(metricCard.firstElementChild).toHaveClass('justify-center', 'px-5', 'py-5')
+      expect(metricCard.firstElementChild?.lastElementChild).toHaveClass('min-h-4')
+    }
+    expect(metrics.querySelector('[aria-hidden="true"]')).toHaveClass('invisible')
     expect(components.className).toContain('space-y-2')
     expect(score.className).not.toContain('col-span')
     expect(score.className).not.toContain('w-screen')
@@ -280,7 +286,9 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByTestId('therapy-component-duration')).toHaveAttribute('data-score-tone', 'poor')
     expect(screen.getByTestId('therapy-component-spo2')).toHaveAttribute('data-score-tone', 'unavailable')
     expect(within(screen.getByTestId('therapy-component-ahi')).getByLabelText('AHI target')).toBeInTheDocument()
+    expect(within(screen.getByTestId('therapy-component-ahi')).getByLabelText('AHI value')).toBeInTheDocument()
     expect(within(screen.getByTestId('therapy-component-leak')).getByLabelText('Leak target')).toBeInTheDocument()
+    expect(within(screen.getByTestId('therapy-component-duration')).getByLabelText('Duration goal')).toBeInTheDocument()
   })
 
   it('uses singular event grammar in the therapy gauge', async () => {

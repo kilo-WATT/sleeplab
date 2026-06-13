@@ -1008,11 +1008,16 @@ function NightMetric({
 
   return (
     <Card className={`min-w-0 ${className}`}>
-      <CardContent className="flex min-h-32 h-full flex-col justify-center p-5">
+      <CardContent className="flex min-h-32 h-full flex-col justify-center px-5 py-5">
         <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
         <p className={`mt-2 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
         <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{note}</p>
-        {detail ? <p className="mt-2 text-[11px] leading-4 text-[var(--muted-foreground)]">{detail}</p> : null}
+        <p
+          aria-hidden={!detail}
+          className={`mt-2 min-h-4 text-[11px] leading-4 text-[var(--muted-foreground)] ${detail ? '' : 'invisible'}`}
+        >
+          {detail ?? 'Reserved detail'}
+        </p>
       </CardContent>
     </Card>
   )
@@ -1163,14 +1168,14 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
       data-testid="therapy-score-card"
       className="relative z-20 h-full min-w-0 overflow-visible border-[rgba(82,81,167,0.28)] bg-[linear-gradient(145deg,rgba(67,56,202,0.96),rgba(109,63,240,0.92))] text-white"
     >
-      <CardContent className="grid gap-4 px-4 pb-4 pt-4 md:grid-cols-[minmax(220px,0.75fr)_minmax(0,2fr)] md:items-center sm:px-5 sm:pb-5 sm:pt-5">
-        <div>
-          <div className="mb-2 flex items-center gap-1.5">
+      <CardContent className="grid gap-4 px-4 pb-4 pt-4 md:grid-cols-[minmax(220px,0.75fr)_minmax(0,2fr)] sm:px-5 sm:pb-5 sm:pt-5">
+        <div className="flex flex-col">
+          <div className="flex items-center gap-1.5">
             <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-white/70">Therapy score</p>
             <TherapyScoreHelp />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="mt-5 flex items-center gap-3">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-white/14 text-2xl font-extrabold leading-none text-white shadow-sm">
               {score.total}
             </div>
@@ -1185,7 +1190,7 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
             </div>
           </div>
 
-          <p className="mt-3 text-xs leading-4 text-white/75">{score.callout}</p>
+          <p className="mt-3 text-xs leading-4 text-white/75 md:mt-auto md:pt-4">{score.callout}</p>
         </div>
 
         <div data-testid="therapy-score-components" className="space-y-2">
@@ -1196,6 +1201,11 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
             max={30}
             target={5}
             targetLabel="Target <5"
+            zones={[
+              { end: 5, tone: 'good' },
+              { end: 15, tone: 'caution' },
+              { end: 30, tone: 'poor' },
+            ]}
             displayValue={session.ahi == null
               ? 'Unavailable'
               : `${session.ahi.toFixed(1)} ${session.ahi === 1 ? 'event' : 'events'}/hr`}
@@ -1208,6 +1218,11 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
             max={48}
             target={24}
             targetLabel="Large leak 24 L/min"
+            zones={[
+              { end: 18, tone: 'good' },
+              { end: 24, tone: 'caution' },
+              { end: 48, tone: 'poor' },
+            ]}
             displayValue={leakLpm == null ? 'Unavailable' : `${leakLpm.toFixed(1)} L/min`}
             tone={leakLpm == null ? 'unavailable' : leakLpm < 18 ? 'good' : leakLpm <= 24 ? 'caution' : 'poor'}
           />
@@ -1218,6 +1233,12 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
             max={10}
             target={4}
             targetLabel="Compliance 4h · goal 7h"
+            secondaryTarget={7}
+            zones={[
+              { end: 4, tone: 'poor' },
+              { end: 7, tone: 'caution' },
+              { end: 10, tone: 'good' },
+            ]}
             displayValue={score.components.duration
               ? `${session.duration_hours.toFixed(1)} ${session.duration_hours === 1 ? 'hour' : 'hours'}`
               : 'Unavailable'}
@@ -1230,6 +1251,7 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
             max={100}
             target={90}
             targetLabel="No oximetry data"
+            zones={[]}
             displayValue="Unavailable"
             tone="unavailable"
           />
@@ -1245,7 +1267,9 @@ function TherapyGauge({
   value,
   max,
   target,
+  secondaryTarget,
   targetLabel,
+  zones,
   displayValue,
   tone,
 }: {
@@ -1254,32 +1278,37 @@ function TherapyGauge({
   value: number | null
   max: number
   target: number
+  secondaryTarget?: number
   targetLabel: string
+  zones: Array<{ end: number; tone: 'good' | 'caution' | 'poor' }>
   displayValue: string
   tone: 'good' | 'caution' | 'poor' | 'unavailable'
 }) {
-  const fillPercent = value == null ? 0 : Math.min(100, Math.max(0, (value / max) * 100))
+  const valuePercent = value == null ? 0 : Math.min(100, Math.max(0, (value / max) * 100))
   const targetPercent = Math.min(100, Math.max(0, (target / max) * 100))
+  const secondaryTargetPercent = secondaryTarget == null
+    ? null
+    : Math.min(100, Math.max(0, (secondaryTarget / max) * 100))
   const toneClasses = {
     good: {
       row: 'border-[rgba(152,188,105,0.36)] bg-[rgba(152,188,105,0.10)]',
       value: 'text-[#d5edb8]',
-      bar: 'bg-[#98bc69]',
+      marker: 'bg-[#d5edb8]',
     },
     caution: {
       row: 'border-[rgba(240,214,74,0.40)] bg-[rgba(240,214,74,0.12)]',
       value: 'text-[#fff0a0]',
-      bar: 'bg-[#f0d64a]',
+      marker: 'bg-[#fff0a0]',
     },
     poor: {
       row: 'border-[rgba(255,138,128,0.42)] bg-[rgba(255,138,128,0.13)]',
       value: 'text-[#ffc1bb]',
-      bar: 'bg-[#ff8a80]',
+      marker: 'bg-[#ffc1bb]',
     },
     unavailable: {
       row: 'border-white/10 bg-white/[0.06]',
       value: 'text-white/60',
-      bar: 'bg-transparent',
+      marker: 'bg-white/45',
     },
   }[tone]
 
@@ -1295,17 +1324,41 @@ function TherapyGauge({
           {displayValue}
         </span>
       </div>
-      <div className="relative mt-2 h-2 overflow-hidden rounded-full bg-white/20">
-        <div
-          className={`h-full rounded-full ${toneClasses.bar}`}
-          style={{ width: `${fillPercent}%` }}
-        />
+      <div className="relative mt-2 h-3 rounded-full bg-white/18">
         {tone !== 'unavailable' ? (
-          <span
-            aria-label={`${label} target`}
-            className="absolute inset-y-[-2px] w-0.5 rounded-full bg-white shadow-[0_0_0_1px_rgba(38,36,96,0.45)]"
-            style={{ left: `${targetPercent}%` }}
-          />
+          <div className="absolute inset-0 flex overflow-hidden rounded-full">
+            {zones.map((zone, index) => {
+              const start = index === 0 ? 0 : zones[index - 1].end
+              const width = ((zone.end - start) / max) * 100
+              const zoneClass = zone.tone === 'good'
+                ? 'bg-[#829f62]'
+                : zone.tone === 'caution'
+                  ? 'bg-[#c7ad55]'
+                  : 'bg-[#c47775]'
+              return <span key={`${zone.tone}-${zone.end}`} className={zoneClass} style={{ width: `${width}%` }} />
+            })}
+          </div>
+        ) : null}
+        {tone !== 'unavailable' ? (
+          <>
+            <span
+              aria-label={`${label} target`}
+              className="absolute inset-y-[-3px] w-0.5 -translate-x-1/2 bg-white/90 shadow-[0_0_0_1px_rgba(38,36,96,0.45)]"
+              style={{ left: `${targetPercent}%` }}
+            />
+            {secondaryTargetPercent != null ? (
+              <span
+                aria-label={`${label} goal`}
+                className="absolute inset-y-[-3px] w-px -translate-x-1/2 bg-white/75"
+                style={{ left: `${secondaryTargetPercent}%` }}
+              />
+            ) : null}
+            <span
+              aria-label={`${label} value`}
+              className={`absolute -top-1.5 h-6 w-1.5 -translate-x-1/2 rounded-full border border-[rgba(38,36,96,0.55)] shadow-[0_1px_4px_rgba(24,22,72,0.45)] ${toneClasses.marker}`}
+              style={{ left: `${valuePercent}%` }}
+            />
+          </>
         ) : null}
       </div>
       <p className="mt-1.5 text-[10px] font-medium text-white/55">{targetLabel}</p>
