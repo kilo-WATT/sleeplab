@@ -30,9 +30,7 @@ const event = {
 }
 
 describe('FullNightFlowChart', () => {
-  it('renders explicit units, large-night point-limit messaging, and clickable event markers', () => {
-    const onSelectEvent = vi.fn()
-
+  it('renders explicit units and large-night point-limit messaging', () => {
     render(
       <FullNightFlowChart
         waveform={waveform}
@@ -42,18 +40,15 @@ describe('FullNightFlowChart', () => {
           new Date(waveform.end_time).getTime(),
         ]}
         wholeNight
-        onSelectEvent={onSelectEvent}
         onSelectWindow={vi.fn()}
         onPan={vi.fn()}
+        onSelectRange={vi.fn()}
       />,
     )
 
     expect(screen.getByText('Flow (L/s)')).toBeInTheDocument()
     expect(screen.getByText(/900,000 source samples/)).toBeInTheDocument()
     expect(screen.getByText(/preserves local extrema/)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: /inspect obstructive apnea/i }))
-    expect(onSelectEvent).toHaveBeenCalledWith(event)
   })
 
   it('exposes selectable windows and pan controls', () => {
@@ -69,18 +64,60 @@ describe('FullNightFlowChart', () => {
           new Date(waveform.end_time).getTime(),
         ]}
         wholeNight={false}
-        onSelectEvent={vi.fn()}
         onSelectWindow={onSelectWindow}
         onPan={onPan}
+        onSelectRange={vi.fn()}
       />,
     )
 
     fireEvent.click(screen.getByRole('button', { name: '10 min' }))
     fireEvent.click(screen.getByRole('button', { name: 'Earlier waveform window' }))
     fireEvent.click(screen.getByRole('button', { name: 'Whole night' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset view' }))
 
     expect(onSelectWindow).toHaveBeenNthCalledWith(1, 10)
     expect(onPan).toHaveBeenCalledWith(-1)
     expect(onSelectWindow).toHaveBeenNthCalledWith(2, null)
+    expect(onSelectWindow).toHaveBeenNthCalledWith(3, null)
+  })
+
+  it('emits a time range after a desktop drag selection', () => {
+    const onSelectRange = vi.fn()
+    render(
+      <FullNightFlowChart
+        waveform={waveform}
+        events={[event]}
+        timeDomain={[
+          new Date(waveform.start_time).getTime(),
+          new Date(waveform.end_time).getTime(),
+        ]}
+        wholeNight
+        onSelectWindow={vi.fn()}
+        onPan={vi.fn()}
+        onSelectRange={onSelectRange}
+      />,
+    )
+
+    const overlay = screen.getByLabelText('Drag to zoom flow chart')
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 200,
+      width: 1000,
+      height: 200,
+      toJSON: () => ({}),
+    })
+    fireEvent.pointerDown(overlay, { clientX: 250, pointerId: 1, pointerType: 'mouse' })
+    fireEvent.pointerMove(overlay, { clientX: 750, pointerId: 1, pointerType: 'mouse' })
+    fireEvent.pointerUp(overlay, { clientX: 750, pointerId: 1, pointerType: 'mouse' })
+
+    const start = new Date(waveform.start_time).getTime()
+    expect(onSelectRange).toHaveBeenCalledWith([
+      start + 150_000,
+      start + 450_000,
+    ])
   })
 })

@@ -15,7 +15,6 @@ const apiMock = vi.hoisted(() => ({
   getWearableData: vi.fn(),
   getSessionSpo2: vi.fn(),
   getSessionTherapyContext: vi.fn(),
-  getEventWindow: vi.fn(),
   updateSessionTimezone: vi.fn(),
   getImportSettings: vi.fn(),
 }))
@@ -147,8 +146,8 @@ describe('SessionDetail timezone display', () => {
   it('uses the stored end timestamp instead of adding usage duration to the start', async () => {
     renderSessionDetail()
 
-    expect(await screen.findByText(/03:59 AM/)).toBeInTheDocument()
-    expect(screen.getByText(/09:31 AM/)).toBeInTheDocument()
+    expect((await screen.findAllByText(/03:59 AM/)).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/09:31 AM/).length).toBeGreaterThan(0)
   })
 
   it('shows leak P95 in L/min and never pressure units or pressure P95 on the leak card', async () => {
@@ -199,9 +198,26 @@ describe('SessionDetail timezone display', () => {
 
     expect(await screen.findByRole('heading', { name: 'Daily Review Graphs' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Events' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Event flags' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Whole-night navigator' })).toBeInTheDocument()
     expect(screen.getByLabelText('Event picker')).toBeInTheDocument()
     expect(screen.getByText(/Pressure, leak, flow limitation, respiratory rate/)).toBeInTheDocument()
+  })
+
+  it('selects an event from the event list without rendering duplicate inspector charts', async () => {
+    apiMock.getEvents.mockResolvedValue([{
+      id: 7,
+      event_type: 'Obstructive Apnea',
+      onset_seconds: 300,
+      duration_seconds: 12,
+      event_datetime: '2026-06-02T04:05:00Z',
+    }])
+    renderSessionDetail()
+
+    fireEvent.click(await screen.findByRole('row', { name: /OA 04:05 AM 12s Obstructive Apnea/i }))
+
+    expect(screen.getByText('Selected event')).toBeInTheDocument()
+    expect(screen.queryByText('Event Inspector')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clear selection' })).toBeInTheDocument()
   })
 
   it('renders stored full-night parser flow without claiming unsupported signals', async () => {
@@ -233,7 +249,7 @@ describe('SessionDetail timezone display', () => {
     expect(screen.queryByText('Full-night flow unavailable')).not.toBeInTheDocument()
   })
 
-  it('opens the event inspector and requests a focused chunk window from a flow marker', async () => {
+  it('centers the shared graph window on an event and shows a compact readout', async () => {
     const session = sessionDetail('America/New_York')
     session.data_availability.full_night_flow_available = true
     const event = {
@@ -262,26 +278,14 @@ describe('SessionDetail timezone display', () => {
       ],
       values: [-0.5, 0, 0.7],
     })
-    apiMock.getEventWindow.mockResolvedValue({
-      event,
-      neighboring_events: [event],
-      metrics: emptyMetrics,
-      waveform: { timestamps: [], flow: [], pressure: [] },
-      leak_kind: 'total',
-      leak_unit: 'L/s',
-    })
-
     renderSessionDetail()
 
-    fireEvent.click(await screen.findByRole('button', { name: /inspect obstructive apnea/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /obstructive apnea at/i }))
 
-    expect(await screen.findByText('Event Inspector')).toBeInTheDocument()
+    expect(await screen.findByText('Selected event')).toBeInTheDocument()
+    expect(screen.getByLabelText('Selected event flow range')).toHaveTextContent('L/s')
+    expect(screen.queryByText('Event Inspector')).not.toBeInTheDocument()
     await waitFor(() => {
-      expect(apiMock.getEventWindow).toHaveBeenCalledWith(
-        session.id,
-        event.id,
-        expect.any(Object),
-      )
       expect(apiMock.getWaveform).toHaveBeenCalledWith(
         session.id,
         'flow_rate',

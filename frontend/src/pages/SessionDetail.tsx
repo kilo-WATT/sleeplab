@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, EventWindowResponse, TherapyScoreComponent, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, TherapyScoreComponent, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
 import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
-import EventInspector from '../components/EventInspector'
 import EventTimeline from '../components/EventTimeline'
 import InfoPopover from '../components/InfoPopover'
 import MetricsChart from '../components/MetricsChartSplit'
@@ -52,23 +51,6 @@ function sameTags(a: string[], b: string[]) {
   const left = [...a].sort()
   const right = [...b].sort()
   return left.every((tag, index) => tag === right[index])
-}
-
-const EVENT_WINDOW_PRESETS: Record<number, { before: number; after: number }> = {
-  1: { before: 30, after: 30 },
-  3: { before: 60, after: 120 },
-  5: { before: 120, after: 180 },
-}
-
-/**
- * React component or element to render the e v e n t_ w i n d o w_ d o w n s a m p l e.
- *
- * @returns The rendered React element.
- */
-const EVENT_WINDOW_DOWNSAMPLE: Record<number, number> = {
-  1: 2,
-  3: 4,
-  5: 6,
 }
 
 /**
@@ -145,12 +127,6 @@ export default function SessionDetail() {
   const [tagsError, setTagsError] = useState<string | null>(null)
   const [isTagsSubmitting, setIsTagsSubmitting] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
-  const [isEventInspectorOpen, setIsEventInspectorOpen] = useState(false)
-  const [eventWindow, setEventWindow] = useState<EventWindowResponse | null>(null)
-  const [eventWindowLoading, setEventWindowLoading] = useState(false)
-  const [eventWindowMinutes, setEventWindowMinutes] = useState(3)
-  const eventWindowCacheRef = useRef<Map<string, EventWindowResponse>>(new Map())
-  const eventInspectorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     // These resets intentionally clear the previous session while the new route loads.
@@ -174,10 +150,6 @@ export default function SessionDetail() {
     setTagsMessage(null)
     setTagsError(null)
     setSelectedEventId(null)
-    setIsEventInspectorOpen(false)
-    setEventWindow(null)
-    setEventWindowLoading(false)
-    eventWindowCacheRef.current.clear()
     Promise.all([
       api.getSessionByDate(sessionDate),
     ]).then(([s]) => {
@@ -255,45 +227,6 @@ export default function SessionDetail() {
     }
   }, [session, waveformWindow])
 
-  useEffect(() => {
-    if (!session || !selectedEventId) return
-    const preset = EVENT_WINDOW_PRESETS[eventWindowMinutes] ?? EVENT_WINDOW_PRESETS[3]
-    const waveformDownsample = EVENT_WINDOW_DOWNSAMPLE[eventWindowMinutes] ?? 2
-    const cacheKey = `${selectedEventId}:${eventWindowMinutes}`
-    const cached = eventWindowCacheRef.current.get(cacheKey)
-    if (cached) {
-      setEventWindow(cached)
-      setEventWindowLoading(false)
-      return
-    }
-
-    let cancelled = false
-    setEventWindowLoading(true)
-    api.getEventWindow(session.id, selectedEventId, {
-      before_seconds: preset.before,
-      after_seconds: preset.after,
-      waveform_downsample: waveformDownsample,
-    }).then((data) => {
-      eventWindowCacheRef.current.set(cacheKey, data)
-      if (!cancelled) setEventWindow(data)
-    }).catch(() => {
-      if (!cancelled) setEventWindow(null)
-    }).finally(() => {
-      if (!cancelled) setEventWindowLoading(false)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [eventWindowMinutes, selectedEventId, session])
-
-  useEffect(() => {
-    if (!isEventInspectorOpen) return
-    window.requestAnimationFrame(() => {
-      eventInspectorRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-    })
-  }, [isEventInspectorOpen, selectedEventId])
-
   function clampWaveformWindow(center: number, minutes: number): [number, number] {
     const duration = minutes * 60_000
     const fallbackStart = session ? new Date(session.start_datetime).getTime() : center - duration / 2
@@ -308,8 +241,7 @@ export default function SessionDetail() {
 
   function inspectEvent(event: EventRecord) {
     setSelectedEventId(event.id)
-    setIsEventInspectorOpen(true)
-    setWaveformLoading(true)
+    setWaveformLoading(Boolean(session?.data_availability.full_night_flow_available))
     setWaveformError(null)
     setWaveformWindow(clampWaveformWindow(new Date(event.event_datetime).getTime(), 5))
   }
@@ -319,19 +251,9 @@ export default function SessionDetail() {
     : events.findIndex((event) => event.id === selectedEventId)
   const selectedEvent = selectedEventIndex >= 0 ? events[selectedEventIndex] : null
 
-  function inspectRelativeEvent(delta: -1 | 1) {
-    if (selectedEventIndex < 0) return
-    const nextEvent = events[selectedEventIndex + delta]
-    if (nextEvent) {
-      inspectEvent(nextEvent)
-    }
-  }
-
   function clearSelectedEvent() {
     setSelectedEventId(null)
-    setIsEventInspectorOpen(false)
-    setEventWindow(null)
-    setWaveformLoading(true)
+    setWaveformLoading(Boolean(session?.data_availability.full_night_flow_available))
     setWaveformWindow(null)
   }
 
@@ -362,6 +284,12 @@ export default function SessionDetail() {
     setWaveformWindow(clampWaveformWindow(center, duration / 60_000))
   }
 
+  function setSharedWaveformWindow(window: [number, number]) {
+    setWaveformLoading(Boolean(session?.data_availability.full_night_flow_available))
+    setWaveformError(null)
+    setWaveformWindow(window)
+  }
+
   async function handleTimezoneSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!session) return
@@ -380,9 +308,6 @@ export default function SessionDetail() {
       setEvents(nextEvents)
       setMetrics(nextMetrics)
       setSelectedEventId(null)
-      setIsEventInspectorOpen(false)
-      setEventWindow(null)
-      eventWindowCacheRef.current.clear()
       if (updated.has_spo2) {
         api.getSessionSpo2(updated.id).then(setSpo2).catch(() => setSpo2(null))
       } else {
@@ -455,6 +380,25 @@ export default function SessionDetail() {
     new Date(endTime).getTime(),
   ]
   const reviewTimeDomain = waveformWindow ?? waveformBounds ?? metricsTimeDomain ?? sessionTimeDomain
+  const wholeNightDomain = waveformBounds ?? metricsTimeDomain ?? sessionTimeDomain
+  const visibleMetricPoints = metricsToPoints(metrics).filter(
+    (point) => point.ts >= reviewTimeDomain[0] && point.ts <= reviewTimeDomain[1],
+  )
+  const finiteFlow = (fullNightFlow?.values ?? []).filter((value): value is number => value != null)
+  const finitePressure = visibleMetricPoints
+    .map((point) => point.pressure)
+    .filter((value): value is number => value != null)
+  const finiteLeak = visibleMetricPoints
+    .map((point) => point.leak)
+    .filter((value): value is number => value != null)
+  const selectedEventStats = selectedEvent ? {
+    flowMin: finiteFlow.length ? Math.min(...finiteFlow) : null,
+    flowMax: finiteFlow.length ? Math.max(...finiteFlow) : null,
+    averagePressure: finitePressure.length
+      ? finitePressure.reduce((sum, value) => sum + value, 0) / finitePressure.length
+      : null,
+    maxLeak: finiteLeak.length ? Math.max(...finiteLeak) : null,
+  } : null
   const badge = ahiBadge(session.ahi)
   const tagsChanged = !sameTags(tagsDraft, session.tags ?? [])
   const hasDeviceSettings = Boolean(session.therapy_mode || session.mask_type || session.humidity_level != null || session.temperature_c != null)
@@ -665,17 +609,12 @@ export default function SessionDetail() {
               Synchronized event flags and therapy signals for serious nightly review.
             </p>
           </div>
-          {selectedEvent ? (
-            <Button variant="outline" size="sm" onClick={clearSelectedEvent}>
-              Clear event and show whole night
-            </Button>
-          ) : null}
         </div>
         <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
           <Card className="xl:sticky xl:top-4">
             <CardHeader className="pb-3">
               <CardTitle>Events</CardTitle>
-              <CardDescription>Select an event to center the graph stack and open detailed waveforms.</CardDescription>
+              <CardDescription>Select an event to center the synchronized graph stack around it.</CardDescription>
             </CardHeader>
             <CardContent>
               <EventTable events={events} selectedEventId={selectedEventId} onSelectEvent={inspectEvent} />
@@ -684,20 +623,34 @@ export default function SessionDetail() {
           <div className="min-w-0 space-y-4">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle>Event flags</CardTitle>
-                <CardDescription>All tracks below use this same visible time window.</CardDescription>
+                <CardTitle>Whole-night navigator</CardTitle>
+                <CardDescription>Events stay visible across the whole night while the outlined box controls every graph track.</CardDescription>
               </CardHeader>
               <CardContent>
                 <EventTimeline
                   events={events}
                   durationSeconds={session.duration_seconds}
                   startDatetime={session.start_datetime}
-                  timeDomain={reviewTimeDomain}
+                  wholeNightDomain={wholeNightDomain}
+                  selectedTimeDomain={waveformWindow}
                   selectedEventId={selectedEventId}
                   onSelectEvent={inspectEvent}
+                  onWindowChange={setSharedWaveformWindow}
                 />
               </CardContent>
             </Card>
+            {selectedEvent && selectedEventStats ? (
+              <SelectedEventReadout
+                event={selectedEvent}
+                flowMin={selectedEventStats.flowMin}
+                flowMax={selectedEventStats.flowMax}
+                averagePressure={selectedEventStats.averagePressure}
+                maxLeak={selectedEventStats.maxLeak}
+                returnedSamples={fullNightFlow?.returned_sample_count ?? 0}
+                sourceSamples={fullNightFlow?.sample_count ?? 0}
+                onClear={clearSelectedEvent}
+              />
+            ) : null}
             {fullNightFlow ? (
               <FullNightFlowChart
                 waveform={fullNightFlow}
@@ -705,9 +658,9 @@ export default function SessionDetail() {
                 timeDomain={reviewTimeDomain}
                 wholeNight={waveformWindow == null}
                 loading={waveformLoading}
-                onSelectEvent={inspectEvent}
                 onSelectWindow={selectWaveformWindow}
                 onPan={panWaveformWindow}
+                onSelectRange={setSharedWaveformWindow}
               />
             ) : waveformLoading ? (
               <UnavailableDataCard
@@ -732,21 +685,6 @@ export default function SessionDetail() {
                 description="Pressure, leak, flow limitation, respiratory rate, minute ventilation, and snore samples were not imported for this night."
               />
             )}
-            {isEventInspectorOpen && selectedEvent ? (
-              <div ref={eventInspectorRef} className="scroll-mt-4">
-                <EventInspector
-                  data={eventWindow}
-                  loading={eventWindowLoading}
-                  windowMinutes={eventWindowMinutes}
-                  hasPreviousEvent={selectedEventIndex > 0}
-                  hasNextEvent={selectedEventIndex >= 0 && selectedEventIndex < events.length - 1}
-                  onClose={() => setIsEventInspectorOpen(false)}
-                  onWindowMinutesChange={setEventWindowMinutes}
-                  onPreviousEvent={() => inspectRelativeEvent(-1)}
-                  onNextEvent={() => inspectRelativeEvent(1)}
-                />
-              </div>
-            ) : null}
           </div>
         </div>
       </section>
@@ -1176,6 +1114,49 @@ function EventTable({
       </div>
       </div>
     </>
+  )
+}
+
+function SelectedEventReadout({
+  event,
+  flowMin,
+  flowMax,
+  averagePressure,
+  maxLeak,
+  returnedSamples,
+  sourceSamples,
+  onClear,
+}: {
+  event: EventRecord
+  flowMin: number | null
+  flowMax: number | null
+  averagePressure: number | null
+  maxLeak: number | null
+  returnedSamples: number
+  sourceSamples: number
+  onClear: () => void
+}) {
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Selected event</p>
+          <p className="mt-1 font-bold text-[var(--foreground)]">
+            {event.event_type} at {fmtTime(event.event_datetime)}
+            {event.duration_seconds ? ` · ${event.duration_seconds}s` : ''}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-2 text-xs sm:flex sm:flex-wrap sm:items-center">
+          <span aria-label="Selected event flow range"><strong>Flow</strong> {flowMin?.toFixed(2) ?? '—'} to {flowMax?.toFixed(2) ?? '—'} L/s</span>
+          <span aria-label="Selected event average pressure"><strong>Avg pressure</strong> {averagePressure?.toFixed(1) ?? '—'} cmH₂O</span>
+          <span aria-label="Selected event maximum leak"><strong>Max leak</strong> {maxLeak?.toFixed(1) ?? '—'} L/min</span>
+          <span aria-label="Selected event sample quality"><strong>Samples</strong> {returnedSamples.toLocaleString()} / {sourceSamples.toLocaleString()}</span>
+        </div>
+        <Button variant="outline" size="sm" className="min-h-11 sm:min-h-0" onClick={onClear}>
+          Clear selection
+        </Button>
+      </CardContent>
+    </Card>
   )
 }
 

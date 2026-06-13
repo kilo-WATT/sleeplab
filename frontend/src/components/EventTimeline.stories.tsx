@@ -4,6 +4,10 @@ import EventTimeline from './EventTimeline'
 
 const startDatetime = '2023-10-01T23:00:00Z'
 const durationSeconds = 28800 // 8 hours
+const wholeNightDomain: [number, number] = [
+  new Date(startDatetime).getTime(),
+  new Date(startDatetime).getTime() + durationSeconds * 1000,
+]
 
 const events: EventRecord[] = [
   { id: 1, event_type: 'Obstructive Apnea', onset_seconds: 3600, duration_seconds: 15, event_datetime: '2023-10-02T00:00:00Z' },
@@ -18,7 +22,7 @@ const meta: Meta<typeof EventTimeline> = {
   title: 'Components/EventTimeline',
   component: EventTimeline,
   tags: ['autodocs'],
-  args: { events, durationSeconds, startDatetime },
+  args: { events, durationSeconds, startDatetime, wholeNightDomain },
 }
 
 export default meta
@@ -27,7 +31,13 @@ type Story = StoryObj<typeof EventTimeline>
 export const Default: Story = {}
 
 export const WithSelection: Story = {
-  args: { selectedEventId: 3 },
+  args: {
+    selectedEventId: 3,
+    selectedTimeDomain: [
+      new Date(startDatetime).getTime() + 90 * 60_000,
+      new Date(startDatetime).getTime() + 120 * 60_000,
+    ],
+  },
 }
 
 export const Empty: Story = {

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import type { EventRecord } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
@@ -10,9 +10,11 @@ interface Props {
   events: EventRecord[]
   durationSeconds: number
   startDatetime: string
-  timeDomain?: [number, number] | null
+  wholeNightDomain: [number, number]
+  selectedTimeDomain?: [number, number] | null
   selectedEventId?: number | null
   onSelectEvent?: (event: EventRecord) => void
+  onWindowChange?: (window: [number, number]) => void
 }
 
 /**
@@ -48,42 +50,74 @@ function eventTimestamp(event: EventRecord, startTs: number): number {
 /**
  * Renders a proportional event timeline for the current session.
  */
-export default function EventTimeline({ events, durationSeconds, startDatetime, timeDomain, selectedEventId, onSelectEvent }: Props) {
+export default function EventTimeline({
+  events,
+  durationSeconds,
+  startDatetime,
+  wholeNightDomain,
+  selectedTimeDomain,
+  selectedEventId,
+  onSelectEvent,
+  onWindowChange,
+}: Props) {
   const [activeTooltip, setActiveTooltip] = useState<{
     eventType: string
     timeLabel: string
     durationLabel: string
     leftPct: number
   } | null>(null)
-  if (events.length === 0) {
-    return (
-      <div className="rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-soft)] p-6">
-        <p className="text-sm text-[var(--muted-foreground)]">No respiratory events recorded this session.</p>
-      </div>
-    )
-  }
+  const [dragPreview, setDragPreview] = useState<[number, number] | null>(null)
+  const navigatorRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{
+    pointerId: number
+    startX: number
+    initialWindow: [number, number]
+  } | null>(null)
 
   const startTs = new Date(startDatetime).getTime()
   const fallbackStartTs = Number.isFinite(startTs) ? startTs : 0
-  const eventRanges = events.map((event) => {
-    const end = eventTimestamp(event, fallbackStartTs)
-    return [end - (event.duration_seconds ?? 0) * 1000, end] as [number, number]
-  })
-  const requestedDomainStart = timeDomain?.[0]
-  const requestedDomainEnd = timeDomain?.[1]
-  const domainStart = timeDomain && Number.isFinite(requestedDomainStart)
-    ? requestedDomainStart!
-    : Math.min(fallbackStartTs, ...eventRanges.map(([start]) => start))
-  const domainEnd = timeDomain && Number.isFinite(requestedDomainEnd)
-    ? requestedDomainEnd!
-    : Math.max(fallbackStartTs + durationSeconds * 1000, ...eventRanges.map(([, end]) => end))
+  const fallbackEndTs = fallbackStartTs + durationSeconds * 1000
+  const domainStart = Number.isFinite(wholeNightDomain[0]) ? wholeNightDomain[0] : fallbackStartTs
+  const domainEnd = Number.isFinite(wholeNightDomain[1]) ? wholeNightDomain[1] : fallbackEndTs
   const timelineDurationMs = Math.max(domainEnd - domainStart, 1)
-  const visibleEvents = events.filter((event) => {
-    const end = eventTimestamp(event, fallbackStartTs)
-    const start = end - (event.duration_seconds ?? 0) * 1000
-    return end >= domainStart && start <= domainEnd
-  })
-  const eventTypes = [...new Set(visibleEvents.map(e => e.event_type))]
+  const visibleWindow = dragPreview ?? selectedTimeDomain ?? wholeNightDomain
+  const windowStart = Math.max(visibleWindow[0], domainStart)
+  const windowEnd = Math.min(visibleWindow[1], domainEnd)
+  const windowLeftPct = ((windowStart - domainStart) / timelineDurationMs) * 100
+  const windowWidthPct = Math.max(((windowEnd - windowStart) / timelineDurationMs) * 100, 0.8)
+  const eventTypes = [...new Set(events.map(e => e.event_type))]
+
+  function handleWindowPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!selectedTimeDomain || !onWindowChange) return
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      initialWindow: selectedTimeDomain,
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+  }
+
+  function handleNavigatorPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current
+    const rect = navigatorRef.current?.getBoundingClientRect()
+    if (!drag || !rect?.width) return
+    const duration = drag.initialWindow[1] - drag.initialWindow[0]
+    const deltaMs = ((event.clientX - drag.startX) / rect.width) * timelineDurationMs
+    const nextStart = Math.min(
+      Math.max(drag.initialWindow[0] + deltaMs, domainStart),
+      domainEnd - duration,
+    )
+    setDragPreview([nextStart, nextStart + duration])
+  }
+
+  function finishWindowDrag() {
+    if (dragRef.current && dragPreview && onWindowChange) {
+      onWindowChange(dragPreview)
+    }
+    dragRef.current = null
+    setDragPreview(null)
+  }
 
   return (
     <div className="space-y-4">
@@ -117,8 +151,23 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
           </div>
         ) : null}
 
-        <div className="relative h-6 rounded-full bg-[rgba(125,105,93,0.14)]">
-          {visibleEvents.map((evt) => {
+        <div
+          ref={navigatorRef}
+          className="relative h-9 touch-pan-y rounded-[12px] bg-[rgba(125,105,93,0.14)]"
+          aria-label="Whole-night event navigator"
+          onPointerMove={handleNavigatorPointerMove}
+          onPointerUp={finishWindowDrag}
+          onPointerCancel={finishWindowDrag}
+        >
+          <div
+            className={`absolute inset-y-0 rounded-[10px] border-2 border-[var(--accent)] bg-[rgba(82,81,167,0.10)] ${
+              selectedTimeDomain ? 'cursor-grab active:cursor-grabbing' : ''
+            }`}
+            style={{ left: `${windowLeftPct}%`, width: `${Math.min(windowWidthPct, 100 - windowLeftPct)}%` }}
+            aria-label="Selected graph window"
+            onPointerDown={handleWindowPointerDown}
+          />
+          {events.map((evt) => {
             const isSelected = selectedEventId === evt.id
             const ts = eventTimestamp(evt, fallbackStartTs)
             const markerStartTs = evt.duration_seconds
@@ -138,8 +187,8 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
                 aria-label={`${evt.event_type} at ${timeLabel}`}
                 className={`absolute rounded-sm opacity-85 transition focus:outline-none focus:ring-2 focus:ring-[var(--accent)] ${
                   isSelected
-                    ? '-top-1 h-8 z-10 min-w-1.5 ring-2 ring-white shadow-[0_0_0_3px_rgba(148,139,255,0.35),0_0_18px_rgba(148,139,255,0.75)]'
-                    : 'top-0 h-full min-w-1'
+                    ? 'top-1 h-7 z-10 min-w-1.5 ring-2 ring-white shadow-[0_0_0_3px_rgba(148,139,255,0.35),0_0_18px_rgba(148,139,255,0.75)]'
+                    : 'top-1.5 h-6 min-w-1'
                 }`}
                 style={{
                   left: `${xPct}%`,
@@ -168,12 +217,15 @@ export default function EventTimeline({ events, durationSeconds, startDatetime, 
               />
             )
           })}
-          {!visibleEvents.length ? (
+          {!events.length ? (
             <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-[var(--muted-foreground)]">
-              No events in selected window
+              No respiratory events recorded this session
             </span>
           ) : null}
         </div>
+        <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+          Whole-night navigator. Drag the outlined window to pan all graph tracks.
+        </p>
       </div>
     </div>
   )

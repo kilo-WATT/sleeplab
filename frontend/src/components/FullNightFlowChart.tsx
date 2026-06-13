@@ -1,3 +1,4 @@
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   CartesianGrid,
   Line,
@@ -60,9 +61,9 @@ interface Props {
   timeDomain: [number, number]
   wholeNight: boolean
   loading?: boolean
-  onSelectEvent: (event: EventRecord) => void
   onSelectWindow: (minutes: number | null) => void
   onPan: (direction: -1 | 1) => void
+  onSelectRange: (window: [number, number]) => void
 }
 
 export default function FullNightFlowChart({
@@ -71,10 +72,17 @@ export default function FullNightFlowChart({
   timeDomain,
   wholeNight,
   loading = false,
-  onSelectEvent,
   onSelectWindow,
   onPan,
+  onSelectRange,
 }: Props) {
+  const selectionRef = useRef<HTMLDivElement>(null)
+  const [selection, setSelection] = useState<{
+    startX: number
+    currentX: number
+    left: number
+    width: number
+  } | null>(null)
   const data = waveform.timestamps.map((timestamp, index) => ({
     ts: new Date(timestamp).getTime(),
     value: waveform.values[index],
@@ -90,14 +98,51 @@ export default function FullNightFlowChart({
     return end >= domainStart && start <= domainEnd
   })
 
+  function xToTimestamp(clientX: number) {
+    const rect = selectionRef.current?.getBoundingClientRect()
+    if (!rect?.width) return domainStart
+    const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1)
+    return domainStart + ratio * domainDuration
+  }
+
+  function startSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'touch') return
+    const rect = selectionRef.current?.getBoundingClientRect()
+    if (!rect?.width) return
+    setSelection({ startX: event.clientX, currentX: event.clientX, left: event.clientX - rect.left, width: 0 })
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    event.preventDefault()
+  }
+
+  function moveSelection(event: ReactPointerEvent<HTMLDivElement>) {
+    const rect = selectionRef.current?.getBoundingClientRect()
+    if (!rect?.width) return
+    setSelection((current) => current ? {
+      ...current,
+      currentX: event.clientX,
+      left: Math.min(current.startX, event.clientX) - rect.left,
+      width: Math.abs(event.clientX - current.startX),
+    } : null)
+  }
+
+  function finishSelection() {
+    if (!selection) return
+    if (Math.abs(selection.currentX - selection.startX) >= 8) {
+      const start = xToTimestamp(Math.min(selection.startX, selection.currentX))
+      const end = xToTimestamp(Math.max(selection.startX, selection.currentX))
+      onSelectRange([start, end])
+    }
+    setSelection(null)
+  }
+
   return (
     <Card>
       <CardHeader className="gap-4">
         <div>
           <CardTitle>Full-night flow rate</CardTitle>
           <CardDescription>
-            ResMed Flow.40ms at {waveform.sample_rate_hz.toFixed(0)} Hz. Event markers open the detailed
-            inspector; window controls request only overlapping compressed chunks.
+            ResMed Flow.40ms at {waveform.sample_rate_hz.toFixed(0)} Hz. Drag across the desktop chart
+            to zoom; visible windows request only overlapping compressed chunks.
           </CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2" aria-label="Flow chart time window">
@@ -108,6 +153,14 @@ export default function FullNightFlowChart({
             onClick={() => onSelectWindow(null)}
           >
             Whole night
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-11 sm:min-h-0"
+            onClick={() => onSelectWindow(null)}
+          >
+            Reset view
           </Button>
           {[30, 10, 5].map((minutes) => (
             <Button
@@ -148,40 +201,12 @@ export default function FullNightFlowChart({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="relative h-7 rounded-[10px] bg-[var(--surface-soft)]" aria-label="Flow event markers">
-          {visibleEvents.length ? visibleEvents.map((event) => {
-            const [eventStart, eventEnd] = eventBounds(event)
-            const clippedStart = Math.max(eventStart, domainStart)
-            const clippedEnd = Math.min(eventEnd, domainEnd)
-            const left = ((clippedStart - domainStart) / domainDuration) * 100
-            const width = Math.max(((clippedEnd - clippedStart) / domainDuration) * 100, 0.45)
-            const time = formatTime(eventEnd)
-            return (
-              <button
-                key={event.id}
-                type="button"
-                className="absolute top-1 h-5 min-w-1 rounded-sm opacity-90 transition hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                style={{
-                  left: `${Math.min(Math.max(left, 0), 99.5)}%`,
-                  width: `${Math.min(width, Math.max(0.5, 100 - left))}%`,
-                  background: EVENT_COLORS[event.event_type] ?? '#888',
-                }}
-                aria-label={`Inspect ${event.event_type} at ${time}`}
-                title={`${event.event_type} at ${time}`}
-                onClick={() => onSelectEvent(event)}
-              />
-            )
-          }) : (
-            <span className="flex h-full items-center px-3 text-xs text-[var(--muted-foreground)]">
-              No scored respiratory events in this window.
-            </span>
-          )}
-        </div>
         <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
           Flow ({waveform.unit})
         </p>
-        <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={data} margin={{ top: 6, right: 14, left: 0, bottom: 0 }}>
+        <div className="relative">
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={data} margin={{ top: 6, right: 14, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(125,105,93,0.18)" vertical={false} />
             <XAxis
               dataKey="ts"
@@ -234,8 +259,26 @@ export default function FullNightFlowChart({
               connectNulls={false}
               isAnimationActive={false}
             />
-          </LineChart>
-        </ResponsiveContainer>
+            </LineChart>
+          </ResponsiveContainer>
+          <div
+            ref={selectionRef}
+            className="absolute inset-y-0 left-11 right-4 hidden cursor-crosshair touch-pan-y md:block"
+            aria-label="Drag to zoom flow chart"
+            onPointerDown={startSelection}
+            onPointerMove={moveSelection}
+            onPointerUp={finishSelection}
+            onPointerCancel={() => setSelection(null)}
+            onDoubleClick={() => onSelectWindow(null)}
+          >
+            {selection ? (
+              <div
+                className="pointer-events-none absolute inset-y-1 rounded border border-[var(--accent)] bg-[rgba(82,81,167,0.14)]"
+                style={{ left: selection.left, width: selection.width }}
+              />
+            ) : null}
+          </div>
+        </div>
         <p className="text-xs leading-5 text-[var(--muted-foreground)]">
           Showing {waveform.returned_sample_count.toLocaleString()} rendered points from{' '}
           {waveform.sample_count.toLocaleString()} source samples.
