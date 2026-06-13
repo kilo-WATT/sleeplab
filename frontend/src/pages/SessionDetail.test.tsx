@@ -231,6 +231,11 @@ describe('SessionDetail timezone display', () => {
   })
 
   it('keeps therapy score compact and the desktop event rail vertical-only', async () => {
+    const session = sessionDetail('America/New_York')
+    session.therapy_score.components.ahi = { score: 40, max_score: 40, label: 'AHI', value: 1.2, unit: 'events/hr' }
+    session.therapy_score.components.leak = { score: 15, max_score: 25, label: 'Leak', value: 10, unit: 'mL/s' }
+    session.therapy_score.components.duration = { score: 4, max_score: 20, label: 'Duration', value: 1.3, unit: 'hours' }
+    apiMock.getSessionByDate.mockResolvedValue(session)
     apiMock.getEvents.mockResolvedValue([{
       id: 7,
       event_type: 'Obstructive Apnea',
@@ -243,18 +248,26 @@ describe('SessionDetail timezone display', () => {
     const score = await screen.findByTestId('therapy-score-card')
     const summary = screen.getByTestId('night-summary')
     const metrics = screen.getByTestId('core-metrics')
+    const components = screen.getByTestId('therapy-score-components')
     const eventSelector = screen.getByTestId('desktop-event-selector')
 
     expect(summary.className).toContain('space-y-3')
     expect(metrics.className).toContain('xl:grid-cols-5')
+    expect(components.className).toContain('space-y-2')
     expect(score.className).not.toContain('col-span')
     expect(score.className).not.toContain('w-screen')
+    expect(score.className).toContain('overflow-visible')
+    expect(score.className).toContain('z-20')
     expect(eventSelector.className).toContain('overflow-hidden')
     expect(eventSelector.querySelector('.overflow-y-auto')).toHaveClass('overflow-x-hidden')
-    expect(within(score).getByText('Pressure')).toBeInTheDocument()
-    expect(within(score).getByText('Not scored')).toBeInTheDocument()
+    expect(within(score).queryByText('Pressure')).not.toBeInTheDocument()
+    expect(within(score).queryByText('Not scored')).not.toBeInTheDocument()
     expect(within(score).getByText('SpO2')).toBeInTheDocument()
     expect(within(score).getByText('Unavailable')).toBeInTheDocument()
+    expect(screen.getByTestId('therapy-component-ahi')).toHaveAttribute('data-score-tone', 'good')
+    expect(screen.getByTestId('therapy-component-leak')).toHaveAttribute('data-score-tone', 'caution')
+    expect(screen.getByTestId('therapy-component-duration')).toHaveAttribute('data-score-tone', 'poor')
+    expect(screen.getByTestId('therapy-component-spo2')).toHaveAttribute('data-score-tone', 'unavailable')
   })
 
   it('selects an event from the event list without rendering duplicate inspector charts', async () => {

@@ -1000,11 +1000,11 @@ function NightMetric({
 
   return (
     <Card className="min-w-0">
-      <CardContent className="flex h-full min-h-32 flex-col px-4 pb-4 pt-4 sm:min-h-36 sm:px-5 sm:pb-5">
+      <CardContent className="flex h-full flex-col p-4">
         <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
-        <p className={`mt-3 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
-        <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">{note}</p>
-        {detail ? <p className="mt-auto pt-2 text-[11px] text-[var(--muted-foreground)]">{detail}</p> : null}
+        <p className={`mt-2 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
+        <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{note}</p>
+        {detail ? <p className="mt-2 text-[11px] leading-4 text-[var(--muted-foreground)]">{detail}</p> : null}
       </CardContent>
     </Card>
   )
@@ -1152,7 +1152,7 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
   return (
     <Card
       data-testid="therapy-score-card"
-      className="h-full min-w-0 border-[rgba(82,81,167,0.28)] bg-[linear-gradient(145deg,rgba(67,56,202,0.96),rgba(109,63,240,0.92))] text-white"
+      className="relative z-20 h-full min-w-0 overflow-visible border-[rgba(82,81,167,0.28)] bg-[linear-gradient(145deg,rgba(67,56,202,0.96),rgba(109,63,240,0.92))] text-white"
     >
       <CardContent className="grid gap-4 px-4 pb-4 pt-4 md:grid-cols-[minmax(220px,0.75fr)_minmax(0,2fr)] md:items-center sm:px-5 sm:pb-5 sm:pt-5">
         <div>
@@ -1179,42 +1179,60 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
           <p className="mt-3 text-xs leading-4 text-white/75">{score.callout}</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-5">
+        <div data-testid="therapy-score-components" className="space-y-2">
           {THERAPY_COMPONENTS.map(({ key, label }) => (
             <TherapyComponentRow key={key} label={label} component={score.components[key]} />
           ))}
-          <TherapyComponentRow label="Pressure" component={null} unavailableLabel="Not scored" />
         </div>
       </CardContent>
     </Card>
   )
 }
 
-function TherapyComponentRow({
-  label,
-  component,
-  unavailableLabel = 'Unavailable',
-}: {
-  label: string
-  component: TherapyScoreComponent | null
-  unavailableLabel?: string
-}) {
+function TherapyComponentRow({ label, component }: { label: string; component: TherapyScoreComponent | null }) {
   const pct = component ? Math.round((component.score / component.max_score) * 100) : 0
   const value = component?.value == null
     ? null
     : `${component.value.toFixed(component.unit === 'hours' ? 1 : 0)} ${component.unit ?? ''}`.trim()
+  const tone = !component ? 'unavailable' : pct >= 80 ? 'good' : pct >= 50 ? 'caution' : 'poor'
+  const toneClasses = {
+    good: {
+      row: 'border-[rgba(155,214,95,0.38)] bg-[rgba(155,214,95,0.12)]',
+      value: 'text-[#c9f59f]',
+      bar: 'bg-[#9bd65f]',
+    },
+    caution: {
+      row: 'border-[rgba(240,214,74,0.40)] bg-[rgba(240,214,74,0.12)]',
+      value: 'text-[#fff0a0]',
+      bar: 'bg-[#f0d64a]',
+    },
+    poor: {
+      row: 'border-[rgba(255,138,128,0.42)] bg-[rgba(255,138,128,0.13)]',
+      value: 'text-[#ffc1bb]',
+      bar: 'bg-[#ff8a80]',
+    },
+    unavailable: {
+      row: 'border-white/10 bg-white/[0.06]',
+      value: 'text-white/60',
+      bar: 'bg-white/25',
+    },
+  }[tone]
 
   return (
-    <div className="rounded-[10px] bg-white/10 px-2 py-2">
+    <div
+      data-testid={`therapy-component-${label.toLowerCase()}`}
+      data-score-tone={tone}
+      className={`rounded-[10px] border px-3 py-2 ${toneClasses.row}`}
+    >
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className="font-bold text-white">{label}</span>
-        <span className="truncate text-right text-white/65">
-          {component ? (value ?? `${pct}%`) : unavailableLabel}
+        <span className={`truncate text-right font-semibold ${toneClasses.value}`}>
+          {component ? (value ?? `${pct}%`) : 'Unavailable'}
         </span>
       </div>
       <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/15">
         <div
-          className="h-full rounded-full bg-white"
+          className={`h-full rounded-full ${toneClasses.bar}`}
           style={{ width: `${component ? pct : 0}%` }}
         />
       </div>
@@ -1236,7 +1254,7 @@ function TherapyScoreHelp() {
       <span
         id="therapy-score-help"
         role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-7 z-50 hidden w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-[18px] border border-[var(--border)] bg-[var(--popover-surface)] p-3 text-left text-xs font-medium normal-case leading-5 tracking-normal text-[var(--muted-foreground)] shadow-[0_16px_48px_rgba(0,0,0,0.08)] group-hover:block group-focus-within:block sm:left-auto sm:right-0 sm:translate-x-0"
+        className="pointer-events-none absolute left-1/2 top-7 z-[100] hidden w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-[18px] border border-[var(--border)] bg-[var(--popover-surface)] p-3 text-left text-xs font-medium normal-case leading-5 tracking-normal text-[var(--muted-foreground)] shadow-[0_16px_48px_rgba(0,0,0,0.16)] group-hover:block group-focus-within:block sm:left-0 sm:translate-x-0"
       >
         Therapy Score is a 0-100 summary based on AHI, leak, usage duration, and SpO2 when available. Default weights are AHI 40, leak 25, duration 20, and SpO2 15. If a component is unavailable, its weight is redistributed. Low confidence means the session was not parser-validated.
       </span>
