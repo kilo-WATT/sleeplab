@@ -3,13 +3,14 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'r
 import { api } from '../api/client'
 import type { ImportPlanResponse, ImportRunSummary, OximeterImportResponse } from '../api/client'
 import { CheckCircleIcon } from '../components/icons/ChevronIcons'
+import { ImportProgressPanel } from '../components/ImportProgressPanel'
+import { IMPORT_STAGE_LABELS, shouldPollImportRuns } from '../components/importProgress'
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
+import { notifyImportStarted } from '../lib/aiSummaryCache'
 import { Link } from 'react-router-dom'
-
-const IMPORT_SYNC_STORAGE_KEY = 'cpap-import-sync-active'
 
 /**
  * Type definition for the selected import file.
@@ -83,12 +84,14 @@ export default function Import() {
   }, [])
 
   useEffect(() => {
+    if (!shouldPollImportRuns(importRuns[0], Boolean(sourceImportMessage))) return
+
     const timer = window.setInterval(() => {
       setProgressNow(Date.now())
       void api.getImportRuns(10).then(setImportRuns).catch(() => {})
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [importRuns, sourceImportMessage])
 
   useEffect(() => {
     return () => {
@@ -215,7 +218,7 @@ export default function Import() {
     setError(null)
     try {
       const result = await api.finishSourceImport(sourceUploadId)
-      window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
+      notifyImportStarted()
       setSourceUploadId(null)
       setSourceImportMessage(
         result.import_run_id
@@ -237,6 +240,7 @@ export default function Import() {
     setIsLocalImporting(true)
     try {
       const result = await api.triggerLocalImport()
+      notifyImportStarted()
       setLocalMessage(result.message || 'Import started. New sessions will appear shortly.')
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Import failed')
@@ -251,6 +255,7 @@ export default function Import() {
     setIsSyncing(true)
     try {
       const result = await api.triggerSleepHQImport()
+      notifyImportStarted()
       setSyncMessage(result.message || 'Sync started. New sessions will appear shortly.')
     } catch (err) {
       setSyncError(err instanceof Error ? err.message : 'Sync failed')
@@ -287,9 +292,6 @@ export default function Import() {
         overwrite: oximeterOverwrite,
       })
       setOximeterResult(result)
-      if (result.imported > 0) {
-        window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
-      }
     } catch (err) {
       setOximeterError(err instanceof Error ? err.message : 'O2 import failed')
     } finally {
@@ -533,75 +535,8 @@ export default function Import() {
   )
 }
 
-const IMPORT_STAGE_LABELS: Record<string, string> = {
-  scanning_files: 'Scanning card files',
-  parsing_sessions: 'Parsing sessions',
-  importing_summaries: 'Importing summaries and events',
-  writing_database: 'Writing database records',
-  building_waveform_chunks: 'Building waveform chunks',
-  refreshing_aggregates: 'Refreshing aggregates',
-  complete: 'Complete',
-  failed: 'Failed',
-}
-
-function formatElapsed(startedAt: string | null, now: number) {
-  if (!startedAt) return 'Elapsed time unavailable'
-  const seconds = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  return `Elapsed ${minutes}:${String(seconds % 60).padStart(2, '0')}`
-}
-
 export function ImportProgressCard({ run, now }: { run: ImportRunSummary; now?: number }) {
-  const active = run.status === 'running' || run.status === 'pending'
-  const failed = run.status === 'failed'
-  const stage = run.current_stage ?? (active ? 'parsing_sessions' : failed ? 'failed' : 'complete')
-  const label = IMPORT_STAGE_LABELS[stage] ?? stage.replaceAll('_', ' ')
-  const sessionProgress = run.sessions_total
-    ? `${run.sessions_processed ?? 0} of ${run.sessions_total} sessions`
-    : null
-  const fileProgress = run.files_total
-    ? `${run.files_processed ?? 0} of ${run.files_total} files`
-    : null
-  const elapsedNow = now ?? new Date(run.completed_at ?? run.started_at ?? 0).getTime()
-
-  return (
-    <Card aria-live="polite">
-      <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle>{failed ? 'Import failed' : active ? 'Import in progress' : 'Import complete'}</CardTitle>
-            <CardDescription>
-              Large initial parser imports with full-night waveforms may take several minutes.
-            </CardDescription>
-          </div>
-          <span className={`rounded-full px-3 py-1 text-xs font-bold ${
-            failed
-              ? 'bg-[var(--danger-soft)] text-[var(--danger-text)]'
-              : active
-                ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                : 'bg-[rgba(106,161,54,0.12)] text-[var(--green-700)]'
-          }`}>
-            {label}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {active ? (
-          <div className="h-2 overflow-hidden rounded-full bg-[var(--border)]" role="progressbar" aria-label="Import activity">
-            <div className="h-full w-1/3 animate-pulse rounded-full bg-[var(--accent)]" />
-          </div>
-        ) : null}
-        <p className="text-sm font-semibold text-[var(--foreground)]">
-          {run.current_message ?? (failed ? 'The importer stopped before completion.' : 'Import completed successfully.')}
-        </p>
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--muted-foreground)]">
-          <span>{formatElapsed(run.started_at, elapsedNow)}</span>
-          {fileProgress ? <span>{fileProgress}</span> : null}
-          {sessionProgress ? <span>{sessionProgress}</span> : null}
-        </div>
-      </CardContent>
-    </Card>
-  )
+  return <ImportProgressPanel run={run} now={now} />
 }
 
 function ImportHistory({ runs }: { runs: ImportRunSummary[] }) {
@@ -633,6 +568,9 @@ function ImportRunCard({ run }: { run: ImportRunSummary }) {
     .filter(Boolean)
     .join(' ')
   const diagnostics = [...run.warnings.map((warning) => warning.message), ...run.errors.map((error) => error.message)]
+  const stage = run.current_stage
+    ? IMPORT_STAGE_LABELS[run.current_stage] ?? run.current_stage.replaceAll('_', ' ')
+    : null
 
   return (
     <div className="space-y-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
@@ -647,6 +585,12 @@ function ImportRunCard({ run }: { run: ImportRunSummary }) {
           {run.status}
         </span>
       </div>
+      {stage || run.current_message ? (
+        <div className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-sm">
+          {stage ? <p className="font-bold text-[var(--foreground)]">{stage}</p> : null}
+          {run.current_message ? <p className="mt-0.5 text-[var(--muted-foreground)]">{run.current_message}</p> : null}
+        </div>
+      ) : null}
       <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
         <InspectionValue label="Validation" value={run.validation_status} />
         <InspectionValue label="Sessions" value={String(run.imported_session_count)} />

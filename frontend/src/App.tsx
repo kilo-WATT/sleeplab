@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { BrowserRouter } from 'react-router-dom'
 
-import { api } from './api/client'
+import { api, type ImportRunSummary } from './api/client'
 import { setDisplayTz } from './lib/displayTz'
 import {
   ActivityIcon,
@@ -29,8 +29,11 @@ import { Button } from './components/ui/button'
 import { getIsUserRegistrationDisabled } from './config'
 import {
   IMPORT_SYNC_STORAGE_KEY,
+  IMPORT_STARTED_EVENT,
   notifyImportCompleted,
 } from './lib/aiSummaryCache'
+import { ImportProgressPanel } from './components/ImportProgressPanel'
+import { isImportRunActive } from './components/importProgress'
 
 /**
  * Type definition for the theme mode.
@@ -106,6 +109,8 @@ function AppLayout() {
   const [releaseUrl, setReleaseUrl] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [importRun, setImportRun] = useState<ImportRunSummary | null>(null)
+  const [importProgressNow, setImportProgressNow] = useState(0)
   const userMenuRef = useRef<HTMLDivElement | null>(null)
   const wasSyncingRef = useRef(false)
 
@@ -180,12 +185,14 @@ function AppLayout() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsSyncing(false)
       setImportError(null)
+      setImportRun(null)
       wasSyncingRef.current = false
       window.sessionStorage.removeItem(IMPORT_SYNC_STORAGE_KEY)
       return
     }
 
     let cancelled = false
+    let timeout: number | null = null
     const hasPendingSync = window.sessionStorage.getItem(IMPORT_SYNC_STORAGE_KEY) === 'true'
     if (hasPendingSync) {
       setIsSyncing(true)
@@ -193,18 +200,28 @@ function AppLayout() {
 
     async function checkImportStatus() {
       try {
-        const status = await api.getImportStatus()
+        const [status, runs] = await Promise.all([
+          api.getImportStatus(),
+          api.getImportRuns(1).catch(() => []),
+        ])
         if (cancelled) {
           return
         }
 
+        const latestRun = runs[0] ?? null
         const hadBeenSyncing = wasSyncingRef.current
-        setIsSyncing(status.running)
-        if (status.running) {
+        const runActive = isImportRunActive(latestRun)
+        const active = status.running || runActive
+        setImportProgressNow(Date.now())
+        setIsSyncing(active)
+        if (active) {
+          if (latestRun) setImportRun(latestRun)
           setImportError(null)
           wasSyncingRef.current = true
           window.sessionStorage.setItem(IMPORT_SYNC_STORAGE_KEY, 'true')
+          timeout = window.setTimeout(() => void checkImportStatus(), 2000)
         } else {
+          if (latestRun && (hadBeenSyncing || hasPendingSync)) setImportRun(latestRun)
           if (status.status === 'failed' && (hadBeenSyncing || hasPendingSync)) {
             setImportError(status.message || 'Import failed. Check the uploaded files and try again.')
           } else {
@@ -217,20 +234,33 @@ function AppLayout() {
           window.sessionStorage.removeItem(IMPORT_SYNC_STORAGE_KEY)
         }
       } catch {
-        if (!cancelled && !hasPendingSync) {
-          setIsSyncing(false)
+        if (!cancelled) {
+          const pending = window.sessionStorage.getItem(IMPORT_SYNC_STORAGE_KEY) === 'true'
+          if (!pending) {
+            setIsSyncing(false)
+          } else {
+            timeout = window.setTimeout(() => void checkImportStatus(), 5000)
+          }
         }
       }
     }
 
-    void checkImportStatus()
-    const interval = window.setInterval(() => {
+    function handleImportStarted() {
+      if (timeout != null) window.clearTimeout(timeout)
+      setImportRun(null)
+      setImportError(null)
+      setIsSyncing(true)
+      wasSyncingRef.current = true
       void checkImportStatus()
-    }, 5000)
+    }
+
+    window.addEventListener(IMPORT_STARTED_EVENT, handleImportStarted)
+    void checkImportStatus()
 
     return () => {
       cancelled = true
-      window.clearInterval(interval)
+      window.removeEventListener(IMPORT_STARTED_EVENT, handleImportStarted)
+      if (timeout != null) window.clearTimeout(timeout)
     }
   }, [user, isLoading])
 
@@ -425,7 +455,10 @@ function AppLayout() {
               </nav>
             ) : null}
 
-            {user && !isLoading && isSyncing ? (
+            {user && !isLoading && importRun ? (
+              <ImportProgressPanel run={importRun} now={importProgressNow} compact />
+            ) : null}
+            {user && !isLoading && isSyncing && !importRun ? (
               <div className="flex items-start gap-3 rounded-[18px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--accent)]">
                 <span
                   aria-hidden="true"
@@ -439,7 +472,7 @@ function AppLayout() {
                 </div>
               </div>
             ) : null}
-            {user && !isLoading && importError ? (
+            {user && !isLoading && importError && !importRun ? (
               <div className="flex items-start gap-3 rounded-[18px] border border-[rgba(176,58,46,0.28)] bg-[rgba(176,58,46,0.08)] px-4 py-3 text-[var(--danger-text)]">
                 <div className="space-y-1">
                   <p className="text-sm font-bold">Import failed</p>

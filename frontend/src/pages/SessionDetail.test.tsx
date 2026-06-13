@@ -155,8 +155,10 @@ describe('SessionDetail timezone display', () => {
     // bleeding the pressure 95th percentile (and its unit) onto the leak stat.
     renderSessionDetail()
 
-    const leakLabel = await screen.findByText('Avg leak')
-    const leakCard = leakLabel.parentElement as HTMLElement
+    const leakNote = await screen.findByText(
+      (_, element) => element?.tagName === 'P' && element.textContent?.includes('P95 2.4') === true,
+    )
+    const leakCard = leakNote.parentElement as HTMLElement
     // p95_leak 0.04 L/s -> 2.4 L/min, matching OSCAR-style leak P95 reporting.
     expect(leakCard.textContent).toMatch(/P95 2\.4 L\/min/)
     // No pressure unit and no pressure P95 value (6) may appear on the leak card.
@@ -201,6 +203,8 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByRole('heading', { name: 'Whole-night navigator' })).toBeInTheDocument()
     expect(screen.getByLabelText('Event picker')).toBeInTheDocument()
     expect(screen.getByText(/Pressure, leak, flow limitation, respiratory rate/)).toBeInTheDocument()
+    expect(screen.getByText('Notes & tags')).toBeInTheDocument()
+    expect(screen.getByText('Therapy score')).toBeInTheDocument()
   })
 
   it('selects an event from the event list without rendering duplicate inspector charts', async () => {

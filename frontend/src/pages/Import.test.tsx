@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import OximeterImportSummary from '../components/OximeterImportSummary'
+import { shouldPollImportRuns } from '../components/importProgress'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
 import { ImportProgressCard, LoaderInspectionPanel } from './Import'
 
@@ -210,7 +211,7 @@ function importRun(status: 'running' | 'success' | 'failed') {
 }
 
 describe('ImportProgressCard', () => {
-  it('renders active staged progress without a fake percentage', () => {
+  it('renders active staged progress with a real session percentage', () => {
     render(
       <ImportProgressCard
         now={new Date('2026-06-13T12:01:05Z').getTime()}
@@ -224,11 +225,12 @@ describe('ImportProgressCard', () => {
       />,
     )
 
-    expect(screen.getByText('Import in progress')).toBeInTheDocument()
+    expect(screen.getByText('Synchronizing sleep data')).toBeInTheDocument()
     expect(screen.getByText('Building waveform chunks')).toBeInTheDocument()
     expect(screen.getByText('Elapsed 1:05')).toBeInTheDocument()
     expect(screen.getByText('2 of 5 sessions')).toBeInTheDocument()
-    expect(screen.queryByText('%')).not.toBeInTheDocument()
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40')
+    expect(screen.getByText('40%')).toBeInTheDocument()
   })
 
   it('renders success and failure states clearly', () => {
@@ -246,5 +248,12 @@ describe('ImportProgressCard', () => {
     )
     expect(screen.getByText('Import failed')).toBeInTheDocument()
     expect(screen.getByText('Parser exited unexpectedly.')).toBeInTheDocument()
+  })
+
+  it('stops polling after a durable import reaches a terminal state', () => {
+    expect(shouldPollImportRuns(importRun('running'), true)).toBe(true)
+    expect(shouldPollImportRuns(importRun('success'), true)).toBe(false)
+    expect(shouldPollImportRuns(importRun('failed'), true)).toBe(false)
+    expect(shouldPollImportRuns(undefined, true)).toBe(true)
   })
 })

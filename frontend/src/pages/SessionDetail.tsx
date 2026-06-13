@@ -510,8 +510,9 @@ export default function SessionDetail() {
           {timezoneMessage ? <p className="mt-2 text-sm font-medium text-[var(--olive-deep)]">{timezoneMessage}</p> : null}
           {timezoneError ? <p className="mt-2 text-sm text-[var(--danger-text)]">{timezoneError}</p> : null}
 
-          {/* Three primary stat pills */}
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {/* Primary nightly summary */}
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[1.5fr_repeat(5,minmax(0,1fr))]">
+            <TherapyScoreCard session={session} />
             <div className="rounded-[18px] bg-[rgba(82,81,167,0.08)] px-3 py-4 text-center sm:px-4">
               <p className={secondaryStatLabelClass}>AHI</p>
               <p className="mt-1.5 text-3xl font-semibold text-[var(--accent)]">
@@ -540,40 +541,28 @@ export default function SessionDetail() {
                 avg cmH₂O · P95 {session.p95_pressure?.toFixed(1) ?? '—'}
               </p>
             </div>
+            <div className="rounded-[18px] bg-[var(--surface-soft)] px-3 py-4 text-center sm:px-4">
+              <p className={secondaryStatLabelClass}>Leak</p>
+              <p className="mt-1.5 text-3xl font-semibold text-[var(--foreground)]">
+                {leakToLpm(session.avg_leak, session.leak_unit)?.toFixed(1) ?? '—'}
+              </p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                avg L/min · P95 {leakToLpm(session.p95_leak, session.leak_unit)?.toFixed(1) ?? '—'} L/min
+              </p>
+            </div>
+            <div className="rounded-[18px] bg-[var(--surface-soft)] px-3 py-4 text-center sm:px-4">
+              <p className={secondaryStatLabelClass}>Events</p>
+              <p className="mt-1.5 text-3xl font-semibold text-[var(--foreground)]">{session.total_ahi_events}</p>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                CA {session.central_apnea_count} · OA {session.obstructive_apnea_count} · H {session.hypopnea_count}
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      <NightDataCoverage session={session} />
-
-      <SessionAICard sessionId={session.id} />
-
       {/* Secondary stats */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Card>
-          <CardContent className={secondaryStatContentClass}>
-            <p className={secondaryStatLabelClass}>Events</p>
-            <div className="mt-2 flex items-end gap-2">
-              <span className={secondaryStatValueClass}>{session.total_ahi_events}</span>
-              <InfoPopover title="Events">{statHelp.events}</InfoPopover>
-            </div>
-            <p className={secondaryStatNoteClass}>
-              CA {session.central_apnea_count} · OA {session.obstructive_apnea_count} · H {session.hypopnea_count}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className={secondaryStatContentClass}>
-            <p className={secondaryStatLabelClass}>Avg leak</p>
-            <div className="mt-2 flex items-end gap-2">
-              <span className={secondaryStatValueClass}>
-                {leakToLpm(session.avg_leak, session.leak_unit)?.toFixed(1) ?? '—'}
-              </span>
-              <InfoPopover title="Average leak">{statHelp.leak}</InfoPopover>
-            </div>
-            <p className={secondaryStatNoteClass}>avg L/min · P95 {leakToLpm(session.p95_leak, session.leak_unit)?.toFixed(1) ?? '—'} L/min</p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 gap-3">
         <Card>
           <CardContent className={secondaryStatContentClass}>
             <p className={secondaryStatLabelClass}>Avg resp rate</p>
@@ -610,8 +599,8 @@ export default function SessionDetail() {
             </p>
           </div>
         </div>
-        <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-          <Card className="xl:sticky xl:top-4">
+        <div className="grid items-start gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
+          <Card className="xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)]">
             <CardHeader className="pb-3">
               <CardTitle>Events</CardTitle>
               <CardDescription>Select an event to center the synchronized graph stack around it.</CardDescription>
@@ -689,9 +678,13 @@ export default function SessionDetail() {
         </div>
       </section>
 
+      <SessionAICard sessionId={session.id} />
+
       <div className="grid items-stretch gap-6">
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          <TherapyScoreCard session={session} />
+          <div className="md:col-span-2 xl:col-span-2">
+            <NightDataCoverage session={session} />
+          </div>
           {therapyContext && (
             <Card>
               <CardContent className={secondaryStatContentClass}>
@@ -835,12 +828,14 @@ export default function SessionDetail() {
             </Card>
           )}
 
-          <Card>
+          <Card className="md:col-span-2 xl:col-span-3">
             <CardHeader className="p-4 pb-2 sm:p-5 sm:pb-2">
-              <CardTitle>Notes</CardTitle>
-              {session.note ? <CardDescription>Saved note for this night.</CardDescription> : null}
+              <CardTitle>Notes &amp; tags</CardTitle>
+              <CardDescription>Keep personal context and quick night labels together.</CardDescription>
             </CardHeader>
-            <CardContent className="px-4 pb-4 pt-0 sm:px-5 sm:pb-5 sm:pt-0">
+            <CardContent className="grid gap-6 px-4 pb-4 pt-2 sm:px-5 sm:pb-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+              <section>
+                <h3 className="mb-2 text-sm font-bold text-[var(--foreground)]">Notes</h3>
               <form className="space-y-2.5" onSubmit={handleNoteSubmit}>
                 <Label htmlFor="sessionNote">Session note</Label>
                 <textarea
@@ -864,15 +859,10 @@ export default function SessionDetail() {
                   </Button>
                 </div>
               </form>
-            </CardContent>
-          </Card>
+              </section>
 
-          <Card>
-            <CardHeader className="p-4 pb-2 sm:p-5 sm:pb-2">
-              <CardTitle>Tags</CardTitle>
-              {session.tags.length ? <CardDescription>Saved tags for this night.</CardDescription> : null}
-            </CardHeader>
-            <CardContent className="px-4 pb-4 pt-0 sm:px-5 sm:pb-5 sm:pt-0">
+              <section className="border-t border-[var(--border)] pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+                <h3 className="mb-3 text-sm font-bold text-[var(--foreground)]">Tags</h3>
               <form className="space-y-3" onSubmit={handleTagsSubmit}>
                 {tagsDraft.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -913,6 +903,7 @@ export default function SessionDetail() {
                   </Button>
                 </div>
               </form>
+              </section>
             </CardContent>
           </Card>
         </div>
@@ -1066,14 +1057,14 @@ function EventTable({
         })}
       </div>
       <div className="mt-4 hidden min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-[var(--border)] md:flex">
-        <div className="max-h-80 overflow-auto">
-        <table className="w-full border-collapse text-left text-xs">
+        <div className="max-h-[65vh] overflow-y-auto overflow-x-hidden">
+        <table className="w-full table-fixed border-collapse text-left text-xs">
           <thead className="sticky top-0 bg-[var(--surface-strong)] text-[var(--muted-foreground)]">
             <tr>
-              <th className="px-3 py-2 font-bold uppercase tracking-[0.12em]">Code</th>
-              <th className="px-3 py-2 font-bold uppercase tracking-[0.12em]">Time</th>
-              <th className="px-3 py-2 font-bold uppercase tracking-[0.12em]">Duration</th>
-              <th className="px-3 py-2 font-bold uppercase tracking-[0.12em]">Type</th>
+              <th className="w-[18%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Code</th>
+              <th className="w-[25%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Time</th>
+              <th className="w-[20%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Duration</th>
+              <th className="w-[37%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Type</th>
             </tr>
           </thead>
           <tbody>
@@ -1100,7 +1091,7 @@ function EventTable({
                   <td className="px-3 py-2 font-medium text-[var(--foreground)]">
                     {fmtTime(event.event_datetime)}
                   </td>
-                  <td className="px-3 py-2 text-[var(--muted-foreground)]">
+                  <td className="break-words px-3 py-2 text-[var(--muted-foreground)]">
                     {event.duration_seconds ? `${event.duration_seconds}s` : '-'}
                   </td>
                   <td className="px-3 py-2 text-[var(--muted-foreground)]">
@@ -1168,35 +1159,35 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
     : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} vs 30d avg`
 
   return (
-    <Card>
-      <CardContent className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-        <div className="mb-3 flex items-center gap-1.5">
-          <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Therapy score</p>
+    <Card className="h-full border-[rgba(82,81,167,0.20)] bg-[linear-gradient(145deg,rgba(82,81,167,0.16),rgba(106,161,54,0.08))]">
+      <CardContent className="px-4 pb-4 pt-4">
+        <div className="mb-2 flex items-center gap-1.5">
+          <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Therapy score</p>
           <TherapyScoreHelp />
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[12px] bg-[rgba(82,81,167,0.10)] text-2xl font-extrabold leading-none text-[var(--accent)]">
+        <div className="flex items-center gap-3">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-strong)] text-2xl font-extrabold leading-none text-[var(--accent)] shadow-sm">
             {score.total}
           </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-1.5">
-            <span className="text-lg font-bold leading-6 text-[var(--foreground)] sm:text-xl">Grade {score.grade}</span>
-            {deltaLabel ? <span className="text-sm font-medium text-[var(--muted-foreground)]">{deltaLabel}</span> : null}
+          <div className="min-w-0 flex-1">
+            <p className="text-lg font-bold leading-6 text-[var(--foreground)]">Grade {score.grade}</p>
+            {deltaLabel ? <p className="text-xs font-medium text-[var(--muted-foreground)]">{deltaLabel}</p> : null}
             {score.low_confidence ? (
-              <span className="w-fit rounded-full bg-[var(--surface-soft)] px-2 py-0.5 text-[11px] font-bold text-[var(--muted-foreground)]">
+              <span className="mt-1 inline-flex rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-[11px] font-bold text-[var(--muted-foreground)]">
                 Low confidence
               </span>
             ) : null}
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid grid-cols-2 gap-1.5">
           {THERAPY_COMPONENTS.map(({ key, label }) => (
             <TherapyComponentRow key={key} label={label} component={score.components[key]} />
           ))}
         </div>
 
-        <p className="mt-3 text-sm leading-5 text-[var(--muted-foreground)]">{score.callout}</p>
+        <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{score.callout}</p>
       </CardContent>
     </Card>
   )
@@ -1209,14 +1200,14 @@ function TherapyComponentRow({ label, component }: { label: string; component: T
     : `${component.value.toFixed(component.unit === 'hours' ? 1 : 0)} ${component.unit ?? ''}`.trim()
 
   return (
-    <div className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2.5">
+    <div className="rounded-[10px] bg-[var(--surface-strong)] px-2 py-2">
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className="font-bold text-[var(--foreground)]">{label}</span>
         <span className="truncate text-right text-[var(--muted-foreground)]">
           {component ? (value ?? `${pct}%`) : 'Unavailable'}
         </span>
       </div>
-      <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--border)]">
         <div
           className="h-full rounded-full bg-[var(--accent)]"
           style={{ width: `${component ? pct : 0}%` }}

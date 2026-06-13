@@ -35,7 +35,7 @@ def test_committed_version_is_not_stale_alpha2():
 
 
 def test_committed_version_matches_latest_published_alpha():
-    assert get_app_version() == "2.0.0-alpha.13"
+    assert get_app_version() == "2.0.0-alpha.14"
 
 
 def test_sleeplab_version_env_override_wins(monkeypatch):
