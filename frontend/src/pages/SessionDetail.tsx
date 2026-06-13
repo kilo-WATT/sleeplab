@@ -327,6 +327,14 @@ export default function SessionDetail() {
     }
   }
 
+  function clearSelectedEvent() {
+    setSelectedEventId(null)
+    setIsEventInspectorOpen(false)
+    setEventWindow(null)
+    setWaveformLoading(true)
+    setWaveformWindow(null)
+  }
+
   function selectWaveformWindow(minutes: number | null) {
     if (minutes == null && waveformWindow == null) return
     setWaveformLoading(true)
@@ -646,74 +654,105 @@ export default function SessionDetail() {
         </Card>
       </div>
 
-      <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <div className="min-h-0 lg:col-start-1 lg:row-start-1">
-          <Card className="flex h-full flex-col">
-            <CardHeader>
-              <CardTitle>Event Timeline</CardTitle>
-              <CardDescription>Respiratory events across the session duration.</CardDescription>
+      <section aria-labelledby="daily-review-heading" className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--accent)]">Daily review</p>
+            <h2 id="daily-review-heading" className="mt-1 text-2xl font-extrabold text-[var(--foreground)]">
+              Daily Review Graphs
+            </h2>
+            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+              Synchronized event flags and therapy signals for serious nightly review.
+            </p>
+          </div>
+          {selectedEvent ? (
+            <Button variant="outline" size="sm" onClick={clearSelectedEvent}>
+              Clear event and show whole night
+            </Button>
+          ) : null}
+        </div>
+        <div className="grid items-start gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <Card className="xl:sticky xl:top-4">
+            <CardHeader className="pb-3">
+              <CardTitle>Events</CardTitle>
+              <CardDescription>Select an event to center the graph stack and open detailed waveforms.</CardDescription>
             </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col">
-              <EventTimeline
-                events={events}
-                durationSeconds={session.duration_seconds}
-                startDatetime={session.start_datetime}
-                timeDomain={reviewTimeDomain}
-                selectedEventId={selectedEventId}
-                onSelectEvent={inspectEvent}
-              />
-              <EventTable
-                events={events}
-                selectedEventId={selectedEventId}
-                onSelectEvent={inspectEvent}
-              />
-              <div className="mt-auto rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] p-3 sm:p-4">
-                {selectedEvent ? (
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        {selectedEvent.event_type}
-                      </p>
-                      <p className="text-xs text-[var(--muted-foreground)]">
-                        {fmtTime(selectedEvent.event_datetime)}
-                        {selectedEvent.duration_seconds ? ` · ${selectedEvent.duration_seconds}s` : ''}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => setIsEventInspectorOpen(true)}
-                    >
-                      Inspect event
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="text-sm text-[var(--muted-foreground)]">
-                    Select an event to inspect flow, pressure, and leak around it.
-                  </p>
-                )}
-              </div>
+            <CardContent>
+              <EventTable events={events} selectedEventId={selectedEventId} onSelectEvent={inspectEvent} />
             </CardContent>
           </Card>
-        </div>
-
-        {isEventInspectorOpen && selectedEvent ? (
-          <div ref={eventInspectorRef} className="scroll-mt-4 lg:col-span-2 lg:row-start-2">
-            <EventInspector
-              data={eventWindow}
-              loading={eventWindowLoading}
-              windowMinutes={eventWindowMinutes}
-              hasPreviousEvent={selectedEventIndex > 0}
-              hasNextEvent={selectedEventIndex >= 0 && selectedEventIndex < events.length - 1}
-              onClose={() => setIsEventInspectorOpen(false)}
-              onWindowMinutesChange={setEventWindowMinutes}
-              onPreviousEvent={() => inspectRelativeEvent(-1)}
-              onNextEvent={() => inspectRelativeEvent(1)}
-            />
+          <div className="min-w-0 space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle>Event flags</CardTitle>
+                <CardDescription>All tracks below use this same visible time window.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <EventTimeline
+                  events={events}
+                  durationSeconds={session.duration_seconds}
+                  startDatetime={session.start_datetime}
+                  timeDomain={reviewTimeDomain}
+                  selectedEventId={selectedEventId}
+                  onSelectEvent={inspectEvent}
+                />
+              </CardContent>
+            </Card>
+            {fullNightFlow ? (
+              <FullNightFlowChart
+                waveform={fullNightFlow}
+                events={events}
+                timeDomain={reviewTimeDomain}
+                wholeNight={waveformWindow == null}
+                loading={waveformLoading}
+                onSelectEvent={inspectEvent}
+                onSelectWindow={selectWaveformWindow}
+                onPan={panWaveformWindow}
+              />
+            ) : waveformLoading ? (
+              <UnavailableDataCard
+                title="Loading full-night flow"
+                description="Reading overlapping compressed waveform chunks and reducing them to a browser-safe point count."
+              />
+            ) : (
+              <UnavailableDataCard
+                title="Full-night flow unavailable"
+                description={waveformError
+                  ? `The stored flow chunks could not be read: ${waveformError}`
+                  : isParserBacked && availability.events_available
+                    ? 'Re-import this SD card to populate waveform data. This night has parser summaries/events but predates full-night waveform chunk storage.'
+                    : 'No full-night flow chunks were stored for this night. SleepLab does not synthesize missing waveform data.'}
+              />
+            )}
+            {metrics.timestamps.length > 0 ? (
+              <MetricsChart metrics={metrics} events={events} leakKind={session.leak_kind} timeDomain={reviewTimeDomain} />
+            ) : (
+              <UnavailableDataCard
+                title="Detailed graph tracks unavailable"
+                description="Pressure, leak, flow limitation, respiratory rate, minute ventilation, and snore samples were not imported for this night."
+              />
+            )}
+            {isEventInspectorOpen && selectedEvent ? (
+              <div ref={eventInspectorRef} className="scroll-mt-4">
+                <EventInspector
+                  data={eventWindow}
+                  loading={eventWindowLoading}
+                  windowMinutes={eventWindowMinutes}
+                  hasPreviousEvent={selectedEventIndex > 0}
+                  hasNextEvent={selectedEventIndex >= 0 && selectedEventIndex < events.length - 1}
+                  onClose={() => setIsEventInspectorOpen(false)}
+                  onWindowMinutesChange={setEventWindowMinutes}
+                  onPreviousEvent={() => inspectRelativeEvent(-1)}
+                  onNextEvent={() => inspectRelativeEvent(1)}
+                />
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </div>
+      </section>
 
-        <div className="flex flex-col gap-6 lg:col-start-2 lg:row-start-1">
+      <div className="grid items-stretch gap-6">
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           <TherapyScoreCard session={session} />
           {therapyContext && (
             <Card>
@@ -941,47 +980,6 @@ export default function SessionDetail() {
         </div>
       </div>
 
-      {metrics.timestamps.length > 0 ? (
-        <MetricsChart
-          metrics={metrics}
-          events={events}
-          leakKind={session.leak_kind}
-          timeDomain={reviewTimeDomain}
-        />
-      ) : (
-        <UnavailableDataCard
-          title="Night graphs unavailable"
-          description="No detailed therapy signal samples were imported for this night. Summary usage, AHI, pressure, leak, settings, and events above remain available."
-        />
-      )}
-
-      {fullNightFlow ? (
-        <FullNightFlowChart
-          waveform={fullNightFlow}
-          events={events}
-          timeDomain={reviewTimeDomain}
-          wholeNight={waveformWindow == null}
-          loading={waveformLoading}
-          onSelectEvent={inspectEvent}
-          onSelectWindow={selectWaveformWindow}
-          onPan={panWaveformWindow}
-        />
-      ) : waveformLoading ? (
-        <UnavailableDataCard
-          title="Loading full-night flow"
-          description="Reading the overlapping compressed waveform chunks and reducing them to a browser-safe point count."
-        />
-      ) : (
-        <UnavailableDataCard
-          title="Full-night flow unavailable"
-          description={waveformError
-            ? `The stored flow chunks could not be read: ${waveformError}`
-            : isParserBacked
-            ? 'No full-night ResMed Flow.40ms chunks were stored for this night. SleepLab does not synthesize missing waveform data.'
-            : 'This night was imported before full-night waveform chunk storage was available. Re-import the CPAP card to populate it when the source includes flow data.'}
-        />
-      )}
-
       {spo2 ? (
         <SpO2Chart spo2={spo2} wearable={wearableData} />
       ) : (
@@ -1109,8 +1107,28 @@ function EventTable({
   if (!events.length) return null
 
   return (
-    <div className="mt-5 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-[var(--border)]">
-      <div className="max-h-52 overflow-auto lg:max-h-none lg:flex-1">
+    <>
+      <div className="-mx-1 mt-4 flex gap-2 overflow-x-auto px-1 pb-2 md:hidden" aria-label="Event picker">
+        {events.map((event) => {
+          const selected = event.id === selectedEventId
+          return (
+            <button
+              key={event.id}
+              type="button"
+              className={`min-h-11 shrink-0 rounded-full border px-3 py-2 text-xs font-bold ${
+                selected
+                  ? 'border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--foreground)]'
+              }`}
+              onClick={() => onSelectEvent(event)}
+            >
+              {EVENT_CODES[event.event_type] ?? event.event_type} {fmtTime(event.event_datetime)}
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-4 hidden min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-[var(--border)] md:flex">
+        <div className="max-h-80 overflow-auto">
         <table className="w-full border-collapse text-left text-xs">
           <thead className="sticky top-0 bg-[var(--surface-strong)] text-[var(--muted-foreground)]">
             <tr>
@@ -1156,7 +1174,8 @@ function EventTable({
           </tbody>
         </table>
       </div>
-    </div>
+      </div>
+    </>
   )
 }
 

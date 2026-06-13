@@ -263,7 +263,7 @@ function AppLayout() {
 
   return (
     <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)]">
-      <div className="mx-auto max-w-7xl px-3 py-3 sm:px-6 sm:py-6 lg:px-8">
+      <div className="mx-auto max-w-[1600px] px-3 py-3 sm:px-6 sm:py-6 lg:px-8">
         <header className="mb-5 flex flex-col gap-4 rounded-[20px] border border-[var(--border)] bg-[var(--surface-strong)] px-4 py-4 shadow-none sm:mb-6 sm:rounded-[24px] sm:px-5">
             <div className="flex items-center justify-between gap-3 sm:gap-4">
               <div className="flex items-center gap-4">

@@ -124,6 +124,12 @@ export interface ImportRunSummary {
   imported_settings_count?: number
   summary_only_day_count?: number
   capability_status?: Record<string, string>
+  current_stage?: string | null
+  current_message?: string | null
+  files_processed?: number | null
+  files_total?: number | null
+  sessions_processed?: number | null
+  sessions_total?: number | null
   started_at: string | null
   completed_at: string | null
   machine_id: string | null

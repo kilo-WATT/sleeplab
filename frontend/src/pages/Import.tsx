@@ -42,6 +42,7 @@ export default function Import() {
   const [importPlan, setImportPlan] = useState<ImportPlanResponse | null>(null)
   const [importRuns, setImportRuns] = useState<ImportRunSummary[]>([])
   const [sourceImportMessage, setSourceImportMessage] = useState<string | null>(null)
+  const [progressNow, setProgressNow] = useState(0)
 
   // SleepHQ import state
   const [isSyncing, setIsSyncing] = useState(false)
@@ -79,6 +80,14 @@ export default function Import() {
 
   useEffect(() => {
     void api.getImportRuns(10).then(setImportRuns).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setProgressNow(Date.now())
+      void api.getImportRuns(10).then(setImportRuns).catch(() => {})
+    }, 2000)
+    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -386,6 +395,9 @@ export default function Import() {
           ) : null}
         </CardContent>
       </Card>
+      {importRuns[0] && (importRuns[0].status === 'running' || sourceImportMessage) ? (
+        <ImportProgressCard run={importRuns[0]} now={progressNow} />
+      ) : null}
       <ImportHistory runs={importRuns} />
       <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
@@ -518,6 +530,77 @@ export default function Import() {
         </Card>
       ) : null}
     </div>
+  )
+}
+
+const IMPORT_STAGE_LABELS: Record<string, string> = {
+  scanning_files: 'Scanning card files',
+  parsing_sessions: 'Parsing sessions',
+  importing_summaries: 'Importing summaries and events',
+  writing_database: 'Writing database records',
+  building_waveform_chunks: 'Building waveform chunks',
+  refreshing_aggregates: 'Refreshing aggregates',
+  complete: 'Complete',
+  failed: 'Failed',
+}
+
+function formatElapsed(startedAt: string | null, now: number) {
+  if (!startedAt) return 'Elapsed time unavailable'
+  const seconds = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  return `Elapsed ${minutes}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+export function ImportProgressCard({ run, now }: { run: ImportRunSummary; now?: number }) {
+  const active = run.status === 'running' || run.status === 'pending'
+  const failed = run.status === 'failed'
+  const stage = run.current_stage ?? (active ? 'parsing_sessions' : failed ? 'failed' : 'complete')
+  const label = IMPORT_STAGE_LABELS[stage] ?? stage.replaceAll('_', ' ')
+  const sessionProgress = run.sessions_total
+    ? `${run.sessions_processed ?? 0} of ${run.sessions_total} sessions`
+    : null
+  const fileProgress = run.files_total
+    ? `${run.files_processed ?? 0} of ${run.files_total} files`
+    : null
+  const elapsedNow = now ?? new Date(run.completed_at ?? run.started_at ?? 0).getTime()
+
+  return (
+    <Card aria-live="polite">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>{failed ? 'Import failed' : active ? 'Import in progress' : 'Import complete'}</CardTitle>
+            <CardDescription>
+              Large initial parser imports with full-night waveforms may take several minutes.
+            </CardDescription>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-xs font-bold ${
+            failed
+              ? 'bg-[var(--danger-soft)] text-[var(--danger-text)]'
+              : active
+                ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                : 'bg-[rgba(106,161,54,0.12)] text-[var(--green-700)]'
+          }`}>
+            {label}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {active ? (
+          <div className="h-2 overflow-hidden rounded-full bg-[var(--border)]" role="progressbar" aria-label="Import activity">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-[var(--accent)]" />
+          </div>
+        ) : null}
+        <p className="text-sm font-semibold text-[var(--foreground)]">
+          {run.current_message ?? (failed ? 'The importer stopped before completion.' : 'Import completed successfully.')}
+        </p>
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--muted-foreground)]">
+          <span>{formatElapsed(run.started_at, elapsedNow)}</span>
+          {fileProgress ? <span>{fileProgress}</span> : null}
+          {sessionProgress ? <span>{sessionProgress}</span> : null}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 

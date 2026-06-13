@@ -180,10 +180,28 @@ describe('SessionDetail timezone display', () => {
     expect(await screen.findByText('Nightly data coverage')).toBeInTheDocument()
     expect(screen.getAllByText('ResMed cpap-parser').length).toBeGreaterThan(0)
     expect(screen.getByText('2 imported')).toBeInTheDocument()
-    expect(screen.getByText('Night graphs unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Detailed graph tracks unavailable')).toBeInTheDocument()
     expect(screen.getByText('Oximetry unavailable')).toBeInTheDocument()
     expect(screen.getByText(/does not yet claim SpO2 or pulse support/)).toBeInTheDocument()
     expect(screen.getByText('Full-night flow unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/Re-import this SD card to populate waveform data/)).toBeInTheDocument()
+  })
+
+  it('renders a coherent daily review workspace with mobile event controls', async () => {
+    apiMock.getEvents.mockResolvedValue([{
+      id: 7,
+      event_type: 'Obstructive Apnea',
+      onset_seconds: 300,
+      duration_seconds: 12,
+      event_datetime: '2026-06-02T04:05:00Z',
+    }])
+    renderSessionDetail()
+
+    expect(await screen.findByRole('heading', { name: 'Daily Review Graphs' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Events' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Event flags' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Event picker')).toBeInTheDocument()
+    expect(screen.getByText(/Pressure, leak, flow limitation, respiratory rate/)).toBeInTheDocument()
   })
 
   it('renders stored full-night parser flow without claiming unsupported signals', async () => {

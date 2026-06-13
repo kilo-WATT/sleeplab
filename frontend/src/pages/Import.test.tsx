@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
-import { LoaderInspectionPanel } from './Import'
+import { ImportProgressCard, LoaderInspectionPanel } from './Import'
 
 function file(name: string) {
   return new File(['data'], name, { type: 'application/octet-stream' })
@@ -171,5 +171,80 @@ describe('LoaderInspectionPanel', () => {
     expect(screen.queryByText('TEST-PRS1')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Import detected data' })).toBeDisabled()
     expect(screen.getAllByText(/does not implement execution yet/i)[0]).toBeInTheDocument()
+  })
+})
+
+function importRun(status: 'running' | 'success' | 'failed') {
+  return {
+    id: 'run-1',
+    adapter_id: 'resmed-cpap-parser-v1',
+    adapter_version: '0.1',
+    source_type: 'uploaded_root',
+    source_fingerprint: 'sha256:test',
+    source_label: 'SD card',
+    status,
+    validation_status: status === 'failed' ? 'failed' as const : 'partial' as const,
+    detected_manufacturer: 'ResMed',
+    detected_family: 'AirSense',
+    detected_capabilities: {},
+    warnings: [],
+    errors: [],
+    skipped_files: [],
+    imported_session_count: status === 'success' ? 3 : 0,
+    imported_block_count: 0,
+    imported_event_count: 0,
+    imported_channel_count: 0,
+    started_at: '2026-06-13T12:00:00Z',
+    completed_at: status === 'running' ? null : '2026-06-13T12:02:00Z',
+    machine_id: null,
+    machine_manufacturer: 'ResMed',
+    machine_family: 'AirSense',
+    machine_model: null,
+    machine_product_code: null,
+    machine_serial_number: null,
+    machine_firmware_version: null,
+    machine_support_status: 'experimental' as const,
+    machine_validation_status: 'partial' as const,
+    source_file_count: 20,
+  }
+}
+
+describe('ImportProgressCard', () => {
+  it('renders active staged progress without a fake percentage', () => {
+    render(
+      <ImportProgressCard
+        now={new Date('2026-06-13T12:01:05Z').getTime()}
+        run={{
+          ...importRun('running'),
+          current_stage: 'building_waveform_chunks',
+          current_message: 'Building compressed waveform chunks.',
+          sessions_processed: 2,
+          sessions_total: 5,
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Import in progress')).toBeInTheDocument()
+    expect(screen.getByText('Building waveform chunks')).toBeInTheDocument()
+    expect(screen.getByText('Elapsed 1:05')).toBeInTheDocument()
+    expect(screen.getByText('2 of 5 sessions')).toBeInTheDocument()
+    expect(screen.queryByText('%')).not.toBeInTheDocument()
+  })
+
+  it('renders success and failure states clearly', () => {
+    const { rerender } = render(<ImportProgressCard run={importRun('success')} />)
+    expect(screen.getByText('Import complete')).toBeInTheDocument()
+
+    rerender(
+      <ImportProgressCard
+        run={{
+          ...importRun('failed'),
+          current_stage: 'failed',
+          current_message: 'Parser exited unexpectedly.',
+        }}
+      />,
+    )
+    expect(screen.getByText('Import failed')).toBeInTheDocument()
+    expect(screen.getByText('Parser exited unexpectedly.')).toBeInTheDocument()
   })
 })

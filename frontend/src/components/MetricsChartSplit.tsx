@@ -73,7 +73,7 @@ export default function MetricsChartSplit({ metrics, events = [], leakKind, time
 
   const panels: PanelDefinition[] = [
     { title: 'Pressure', dataKey: 'pressure', stroke: '#38bdf8', unit: 'cmH₂O', ...makeTicks('pressure', 1) },
-    { title: 'Resp Rate', dataKey: 'resp_rate', stroke: '#4ade80', unit: 'bpm', domain: [0, 40] as [number, number], ticks: [0, 10, 20, 30, 40] },
+    { title: 'Respiratory Rate', dataKey: 'resp_rate', stroke: '#4ade80', unit: 'BPM', domain: [0, 40] as [number, number], ticks: [0, 10, 20, 30, 40] },
     {
       title: leakKind === 'total' ? 'Total Leak' : 'Leak',
       dataKey: 'leak',
@@ -81,9 +81,9 @@ export default function MetricsChartSplit({ metrics, events = [], leakKind, time
       unit: 'L/min',
       ...makeTicks('leak', 0),
     },
-    { title: 'Flow Limitation', dataKey: 'flow_lim', stroke: '#f472b6', unit: '', ...makeTicks('flow_lim', 0) },
-    { title: 'Snore', dataKey: 'snore', stroke: '#a78bfa', unit: '', ...makeTicks('snore', 0) },
-    { title: 'Min Ventilation', dataKey: 'min_vent', stroke: '#34d399', unit: 'L/min', ...makeTicks('min_vent', 1) },
+    { title: 'Flow Limitation', dataKey: 'flow_lim', stroke: '#f472b6', unit: '0-1', domain: [0, 1], ticks: [0, 0.25, 0.5, 0.75, 1] },
+    { title: 'Snore', dataKey: 'snore', stroke: '#a78bfa', unit: '0-1', domain: [0, 1], ticks: [0, 0.25, 0.5, 0.75, 1] },
+    { title: 'Minute Ventilation', dataKey: 'min_vent', stroke: '#34d399', unit: 'L/min', ...makeTicks('min_vent', 1) },
   ]
 
   const commonXAxis = (
@@ -111,7 +111,7 @@ export default function MetricsChartSplit({ metrics, events = [], leakKind, time
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Night Metrics</CardTitle>
+        <CardTitle>Therapy signal tracks</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {panels.map((panel) => (

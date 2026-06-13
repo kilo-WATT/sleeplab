@@ -101,7 +101,12 @@ export default function FullNightFlowChart({
           </CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2" aria-label="Flow chart time window">
-          <Button variant={wholeNight ? 'default' : 'outline'} size="sm" onClick={() => onSelectWindow(null)}>
+          <Button
+            variant={wholeNight ? 'default' : 'outline'}
+            size="sm"
+            className="min-h-11 sm:min-h-0"
+            onClick={() => onSelectWindow(null)}
+          >
             Whole night
           </Button>
           {[30, 10, 5].map((minutes) => (
@@ -109,6 +114,7 @@ export default function FullNightFlowChart({
               key={minutes}
               variant={!wholeNight && Math.round(domainDuration / 60_000) === minutes ? 'default' : 'outline'}
               size="sm"
+              className="min-h-11 sm:min-h-0"
               onClick={() => onSelectWindow(minutes)}
             >
               {minutes} min
@@ -118,7 +124,7 @@ export default function FullNightFlowChart({
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 rounded-full px-2"
+              className="h-11 rounded-full px-3 sm:h-7 sm:px-2"
               disabled={wholeNight}
               aria-label="Earlier waveform window"
               onClick={() => onPan(-1)}
@@ -128,7 +134,7 @@ export default function FullNightFlowChart({
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 rounded-full px-2"
+              className="h-11 rounded-full px-3 sm:h-7 sm:px-2"
               disabled={wholeNight}
               aria-label="Later waveform window"
               onClick={() => onPan(1)}
