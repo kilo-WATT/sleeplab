@@ -8,7 +8,6 @@ import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
 import EventTimeline from '../components/EventTimeline'
-import InfoPopover from '../components/InfoPopover'
 import MetricsChart from '../components/MetricsChartSplit'
 import { computeMetricsDomain, metricsToPoints } from '../components/metricsChartDomain'
 import SpO2Chart from '../components/SpO2Chart'
@@ -407,19 +406,7 @@ export default function SessionDetail() {
   const availability = session.data_availability
   const isParserBacked = availability.import_backend === 'cpap-parser'
 
-  const statHelp = {
-    ahi: 'AHI means apnea-hypopnea index: the average number of breathing events per hour during this session.',
-    usage: 'How long the machine was running and delivering therapy during this session.',
-    pressure: 'Average pressure is the typical treatment pressure delivered during the night. The 95th percentile shows the pressure level stayed at or below for most of the session.',
-    events: 'This is the total count of breathing disturbances during this night. CA means central apnea, OA means obstructive apnea, and H means hypopnea.',
-    leak: 'Leak shows how much air escaped from the mask or mouth. Lower leaks usually mean the machine can treat events more effectively.',
-    respRate: 'Respiratory rate is the average number of breaths per minute recorded by the machine during the session.',
-    tidalVolume: 'Tidal volume is the estimated amount of air moved in a normal breath. It is one more signal of breathing pattern, not usually something patients tune directly.',
-  }
   const secondaryStatContentClass = 'px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5'
-  const secondaryStatLabelClass = 'text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)] sm:text-xs sm:tracking-[0.14em]'
-  const secondaryStatValueClass = 'text-2xl font-semibold text-[var(--foreground)] sm:text-3xl'
-  const secondaryStatNoteClass = 'mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)] sm:text-xs'
 
   return (
     <div className="space-y-6">
@@ -449,24 +436,12 @@ export default function SessionDetail() {
         </div>
       </div>
 
-      {/* Session header card */}
-      <Card className="overflow-hidden bg-[radial-gradient(circle_at_top_right,_rgba(106,161,54,0.10),_transparent_30%),radial-gradient(circle_at_top_left,_rgba(82,81,167,0.08),_transparent_24%),var(--surface-strong)]">
-        <CardContent className="px-4 pb-5 pt-4 sm:px-6 sm:pb-6 sm:pt-5">
-          <div className="flex justify-end">
-            <div className="flex flex-wrap justify-end gap-2">
-              {isParserBacked ? (
-                <span className="shrink-0 rounded-full bg-[rgba(82,81,167,0.10)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
-                  ResMed cpap-parser import
-                </span>
-              ) : null}
-              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${badge.className}`}>
-                {badge.label}
-              </span>
-            </div>
-          </div>
-
-          {/* Date + time */}
-          <h1 className="mt-2 text-2xl font-extrabold text-[var(--foreground)] sm:text-3xl">
+      <section
+        data-testid="night-header"
+        className="flex flex-col gap-3 border-b border-[var(--border)] pb-5 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between"
+      >
+        <div>
+          <h1 className="text-2xl font-extrabold text-[var(--foreground)] sm:text-3xl">
             {fmtDate(session.folder_date + 'T00:00:00')}
           </h1>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--muted-foreground)]">
@@ -489,105 +464,74 @@ export default function SessionDetail() {
               {isTimezoneEditorOpen ? 'Cancel edit' : 'Edit'}
             </button>
           </div>
-
-          {isTimezoneEditorOpen ? (
-            <form className="mt-3 flex flex-col gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] p-3 sm:flex-row sm:items-end" onSubmit={handleTimezoneSubmit}>
-              <div className="space-y-2 sm:min-w-72">
-                <Label htmlFor="sessionMachineTz">Correct machine timezone</Label>
-                <Input
-                  id="sessionMachineTz"
-                  value={timezoneDraft}
-                  onChange={(event) => setTimezoneDraft(event.target.value)}
-                  autoComplete="off"
-                  placeholder="America/New_York"
-                />
-              </div>
-              <Button type="submit" disabled={isTimezoneSubmitting || !timezoneDraft}>
-                {isTimezoneSubmitting ? 'Updating...' : 'Update timezone'}
-              </Button>
-            </form>
+        </div>
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${badge.className}`}>
+            {badge.label}
+          </span>
+          {isParserBacked ? (
+            <span className="shrink-0 rounded-full bg-[rgba(82,81,167,0.10)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
+              ResMed cpap-parser import
+            </span>
           ) : null}
-          {timezoneMessage ? <p className="mt-2 text-sm font-medium text-[var(--olive-deep)]">{timezoneMessage}</p> : null}
-          {timezoneError ? <p className="mt-2 text-sm text-[var(--danger-text)]">{timezoneError}</p> : null}
+        </div>
+        {isTimezoneEditorOpen ? (
+          <form className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] p-3 sm:flex sm:basis-full sm:items-end sm:gap-3" onSubmit={handleTimezoneSubmit}>
+            <div className="space-y-2 sm:min-w-72">
+              <Label htmlFor="sessionMachineTz">Correct machine timezone</Label>
+              <Input
+                id="sessionMachineTz"
+                value={timezoneDraft}
+                onChange={(event) => setTimezoneDraft(event.target.value)}
+                autoComplete="off"
+                placeholder="America/New_York"
+              />
+            </div>
+            <Button className="mt-3 sm:mt-0" type="submit" disabled={isTimezoneSubmitting || !timezoneDraft}>
+              {isTimezoneSubmitting ? 'Updating...' : 'Update timezone'}
+            </Button>
+          </form>
+        ) : null}
+        {timezoneMessage ? <p className="text-sm font-medium text-[var(--olive-deep)] sm:basis-full">{timezoneMessage}</p> : null}
+        {timezoneError ? <p className="text-sm text-[var(--danger-text)] sm:basis-full">{timezoneError}</p> : null}
+      </section>
 
-          {/* Primary nightly summary */}
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-[1.5fr_repeat(5,minmax(0,1fr))]">
-            <TherapyScoreCard session={session} />
-            <div className="rounded-[18px] bg-[rgba(82,81,167,0.08)] px-3 py-4 text-center sm:px-4">
-              <p className={secondaryStatLabelClass}>AHI</p>
-              <p className="mt-1.5 text-3xl font-semibold text-[var(--accent)]">
-                {session.ahi?.toFixed(1) ?? '—'}
-              </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">events/hr</p>
-            </div>
-            <div className="rounded-[18px] bg-[rgba(106,161,54,0.08)] px-3 py-4 text-center sm:px-4">
-              <p className={secondaryStatLabelClass}>Usage</p>
-              <p className="mt-1.5 text-3xl font-semibold text-[var(--green-700)]">
-                {hours}h {mins}m
-              </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">therapy usage</p>
-              {session.wall_clock_seconds != null && session.gap_seconds != null && (
-                <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-                  {(session.wall_clock_seconds / 3600).toFixed(1)}h span · {(session.gap_seconds / 60).toFixed(0)}m gaps
-                </p>
-              )}
-            </div>
-            <div className="rounded-[18px] bg-[var(--surface-soft)] px-3 py-4 text-center sm:px-4">
-              <p className={secondaryStatLabelClass}>Pressure</p>
-              <p className="mt-1.5 text-3xl font-semibold text-[var(--foreground)]">
-                {session.avg_pressure?.toFixed(1) ?? '—'}
-              </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                avg cmH₂O · P95 {session.p95_pressure?.toFixed(1) ?? '—'}
-              </p>
-            </div>
-            <div className="rounded-[18px] bg-[var(--surface-soft)] px-3 py-4 text-center sm:px-4">
-              <p className={secondaryStatLabelClass}>Leak</p>
-              <p className="mt-1.5 text-3xl font-semibold text-[var(--foreground)]">
-                {leakToLpm(session.avg_leak, session.leak_unit)?.toFixed(1) ?? '—'}
-              </p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                avg L/min · P95 {leakToLpm(session.p95_leak, session.leak_unit)?.toFixed(1) ?? '—'} L/min
-              </p>
-            </div>
-            <div className="rounded-[18px] bg-[var(--surface-soft)] px-3 py-4 text-center sm:px-4">
-              <p className={secondaryStatLabelClass}>Events</p>
-              <p className="mt-1.5 text-3xl font-semibold text-[var(--foreground)]">{session.total_ahi_events}</p>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                CA {session.central_apnea_count} · OA {session.obstructive_apnea_count} · H {session.hypopnea_count}
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <section
+        data-testid="night-summary"
+        aria-label="Night summary"
+        className="grid gap-3 md:grid-cols-[minmax(240px,0.9fr)_minmax(0,2fr)]"
+      >
+        <TherapyScoreCard session={session} />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+          <NightMetric label="AHI" value={session.ahi?.toFixed(1) ?? '—'} note="events/hr" tone="accent" />
+          <NightMetric
+            label="Usage"
+            value={`${hours}h ${mins}m`}
+            note="therapy usage"
+            detail={session.wall_clock_seconds != null && session.gap_seconds != null
+              ? `${(session.wall_clock_seconds / 3600).toFixed(1)}h span · ${(session.gap_seconds / 60).toFixed(0)}m gaps`
+              : undefined}
+            tone="good"
+          />
+          <NightMetric
+            label="Pressure"
+            value={session.avg_pressure?.toFixed(1) ?? '—'}
+            note={`avg cmH₂O · P95 ${session.p95_pressure?.toFixed(1) ?? '—'}`}
+          />
+          <NightMetric
+            label="Leak"
+            value={leakToLpm(session.avg_leak, session.leak_unit)?.toFixed(1) ?? '—'}
+            note={`avg L/min · P95 ${leakToLpm(session.p95_leak, session.leak_unit)?.toFixed(1) ?? '—'} L/min`}
+          />
+          <NightMetric
+            label="Events"
+            value={String(session.total_ahi_events)}
+            note={`CA ${session.central_apnea_count} · OA ${session.obstructive_apnea_count} · H ${session.hypopnea_count}`}
+          />
+        </div>
+      </section>
 
-      {/* Secondary stats */}
-      <div className="grid grid-cols-2 gap-3">
-        <Card>
-          <CardContent className={secondaryStatContentClass}>
-            <p className={secondaryStatLabelClass}>Avg resp rate</p>
-            <div className="mt-2 flex items-end gap-2">
-              <span className={secondaryStatValueClass}>{session.avg_resp_rate?.toFixed(1) ?? '—'}</span>
-              <InfoPopover title="Respiratory rate">{statHelp.respRate}</InfoPopover>
-            </div>
-            <p className={secondaryStatNoteClass}>avg breaths per minute</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className={secondaryStatContentClass}>
-            <p className={secondaryStatLabelClass}>Avg tidal vol</p>
-            <div className="mt-2 flex items-end gap-2">
-              <span className={secondaryStatValueClass}>
-                {session.avg_tidal_vol != null ? (session.avg_tidal_vol * 1000).toFixed(0) : '—'}
-              </span>
-              <InfoPopover title="Tidal volume">{statHelp.tidalVolume}</InfoPopover>
-            </div>
-            <p className={secondaryStatNoteClass}>avg mL</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <section aria-labelledby="daily-review-heading" className="space-y-4">
+      <section data-testid="graph-review" aria-labelledby="daily-review-heading" className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--accent)]">Daily review</p>
@@ -599,8 +543,8 @@ export default function SessionDetail() {
             </p>
           </div>
         </div>
-        <div className="grid items-start gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
-          <Card className="xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)]">
+        <div className="grid items-start gap-4 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
+          <Card className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)]">
             <CardHeader className="pb-3">
               <CardTitle>Events</CardTitle>
               <CardDescription>Select an event to center the synchronized graph stack around it.</CardDescription>
@@ -678,15 +622,19 @@ export default function SessionDetail() {
         </div>
       </section>
 
-      <SessionAICard sessionId={session.id} />
-
-      <div className="grid items-stretch gap-6">
-        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          <div className="md:col-span-2 xl:col-span-2">
+      <section data-testid="supporting-context" aria-labelledby="supporting-context-heading" className="space-y-4">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--accent)]">Night context</p>
+          <h2 id="supporting-context-heading" className="mt-1 text-xl font-extrabold text-[var(--foreground)]">
+            Therapy &amp; data details
+          </h2>
+        </div>
+        <div className="grid items-stretch gap-4 lg:grid-cols-2">
+          <div className="order-2">
             <NightDataCoverage session={session} />
           </div>
           {therapyContext && (
-            <Card>
+            <Card data-testid="therapy-machine" className="order-1">
               <CardContent className={secondaryStatContentClass}>
                 <p className="mb-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Therapy and machine</p>
                 <p className="mb-3 text-xs text-[var(--muted-foreground)]">
@@ -770,30 +718,36 @@ export default function SessionDetail() {
               </CardContent>
             </Card>
           )}
-          {!therapyContext && hasDeviceSettings && (
-            <Card>
+          {!therapyContext && (
+            <Card data-testid="therapy-machine" className="order-1">
               <CardContent className={secondaryStatContentClass}>
-                <p className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Device settings</p>
-                <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
-                  {session.therapy_mode && (
-                    <span><span className="text-[var(--muted-foreground)]">Mode </span>{session.therapy_mode.toUpperCase()}</span>
-                  )}
-                  {session.mask_type && (
-                    <span><span className="text-[var(--muted-foreground)]">Mask </span>{session.mask_type}</span>
-                  )}
-                  {session.humidity_level != null && (
-                    <span><span className="text-[var(--muted-foreground)]">Humidity </span>{session.humidity_level}</span>
-                  )}
-                  {session.temperature_c != null && (
-                    <span><span className="text-[var(--muted-foreground)]">Temp </span>{session.temperature_c}°C</span>
-                  )}
-                </div>
+                <p className="mb-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Therapy and machine</p>
+                {hasDeviceSettings ? (
+                  <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
+                    {session.therapy_mode && (
+                      <span><span className="text-[var(--muted-foreground)]">Mode </span>{session.therapy_mode.toUpperCase()}</span>
+                    )}
+                    {session.mask_type && (
+                      <span><span className="text-[var(--muted-foreground)]">Mask </span>{session.mask_type}</span>
+                    )}
+                    {session.humidity_level != null && (
+                      <span><span className="text-[var(--muted-foreground)]">Humidity </span>{session.humidity_level}</span>
+                    )}
+                    {session.temperature_c != null && (
+                      <span><span className="text-[var(--muted-foreground)]">Temp </span>{session.temperature_c}°C</span>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
+                    Detailed therapy settings were not imported for this night.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
 
           {hasEquipment && equipment && (
-            <Card>
+            <Card className="order-3 lg:col-span-2">
               <CardContent className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
                 <p className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Equipment this night</p>
                 <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
@@ -827,8 +781,11 @@ export default function SessionDetail() {
               </CardContent>
             </Card>
           )}
+        </div>
+        <SessionAICard sessionId={session.id} />
+      </section>
 
-          <Card className="md:col-span-2 xl:col-span-3">
+      <Card data-testid="notes-tags">
             <CardHeader className="p-4 pb-2 sm:p-5 sm:pb-2">
               <CardTitle>Notes &amp; tags</CardTitle>
               <CardDescription>Keep personal context and quick night labels together.</CardDescription>
@@ -905,9 +862,7 @@ export default function SessionDetail() {
               </form>
               </section>
             </CardContent>
-          </Card>
-        </div>
-      </div>
+      </Card>
 
       {spo2 ? (
         <SpO2Chart spo2={spo2} wearable={wearableData} />
@@ -975,7 +930,7 @@ function NightDataCoverage({ session }: { session: SessionDetailType }) {
   ]
 
   return (
-    <Card>
+    <Card data-testid="nightly-data-coverage" className="h-full">
       <CardHeader>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1019,6 +974,37 @@ function UnavailableDataCard({ title, description }: { title: string; descriptio
   )
 }
 
+function NightMetric({
+  label,
+  value,
+  note,
+  detail,
+  tone = 'default',
+}: {
+  label: string
+  value: string
+  note: string
+  detail?: string
+  tone?: 'default' | 'accent' | 'good'
+}) {
+  const valueClass = tone === 'accent'
+    ? 'text-[var(--accent)]'
+    : tone === 'good'
+      ? 'text-[var(--green-700)]'
+      : 'text-[var(--foreground)]'
+
+  return (
+    <Card className="min-w-0">
+      <CardContent className="flex h-full min-h-32 flex-col px-4 pb-4 pt-4 sm:min-h-36 sm:px-5 sm:pb-5">
+        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
+        <p className={`mt-3 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
+        <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">{note}</p>
+        {detail ? <p className="mt-auto pt-2 text-[11px] text-[var(--muted-foreground)]">{detail}</p> : null}
+      </CardContent>
+    </Card>
+  )
+}
+
 /**
  * React component or element to render the event table.
  *
@@ -1056,7 +1042,7 @@ function EventTable({
           )
         })}
       </div>
-      <div className="mt-4 hidden min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-[var(--border)] md:flex">
+      <div data-testid="desktop-event-selector" className="mt-4 hidden min-h-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-[var(--border)] md:flex">
         <div className="max-h-[65vh] overflow-y-auto overflow-x-hidden">
         <table className="w-full table-fixed border-collapse text-left text-xs">
           <thead className="sticky top-0 bg-[var(--surface-strong)] text-[var(--muted-foreground)]">
@@ -1159,22 +1145,25 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
     : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} vs 30d avg`
 
   return (
-    <Card className="h-full border-[rgba(82,81,167,0.20)] bg-[linear-gradient(145deg,rgba(82,81,167,0.16),rgba(106,161,54,0.08))]">
+    <Card
+      data-testid="therapy-score-card"
+      className="h-full min-w-0 border-[rgba(82,81,167,0.28)] bg-[linear-gradient(145deg,rgba(67,56,202,0.96),rgba(109,63,240,0.92))] text-white"
+    >
       <CardContent className="px-4 pb-4 pt-4">
         <div className="mb-2 flex items-center gap-1.5">
-          <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Therapy score</p>
+          <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-white/70">Therapy score</p>
           <TherapyScoreHelp />
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-strong)] text-2xl font-extrabold leading-none text-[var(--accent)] shadow-sm">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-white/14 text-2xl font-extrabold leading-none text-white shadow-sm">
             {score.total}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-lg font-bold leading-6 text-[var(--foreground)]">Grade {score.grade}</p>
-            {deltaLabel ? <p className="text-xs font-medium text-[var(--muted-foreground)]">{deltaLabel}</p> : null}
+            <p className="text-lg font-bold leading-6 text-white">Grade {score.grade}</p>
+            {deltaLabel ? <p className="text-xs font-medium text-white/70">{deltaLabel}</p> : null}
             {score.low_confidence ? (
-              <span className="mt-1 inline-flex rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-[11px] font-bold text-[var(--muted-foreground)]">
+              <span className="mt-1 inline-flex rounded-full bg-white/12 px-2 py-0.5 text-[11px] font-bold text-white/75">
                 Low confidence
               </span>
             ) : null}
@@ -1185,31 +1174,40 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
           {THERAPY_COMPONENTS.map(({ key, label }) => (
             <TherapyComponentRow key={key} label={label} component={score.components[key]} />
           ))}
+          <TherapyComponentRow label="Pressure" component={null} unavailableLabel="Not scored" />
         </div>
 
-        <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{score.callout}</p>
+        <p className="mt-2 text-xs leading-4 text-white/75">{score.callout}</p>
       </CardContent>
     </Card>
   )
 }
 
-function TherapyComponentRow({ label, component }: { label: string; component: TherapyScoreComponent | null }) {
+function TherapyComponentRow({
+  label,
+  component,
+  unavailableLabel = 'Unavailable',
+}: {
+  label: string
+  component: TherapyScoreComponent | null
+  unavailableLabel?: string
+}) {
   const pct = component ? Math.round((component.score / component.max_score) * 100) : 0
   const value = component?.value == null
     ? null
     : `${component.value.toFixed(component.unit === 'hours' ? 1 : 0)} ${component.unit ?? ''}`.trim()
 
   return (
-    <div className="rounded-[10px] bg-[var(--surface-strong)] px-2 py-2">
+    <div className="rounded-[10px] bg-white/10 px-2 py-2">
       <div className="flex items-center justify-between gap-3 text-xs">
-        <span className="font-bold text-[var(--foreground)]">{label}</span>
-        <span className="truncate text-right text-[var(--muted-foreground)]">
-          {component ? (value ?? `${pct}%`) : 'Unavailable'}
+        <span className="font-bold text-white">{label}</span>
+        <span className="truncate text-right text-white/65">
+          {component ? (value ?? `${pct}%`) : unavailableLabel}
         </span>
       </div>
-      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--border)]">
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/15">
         <div
-          className="h-full rounded-full bg-[var(--accent)]"
+          className="h-full rounded-full bg-white"
           style={{ width: `${component ? pct : 0}%` }}
         />
       </div>

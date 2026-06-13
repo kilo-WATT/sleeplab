@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -205,6 +205,48 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByText(/Pressure, leak, flow limitation, respiratory rate/)).toBeInTheDocument()
     expect(screen.getByText('Notes & tags')).toBeInTheDocument()
     expect(screen.getByText('Therapy score')).toBeInTheDocument()
+  })
+
+  it('keeps the review flow in clinical reading order', async () => {
+    renderSessionDetail()
+
+    const summary = await screen.findByTestId('night-summary')
+    const graphReview = screen.getByTestId('graph-review')
+    const supportingContext = screen.getByTestId('supporting-context')
+    const notesTags = screen.getByTestId('notes-tags')
+    const oximetry = screen.getByText('Oximetry unavailable').closest('div')
+
+    expect(summary.compareDocumentPosition(graphReview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(graphReview.compareDocumentPosition(supportingContext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(supportingContext.compareDocumentPosition(notesTags) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(notesTags.compareDocumentPosition(oximetry as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('therapy-machine')).toBeInTheDocument()
+    expect(screen.getByTestId('nightly-data-coverage')).toBeInTheDocument()
+  })
+
+  it('keeps therapy score compact and the desktop event rail vertical-only', async () => {
+    apiMock.getEvents.mockResolvedValue([{
+      id: 7,
+      event_type: 'Obstructive Apnea',
+      onset_seconds: 300,
+      duration_seconds: 12,
+      event_datetime: '2026-06-02T04:05:00Z',
+    }])
+    renderSessionDetail()
+
+    const score = await screen.findByTestId('therapy-score-card')
+    const summary = screen.getByTestId('night-summary')
+    const eventSelector = screen.getByTestId('desktop-event-selector')
+
+    expect(summary.className).toContain('md:grid-cols-')
+    expect(score.className).not.toContain('col-span')
+    expect(score.className).not.toContain('w-screen')
+    expect(eventSelector.className).toContain('overflow-hidden')
+    expect(eventSelector.querySelector('.overflow-y-auto')).toHaveClass('overflow-x-hidden')
+    expect(within(score).getByText('Pressure')).toBeInTheDocument()
+    expect(within(score).getByText('Not scored')).toBeInTheDocument()
+    expect(within(score).getByText('SpO2')).toBeInTheDocument()
+    expect(within(score).getByText('Unavailable')).toBeInTheDocument()
   })
 
   it('selects an event from the event list without rendering duplicate inspector charts', async () => {
