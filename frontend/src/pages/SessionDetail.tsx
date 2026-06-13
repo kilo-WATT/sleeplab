@@ -499,10 +499,10 @@ export default function SessionDetail() {
       <section
         data-testid="night-summary"
         aria-label="Night summary"
-        className="grid gap-3 md:grid-cols-[minmax(240px,0.9fr)_minmax(0,2fr)]"
+        className="space-y-3"
       >
         <TherapyScoreCard session={session} />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        <div data-testid="core-metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
           <NightMetric label="AHI" value={session.ahi?.toFixed(1) ?? '—'} note="events/hr" tone="accent" />
           <NightMetric
             label="Usage"
@@ -529,6 +529,10 @@ export default function SessionDetail() {
             note={`CA ${session.central_apnea_count} · OA ${session.obstructive_apnea_count} · H ${session.hypopnea_count}`}
           />
         </div>
+      </section>
+
+      <section data-testid="ai-insights">
+        <SessionAICard sessionId={session.id} />
       </section>
 
       <section data-testid="graph-review" aria-labelledby="daily-review-heading" className="space-y-4">
@@ -621,6 +625,85 @@ export default function SessionDetail() {
           </div>
         </div>
       </section>
+
+      <Card data-testid="notes-tags">
+        <CardHeader className="p-4 pb-2 sm:p-5 sm:pb-2">
+          <CardTitle>Notes &amp; tags</CardTitle>
+          <CardDescription>Keep personal context and quick night labels together.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6 px-4 pb-4 pt-2 sm:px-5 sm:pb-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+          <section>
+            <h3 className="mb-2 text-sm font-bold text-[var(--foreground)]">Notes</h3>
+            <form className="space-y-2.5" onSubmit={handleNoteSubmit}>
+              <Label htmlFor="sessionNote">Session note</Label>
+              <textarea
+                id="sessionNote"
+                value={noteDraft}
+                onChange={(event) => {
+                  setNoteDraft(event.target.value)
+                  setNoteError(null)
+                  setNoteMessage(null)
+                }}
+                className="min-h-20 w-full resize-y rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-[var(--accent-border)] focus:ring-2 focus:ring-[rgba(82,81,167,0.16)]"
+                placeholder="Tried mouth tape, had a late drink, felt congested..."
+              />
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  {noteMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{noteMessage}</p> : null}
+                  {noteError ? <p className="text-sm text-[var(--danger-text)]">{noteError}</p> : null}
+                </div>
+                <Button type="submit" disabled={isNoteSubmitting}>
+                  {isNoteSubmitting ? 'Saving...' : 'Save note'}
+                </Button>
+              </div>
+            </form>
+          </section>
+
+          <section className="border-t border-[var(--border)] pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+            <h3 className="mb-3 text-sm font-bold text-[var(--foreground)]">Tags</h3>
+            <form className="space-y-3" onSubmit={handleTagsSubmit}>
+              {tagsDraft.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {tagsDraft.map((tag) => (
+                    <span key={tag} className="rounded-full bg-[rgba(82,81,167,0.10)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                {SESSION_TAGS.map((tag) => {
+                  const selected = tagsDraft.includes(tag)
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleTag(tag)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                        selected
+                          ? 'border-[var(--accent-border)] bg-[rgba(82,81,167,0.12)] text-[var(--accent)]'
+                          : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--foreground)] shadow-sm hover:border-[var(--accent-border)] hover:text-[var(--accent)]'
+                      }`}
+                      aria-pressed={selected}
+                    >
+                      {tag}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  {tagsMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{tagsMessage}</p> : null}
+                  {tagsError ? <p className="text-sm text-[var(--danger-text)]">{tagsError}</p> : null}
+                </div>
+                <Button type="submit" disabled={isTagsSubmitting || !tagsChanged}>
+                  {isTagsSubmitting ? 'Saving...' : 'Save tags'}
+                </Button>
+              </div>
+            </form>
+          </section>
+        </CardContent>
+      </Card>
 
       <section data-testid="supporting-context" aria-labelledby="supporting-context-heading" className="space-y-4">
         <div>
@@ -782,102 +865,24 @@ export default function SessionDetail() {
             </Card>
           )}
         </div>
-        <SessionAICard sessionId={session.id} />
       </section>
-
-      <Card data-testid="notes-tags">
-            <CardHeader className="p-4 pb-2 sm:p-5 sm:pb-2">
-              <CardTitle>Notes &amp; tags</CardTitle>
-              <CardDescription>Keep personal context and quick night labels together.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-6 px-4 pb-4 pt-2 sm:px-5 sm:pb-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-              <section>
-                <h3 className="mb-2 text-sm font-bold text-[var(--foreground)]">Notes</h3>
-              <form className="space-y-2.5" onSubmit={handleNoteSubmit}>
-                <Label htmlFor="sessionNote">Session note</Label>
-                <textarea
-                  id="sessionNote"
-                  value={noteDraft}
-                  onChange={(event) => {
-                    setNoteDraft(event.target.value)
-                    setNoteError(null)
-                    setNoteMessage(null)
-                  }}
-                  className="min-h-20 w-full resize-y rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition placeholder:text-[var(--muted-foreground)] focus:border-[var(--accent-border)] focus:ring-2 focus:ring-[rgba(82,81,167,0.16)]"
-                  placeholder="Tried mouth tape, had a late drink, felt congested..."
-                />
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    {noteMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{noteMessage}</p> : null}
-                    {noteError ? <p className="text-sm text-[var(--danger-text)]">{noteError}</p> : null}
-                  </div>
-                  <Button type="submit" disabled={isNoteSubmitting}>
-                    {isNoteSubmitting ? 'Saving...' : 'Save note'}
-                  </Button>
-                </div>
-              </form>
-              </section>
-
-              <section className="border-t border-[var(--border)] pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-                <h3 className="mb-3 text-sm font-bold text-[var(--foreground)]">Tags</h3>
-              <form className="space-y-3" onSubmit={handleTagsSubmit}>
-                {tagsDraft.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {tagsDraft.map((tag) => (
-                      <span key={tag} className="rounded-full bg-[rgba(82,81,167,0.10)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                <div className="flex flex-wrap gap-2">
-                  {SESSION_TAGS.map((tag) => {
-                    const selected = tagsDraft.includes(tag)
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        onClick={() => toggleTag(tag)}
-                        className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
-                          selected
-                            ? 'border-[var(--accent-border)] bg-[rgba(82,81,167,0.12)] text-[var(--accent)]'
-                            : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--foreground)] shadow-sm hover:border-[var(--accent-border)] hover:text-[var(--accent)]'
-                        }`}
-                        aria-pressed={selected}
-                      >
-                        {tag}
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    {tagsMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{tagsMessage}</p> : null}
-                    {tagsError ? <p className="text-sm text-[var(--danger-text)]">{tagsError}</p> : null}
-                  </div>
-                  <Button type="submit" disabled={isTagsSubmitting || !tagsChanged}>
-                    {isTagsSubmitting ? 'Saving...' : 'Save tags'}
-                  </Button>
-                </div>
-              </form>
-              </section>
-            </CardContent>
-      </Card>
-
-      {spo2 ? (
-        <SpO2Chart spo2={spo2} wearable={wearableData} />
-      ) : (
-        <UnavailableDataCard
-          title="Oximetry unavailable"
-          description={isParserBacked
-            ? 'This ResMed cpap-parser workflow does not yet claim SpO2 or pulse support. SleepLab leaves those values unavailable instead of estimating them.'
-            : 'No SpO2 or pulse samples were imported for this night.'}
-        />
-      )}
 
       {wearableData && wearableData.stages.length > 0 && (
         <WearableSleepStageChart stages={wearableData.stages} />
       )}
+
+      <section data-testid="oximetry-card">
+        {spo2 ? (
+          <SpO2Chart spo2={spo2} wearable={wearableData} />
+        ) : (
+          <UnavailableDataCard
+            title="Oximetry unavailable"
+            description={isParserBacked
+              ? 'This ResMed cpap-parser workflow does not yet claim SpO2 or pulse support. SleepLab leaves those values unavailable instead of estimating them.'
+              : 'No SpO2 or pulse samples were imported for this night.'}
+          />
+        )}
+      </section>
 
     </div>
   )
@@ -1149,35 +1154,37 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
       data-testid="therapy-score-card"
       className="h-full min-w-0 border-[rgba(82,81,167,0.28)] bg-[linear-gradient(145deg,rgba(67,56,202,0.96),rgba(109,63,240,0.92))] text-white"
     >
-      <CardContent className="px-4 pb-4 pt-4">
-        <div className="mb-2 flex items-center gap-1.5">
-          <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-white/70">Therapy score</p>
-          <TherapyScoreHelp />
+      <CardContent className="grid gap-4 px-4 pb-4 pt-4 md:grid-cols-[minmax(220px,0.75fr)_minmax(0,2fr)] md:items-center sm:px-5 sm:pb-5 sm:pt-5">
+        <div>
+          <div className="mb-2 flex items-center gap-1.5">
+            <p className="whitespace-nowrap text-xs font-bold uppercase tracking-[0.14em] text-white/70">Therapy score</p>
+            <TherapyScoreHelp />
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-white/14 text-2xl font-extrabold leading-none text-white shadow-sm">
+              {score.total}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-lg font-bold leading-6 text-white">Grade {score.grade}</p>
+              {deltaLabel ? <p className="text-xs font-medium text-white/70">{deltaLabel}</p> : null}
+              {score.low_confidence ? (
+                <span className="mt-1 inline-flex rounded-full bg-white/12 px-2 py-0.5 text-[11px] font-bold text-white/75">
+                  Low confidence
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <p className="mt-3 text-xs leading-4 text-white/75">{score.callout}</p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[14px] bg-white/14 text-2xl font-extrabold leading-none text-white shadow-sm">
-            {score.total}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-lg font-bold leading-6 text-white">Grade {score.grade}</p>
-            {deltaLabel ? <p className="text-xs font-medium text-white/70">{deltaLabel}</p> : null}
-            {score.low_confidence ? (
-              <span className="mt-1 inline-flex rounded-full bg-white/12 px-2 py-0.5 text-[11px] font-bold text-white/75">
-                Low confidence
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5 lg:grid-cols-5">
           {THERAPY_COMPONENTS.map(({ key, label }) => (
             <TherapyComponentRow key={key} label={label} component={score.components[key]} />
           ))}
           <TherapyComponentRow label="Pressure" component={null} unavailableLabel="Not scored" />
         </div>
-
-        <p className="mt-2 text-xs leading-4 text-white/75">{score.callout}</p>
       </CardContent>
     </Card>
   )
