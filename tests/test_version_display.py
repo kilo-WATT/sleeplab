@@ -34,6 +34,10 @@ def test_committed_version_is_not_stale_alpha2():
     assert int(match.group(1)) >= 9, f"VERSION {version!r} is stale (expected >= alpha.9)"
 
 
+def test_committed_version_matches_latest_published_alpha():
+    assert get_app_version() == "2.0.0-alpha.12"
+
+
 def test_sleeplab_version_env_override_wins(monkeypatch):
     """An explicit `SLEEPLAB_VERSION` overrides the committed VERSION file."""
     monkeypatch.setenv("SLEEPLAB_VERSION", "2.0.0-beta.1")

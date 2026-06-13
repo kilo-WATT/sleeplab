@@ -95,6 +95,7 @@ def persist_import_run(
     import_run_id: str,
     machine_id: str,
     raw_directory: Any = None,
+    progress_callback: Any = None,
 ) -> dict[str, int]:
     """Persist an :class:`ImportRun` to the database.
 
@@ -169,7 +170,15 @@ def persist_import_run(
     serial = run.machine.serial_number
     manufacturer = run.machine.manufacturer or "ResMed"
 
-    for session in run.sessions:
+    session_total = len(run.sessions)
+    for session_index, session in enumerate(run.sessions, start=1):
+        if progress_callback:
+            progress_callback(
+                stage="writing_database",
+                message=f"Writing session {session_index} of {session_total}.",
+                sessions_processed=session_index - 1,
+                sessions_total=session_total,
+            )
         derived = {value.key: value for value in session.derived_values}
         has_detailed = bool(_derived_scalar(derived, "has_detailed_data", default=False))
         folder_date = _parse_local_date(session.machine_local_date)
@@ -348,6 +357,16 @@ def persist_import_run(
             counts["waveform_rows"] += _write_session_waveform(
                 db_conn, str(session_db_id), detailed, machine_tz, night_events
             )
+            if progress_callback:
+                progress_callback(
+                    stage="building_waveform_chunks",
+                    message=(
+                        f"Building compressed waveform chunks for session "
+                        f"{session_index} of {session_total}."
+                    ),
+                    sessions_processed=session_index - 1,
+                    sessions_total=session_total,
+                )
             counts["waveform_chunks"] += _write_waveform_chunks(
                 db_conn,
                 session_db_id=str(session_db_id),
@@ -355,6 +374,14 @@ def persist_import_run(
                 detailed=detailed,
                 machine_tz=machine_tz,
                 parser_version=run.adapter_version,
+            )
+
+        if progress_callback:
+            progress_callback(
+                stage="refreshing_aggregates",
+                message=f"Refreshing nightly aggregates for session {session_index} of {session_total}.",
+                sessions_processed=session_index,
+                sessions_total=session_total,
             )
 
     return counts

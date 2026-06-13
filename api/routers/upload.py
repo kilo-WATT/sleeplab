@@ -267,8 +267,10 @@ def _fail_durable_import_run(import_run_id: str | None, message: str) -> None:
     try:
         db.execute(
             text("""
-                UPDATE import_runs
-                SET status = 'failed',
+            UPDATE import_runs
+            SET status = 'failed',
+                    current_stage = 'failed',
+                    current_message = 'Import failed. Check the uploaded files and try again.',
                     errors = errors || CAST(:error AS jsonb),
                     completed_at = NOW(),
                     updated_at = NOW()

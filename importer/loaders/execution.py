@@ -143,7 +143,7 @@ def run_cpap_parser_import(
 
     # Lazy imports keep ``import importer.loaders`` free of psycopg2 / cpap-parser
     # at module load; they are only needed on this opt-in path.
-    from importer.db import finish_import_run, get_conn
+    from importer.db import finish_import_run, get_conn, update_import_run_progress
 
     from .models import ImportOptions
     from .persist import persist_import_run
@@ -158,12 +158,26 @@ def run_cpap_parser_import(
     if detected is None:
         raise ImportPlanError(f"No ResMed source detected under {root} for the cpap-parser loader.")
 
+    progress_conn = get_conn()
     try:
+        update_import_run_progress(
+            progress_conn,
+            import_run_id,
+            stage="parsing_sessions",
+            message="Parsing sessions and detailed ResMed signal files.",
+        )
         # Parse once; keep the raw CPAPDirectory so the persistence layer can
         # populate the per-sample tables (session_metrics/session_waveform) that
         # the vendor-neutral ImportRun deliberately does not carry.
         run, directory = loader.import_data_with_directory(
             detected, ImportOptions(include_waveforms=include_waveforms)
+        )
+        update_import_run_progress(
+            progress_conn,
+            import_run_id,
+            stage="importing_summaries",
+            message="Importing nightly summaries, settings, events, and signal metadata.",
+            sessions_total=len(run.sessions),
         )
     except ImportError as exc:
         # The loader lazily imports cpap_parser; surface a clear dependency error.
@@ -172,8 +186,11 @@ def run_cpap_parser_import(
             "(and its cpap-py backend). Install it, or unset SLEEPLAB_USE_CPAP_PARSER "
             "to fall back to the legacy native importer."
         ) from exc
+    finally:
+        progress_conn.close()
 
     conn = get_conn()
+    persist_progress_conn = get_conn()
     try:
         counts = persist_import_run(
             run,
@@ -182,6 +199,9 @@ def run_cpap_parser_import(
             import_run_id=import_run_id,
             machine_id=machine_id,
             raw_directory=directory,
+            progress_callback=lambda **progress: update_import_run_progress(
+                persist_progress_conn, import_run_id, **progress
+            ),
         )
         conn.commit()
         finish_import_run(
@@ -210,6 +230,7 @@ def run_cpap_parser_import(
         conn.rollback()
         raise
     finally:
+        persist_progress_conn.close()
         conn.close()
 
 

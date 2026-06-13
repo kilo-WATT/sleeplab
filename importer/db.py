@@ -118,6 +118,8 @@ def finish_import_run(
             """
             UPDATE import_runs
             SET status = %s,
+                current_stage = CASE WHEN %s = 'failed' THEN 'failed' ELSE 'complete' END,
+                current_message = CASE WHEN %s = 'failed' THEN 'Import failed.' ELSE 'Import complete.' END,
                 imported_session_count = %s,
                 imported_block_count = %s,
                 imported_event_count = %s,
@@ -145,6 +147,8 @@ def finish_import_run(
             """,
             (
                 status,
+                status,
+                status,
                 imported_sessions,
                 imported_blocks,
                 imported_events,
@@ -155,6 +159,45 @@ def finish_import_run(
                 json.dumps(capability_status or {}),
                 json.dumps([{"code": "native_import_error", "message": error} for error in errors]),
                 import_run_id,
+                import_run_id,
+            ),
+        )
+    conn.commit()
+
+
+def update_import_run_progress(
+    conn: Any,
+    import_run_id: str,
+    *,
+    stage: str,
+    message: str,
+    files_processed: int | None = None,
+    files_total: int | None = None,
+    sessions_processed: int | None = None,
+    sessions_total: int | None = None,
+) -> None:
+    """Persist a coarse import stage without inventing a precise percentage."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE import_runs
+            SET current_stage = %s,
+                current_message = %s,
+                files_processed = COALESCE(%s, files_processed),
+                files_total = COALESCE(%s, files_total),
+                sessions_processed = COALESCE(%s, sessions_processed),
+                sessions_total = COALESCE(%s, sessions_total),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (
+                stage,
+                message,
+                files_processed,
+                files_total,
+                sessions_processed,
+                sessions_total,
                 import_run_id,
             ),
         )

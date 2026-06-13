@@ -92,13 +92,16 @@ def create_import_run(
                 user_id, machine_id, adapter_id, adapter_version, source_type,
                 source_fingerprint, import_fingerprint, source_label, status,
                 validation_status, identity_confidence, detected_manufacturer,
-                detected_family, detected_capabilities, warnings, started_at, updated_at
+                detected_family, detected_capabilities, warnings, started_at, updated_at,
+                current_stage, current_message, files_processed, files_total
             ) VALUES (
                 CAST(:user_id AS uuid), CAST(:machine_id AS uuid), :adapter_id,
                 :adapter_version, 'uploaded_root', :source_fingerprint,
                 :import_fingerprint, :source_label, 'running', :validation_status,
                 :identity_confidence, :manufacturer, :family,
-                CAST(:capabilities AS jsonb), CAST(:warnings AS jsonb), NOW(), NOW()
+                CAST(:capabilities AS jsonb), CAST(:warnings AS jsonb), NOW(), NOW(),
+                'scanning_files', 'Card scan complete; preparing the parser.',
+                :files_total, :files_total
             )
             RETURNING id::text
         """),
@@ -116,6 +119,7 @@ def create_import_run(
             "family": _clean(identity.get("family")) or _clean(device.get("family_hint")),
             "capabilities": _json(device["capabilities"]),
             "warnings": _json([*plan.inspection["warnings"], *device["warnings"]]),
+            "files_total": plan.source_manifest.file_count,
         },
     ).scalar_one()
 
