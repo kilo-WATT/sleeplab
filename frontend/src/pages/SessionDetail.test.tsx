@@ -262,7 +262,7 @@ describe('SessionDetail timezone display', () => {
     expect(metrics.className).toContain('xl:grid-cols-5')
     for (const metricCard of Array.from(metrics.children)) {
       expect(metricCard).toHaveClass('h-full')
-      expect(metricCard.firstElementChild).toHaveClass('h-full', 'items-center', 'px-5', 'py-5')
+      expect(metricCard.firstElementChild).toHaveClass('h-full', 'min-h-32', 'flex-col', 'justify-center', 'items-start')
     }
     expect(metrics.querySelector('[aria-hidden="true"]')).not.toBeInTheDocument()
     expect(components.className).toContain('space-y-2')

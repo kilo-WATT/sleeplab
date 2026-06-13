@@ -1008,8 +1008,9 @@ function NightMetric({
 
   return (
     <Card className={`h-full min-w-0 ${className}`}>
-      <CardContent className="flex h-full min-h-32 items-center px-5 py-5">
-        <div>
+      {/* pt-5/sm:pt-6 re-assert symmetric top padding: cn() has no tailwind-merge, so CardContent's built-in pt-0 would otherwise win the cascade and push content up. */}
+      <CardContent className="flex h-full min-h-32 flex-col items-start justify-center p-5 pt-5 sm:p-6 sm:pt-6">
+        <div className="w-full">
           <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
           <p className={`mt-2 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
           <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{note}</p>
