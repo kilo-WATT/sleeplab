@@ -232,6 +232,11 @@ describe('SessionDetail timezone display', () => {
 
   it('keeps therapy score compact and the desktop event rail vertical-only', async () => {
     const session = sessionDetail('America/New_York')
+    session.ahi = 1.1
+    session.avg_leak = 0.35
+    session.leak_unit = 'L/s'
+    session.duration_hours = 3.5
+    session.duration_seconds = 12_600
     session.therapy_score.components.ahi = { score: 40, max_score: 40, label: 'AHI', value: 1.2, unit: 'events/hr' }
     session.therapy_score.components.leak = { score: 15, max_score: 25, label: 'Leak', value: 10, unit: 'mL/s' }
     session.therapy_score.components.duration = { score: 4, max_score: 20, label: 'Duration', value: 1.3, unit: 'hours' }
@@ -252,6 +257,7 @@ describe('SessionDetail timezone display', () => {
     const eventSelector = screen.getByTestId('desktop-event-selector')
 
     expect(summary.className).toContain('space-y-3')
+    expect(metrics.className).toContain('md:grid-cols-6')
     expect(metrics.className).toContain('xl:grid-cols-5')
     expect(components.className).toContain('space-y-2')
     expect(score.className).not.toContain('col-span')
@@ -264,10 +270,26 @@ describe('SessionDetail timezone display', () => {
     expect(within(score).queryByText('Not scored')).not.toBeInTheDocument()
     expect(within(score).getByText('SpO2')).toBeInTheDocument()
     expect(within(score).getByText('Unavailable')).toBeInTheDocument()
+    expect(within(score).getByText('1.1 events/hr')).toBeInTheDocument()
+    expect(within(score).getByText('21.0 L/min')).toBeInTheDocument()
+    expect(within(score).getByText('Target <5')).toBeInTheDocument()
+    expect(within(score).getByText('Large leak 24 L/min')).toBeInTheDocument()
+    expect(within(score).getByText('Compliance 4h · goal 7h')).toBeInTheDocument()
     expect(screen.getByTestId('therapy-component-ahi')).toHaveAttribute('data-score-tone', 'good')
     expect(screen.getByTestId('therapy-component-leak')).toHaveAttribute('data-score-tone', 'caution')
     expect(screen.getByTestId('therapy-component-duration')).toHaveAttribute('data-score-tone', 'poor')
     expect(screen.getByTestId('therapy-component-spo2')).toHaveAttribute('data-score-tone', 'unavailable')
+    expect(within(screen.getByTestId('therapy-component-ahi')).getByLabelText('AHI target')).toBeInTheDocument()
+    expect(within(screen.getByTestId('therapy-component-leak')).getByLabelText('Leak target')).toBeInTheDocument()
+  })
+
+  it('uses singular event grammar in the therapy gauge', async () => {
+    const session = sessionDetail('America/New_York')
+    session.ahi = 1
+    apiMock.getSessionByDate.mockResolvedValue(session)
+    renderSessionDetail()
+
+    expect(await screen.findByText('1.0 event/hr')).toBeInTheDocument()
   })
 
   it('selects an event from the event list without rendering duplicate inspector charts', async () => {

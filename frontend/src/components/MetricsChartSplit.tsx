@@ -109,13 +109,13 @@ export default function MetricsChartSplit({ metrics, events = [], leakKind, time
     })
 
   return (
-    <Card>
+    <Card className="min-w-0 overflow-hidden">
       <CardHeader>
         <CardTitle>Therapy signal tracks</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="min-w-0 space-y-4 overflow-hidden">
         {panels.map((panel) => (
-          <div key={panel.dataKey}>
+          <div key={panel.dataKey} className="min-w-0 overflow-hidden">
             <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)] mb-1">
               {panel.title}{panel.unit ? ` (${panel.unit})` : ''}
             </p>

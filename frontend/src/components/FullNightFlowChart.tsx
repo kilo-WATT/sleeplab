@@ -136,20 +136,20 @@ export default function FullNightFlowChart({
   }
 
   return (
-    <Card>
-      <CardHeader className="gap-4">
-        <div>
+    <Card className="min-w-0 overflow-hidden">
+      <CardHeader className="min-w-0 gap-4">
+        <div className="min-w-0">
           <CardTitle>Full-night flow rate</CardTitle>
           <CardDescription>
             ResMed Flow.40ms at {waveform.sample_rate_hz.toFixed(0)} Hz. Drag across the desktop chart
             to zoom; visible windows request only overlapping compressed chunks.
           </CardDescription>
         </div>
-        <div className="flex flex-wrap items-center gap-2" aria-label="Flow chart time window">
+        <div className="grid grid-cols-2 gap-2 min-[430px]:flex min-[430px]:flex-wrap min-[430px]:items-center" aria-label="Flow chart time window">
           <Button
             variant={wholeNight ? 'default' : 'outline'}
             size="sm"
-            className="min-h-11 sm:min-h-0"
+            className="min-h-11 min-w-0 px-3 sm:min-h-0"
             onClick={() => onSelectWindow(null)}
           >
             Whole night
@@ -157,7 +157,7 @@ export default function FullNightFlowChart({
           <Button
             variant="outline"
             size="sm"
-            className="min-h-11 sm:min-h-0"
+            className="min-h-11 min-w-0 px-3 sm:min-h-0"
             onClick={() => onSelectWindow(null)}
           >
             Reset view
@@ -167,13 +167,13 @@ export default function FullNightFlowChart({
               key={minutes}
               variant={!wholeNight && Math.round(domainDuration / 60_000) === minutes ? 'default' : 'outline'}
               size="sm"
-              className="min-h-11 sm:min-h-0"
+              className="min-h-11 min-w-0 px-3 sm:min-h-0"
               onClick={() => onSelectWindow(minutes)}
             >
               {minutes} min
             </Button>
           ))}
-          <div className="inline-flex rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1">
+          <div className="col-span-2 inline-flex w-fit rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1 min-[430px]:col-span-1">
             <Button
               variant="ghost"
               size="sm"
@@ -200,11 +200,11 @@ export default function FullNightFlowChart({
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="min-w-0 space-y-3 overflow-hidden">
         <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
           Flow ({waveform.unit})
         </p>
-        <div className="relative">
+        <div className="relative min-w-0 overflow-hidden">
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={data} margin={{ top: 6, right: 14, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(125,105,93,0.18)" vertical={false} />

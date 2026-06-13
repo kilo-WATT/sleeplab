@@ -120,7 +120,7 @@ export default function EventTimeline({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4 overflow-hidden">
       <div className="flex flex-wrap gap-3 text-xs text-[var(--muted-foreground)]">
         {eventTypes.map(t => (
           <span key={t} className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1">
@@ -133,7 +133,13 @@ export default function EventTimeline({
       <div className="relative">
         <div className="relative mb-2 h-4 text-[10px] text-[var(--muted-foreground)]">
           {[0, 0.25, 0.5, 0.75, 1].map(pct => (
-            <span key={pct} className="absolute -translate-x-1/2" style={{ left: `${pct * 100}%` }}>
+            <span
+              key={pct}
+              className={`absolute whitespace-nowrap ${
+                pct === 0 ? '' : pct === 1 ? '-translate-x-full' : '-translate-x-1/2'
+              }`}
+              style={{ left: `${pct * 100}%` }}
+            >
               {fmtTime(domainStart + timelineDurationMs * pct)}
             </span>
           ))}

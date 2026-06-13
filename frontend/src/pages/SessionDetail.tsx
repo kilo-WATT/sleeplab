@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, TherapyScoreComponent, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
 import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
@@ -79,13 +79,6 @@ const EVENT_COLORS: Record<string, string> = {
   'Arousal': '#6AA136',
   'Large Leak': '#b8b8b8',
 }
-
-const THERAPY_COMPONENTS: Array<{ key: keyof SessionDetailType['therapy_score']['components']; label: string }> = [
-  { key: 'ahi', label: 'AHI' },
-  { key: 'leak', label: 'Leak' },
-  { key: 'duration', label: 'Duration' },
-  { key: 'spo2', label: 'SpO2' },
-]
 
 /**
  * React component or element to render the session detail.
@@ -502,9 +495,10 @@ export default function SessionDetail() {
         className="space-y-3"
       >
         <TherapyScoreCard session={session} />
-        <div data-testid="core-metrics" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          <NightMetric label="AHI" value={session.ahi?.toFixed(1) ?? '—'} note="events/hr" tone="accent" />
+        <div data-testid="core-metrics" className="grid grid-cols-2 gap-3 md:grid-cols-6 xl:grid-cols-5">
+          <NightMetric className="md:col-span-2 xl:col-span-1" label="AHI" value={session.ahi?.toFixed(1) ?? '—'} note="events/hr" tone="accent" />
           <NightMetric
+            className="md:col-span-2 xl:col-span-1"
             label="Usage"
             value={`${hours}h ${mins}m`}
             note="therapy usage"
@@ -514,16 +508,19 @@ export default function SessionDetail() {
             tone="good"
           />
           <NightMetric
+            className="md:col-span-2 xl:col-span-1"
             label="Pressure"
             value={session.avg_pressure?.toFixed(1) ?? '—'}
             note={`avg cmH₂O · P95 ${session.p95_pressure?.toFixed(1) ?? '—'}`}
           />
           <NightMetric
+            className="md:col-span-3 xl:col-span-1"
             label="Leak"
             value={leakToLpm(session.avg_leak, session.leak_unit)?.toFixed(1) ?? '—'}
             note={`avg L/min · P95 ${leakToLpm(session.p95_leak, session.leak_unit)?.toFixed(1) ?? '—'} L/min`}
           />
           <NightMetric
+            className="col-span-2 md:col-span-3 xl:col-span-1"
             label="Events"
             value={String(session.total_ahi_events)}
             note={`CA ${session.central_apnea_count} · OA ${session.obstructive_apnea_count} · H ${session.hypopnea_count}`}
@@ -558,7 +555,7 @@ export default function SessionDetail() {
             </CardContent>
           </Card>
           <div className="min-w-0 space-y-4">
-            <Card>
+            <Card className="min-w-0 overflow-hidden">
               <CardHeader className="pb-3">
                 <CardTitle>Whole-night navigator</CardTitle>
                 <CardDescription>Events stay visible across the whole night while the outlined box controls every graph track.</CardDescription>
@@ -877,6 +874,7 @@ export default function SessionDetail() {
         ) : (
           <UnavailableDataCard
             title="Oximetry unavailable"
+            centered
             description={isParserBacked
               ? 'This ResMed cpap-parser workflow does not yet claim SpO2 or pulse support. SleepLab leaves those values unavailable instead of estimating them.'
               : 'No SpO2 or pulse samples were imported for this night.'}
@@ -968,10 +966,18 @@ function NightDataCoverage({ session }: { session: SessionDetailType }) {
   )
 }
 
-function UnavailableDataCard({ title, description }: { title: string; description: string }) {
+function UnavailableDataCard({
+  title,
+  description,
+  centered = false,
+}: {
+  title: string
+  description: string
+  centered?: boolean
+}) {
   return (
     <Card>
-      <CardContent className="p-5 sm:p-6">
+      <CardContent className={`p-5 sm:p-6 ${centered ? 'flex min-h-24 flex-col justify-center' : ''}`}>
         <p className="text-base font-bold text-[var(--foreground)]">{title}</p>
         <p className="mt-1.5 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">{description}</p>
       </CardContent>
@@ -980,12 +986,14 @@ function UnavailableDataCard({ title, description }: { title: string; descriptio
 }
 
 function NightMetric({
+  className = '',
   label,
   value,
   note,
   detail,
   tone = 'default',
 }: {
+  className?: string
   label: string
   value: string
   note: string
@@ -999,8 +1007,8 @@ function NightMetric({
       : 'text-[var(--foreground)]'
 
   return (
-    <Card className="min-w-0">
-      <CardContent className="flex h-full flex-col p-4">
+    <Card className={`min-w-0 ${className}`}>
+      <CardContent className="flex min-h-32 h-full flex-col justify-center p-5">
         <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
         <p className={`mt-2 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
         <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{note}</p>
@@ -1145,6 +1153,7 @@ function SelectedEventReadout({
 function TherapyScoreCard({ session }: { session: SessionDetailType }) {
   const score = session.therapy_score
   const delta = session.score_vs_30d_avg
+  const leakLpm = leakToLpm(session.avg_leak, session.leak_unit)
   const deltaLabel = delta == null
     ? null
     : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} vs 30d avg`
@@ -1180,26 +1189,82 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
         </div>
 
         <div data-testid="therapy-score-components" className="space-y-2">
-          {THERAPY_COMPONENTS.map(({ key, label }) => (
-            <TherapyComponentRow key={key} label={label} component={score.components[key]} />
-          ))}
+          <TherapyGauge
+            testId="therapy-component-ahi"
+            label="AHI"
+            value={score.components.ahi ? session.ahi : null}
+            max={30}
+            target={5}
+            targetLabel="Target <5"
+            displayValue={session.ahi == null
+              ? 'Unavailable'
+              : `${session.ahi.toFixed(1)} ${session.ahi === 1 ? 'event' : 'events'}/hr`}
+            tone={session.ahi == null ? 'unavailable' : session.ahi < 5 ? 'good' : session.ahi <= 15 ? 'caution' : 'poor'}
+          />
+          <TherapyGauge
+            testId="therapy-component-leak"
+            label="Leak"
+            value={score.components.leak ? leakLpm : null}
+            max={48}
+            target={24}
+            targetLabel="Large leak 24 L/min"
+            displayValue={leakLpm == null ? 'Unavailable' : `${leakLpm.toFixed(1)} L/min`}
+            tone={leakLpm == null ? 'unavailable' : leakLpm < 18 ? 'good' : leakLpm <= 24 ? 'caution' : 'poor'}
+          />
+          <TherapyGauge
+            testId="therapy-component-duration"
+            label="Duration"
+            value={score.components.duration ? session.duration_hours : null}
+            max={10}
+            target={4}
+            targetLabel="Compliance 4h · goal 7h"
+            displayValue={score.components.duration
+              ? `${session.duration_hours.toFixed(1)} ${session.duration_hours === 1 ? 'hour' : 'hours'}`
+              : 'Unavailable'}
+            tone={!score.components.duration ? 'unavailable' : session.duration_hours < 4 ? 'poor' : session.duration_hours < 7 ? 'caution' : 'good'}
+          />
+          <TherapyGauge
+            testId="therapy-component-spo2"
+            label="SpO2"
+            value={null}
+            max={100}
+            target={90}
+            targetLabel="No oximetry data"
+            displayValue="Unavailable"
+            tone="unavailable"
+          />
         </div>
       </CardContent>
     </Card>
   )
 }
 
-function TherapyComponentRow({ label, component }: { label: string; component: TherapyScoreComponent | null }) {
-  const pct = component ? Math.round((component.score / component.max_score) * 100) : 0
-  const value = component?.value == null
-    ? null
-    : `${component.value.toFixed(component.unit === 'hours' ? 1 : 0)} ${component.unit ?? ''}`.trim()
-  const tone = !component ? 'unavailable' : pct >= 80 ? 'good' : pct >= 50 ? 'caution' : 'poor'
+function TherapyGauge({
+  testId,
+  label,
+  value,
+  max,
+  target,
+  targetLabel,
+  displayValue,
+  tone,
+}: {
+  testId: string
+  label: string
+  value: number | null
+  max: number
+  target: number
+  targetLabel: string
+  displayValue: string
+  tone: 'good' | 'caution' | 'poor' | 'unavailable'
+}) {
+  const fillPercent = value == null ? 0 : Math.min(100, Math.max(0, (value / max) * 100))
+  const targetPercent = Math.min(100, Math.max(0, (target / max) * 100))
   const toneClasses = {
     good: {
-      row: 'border-[rgba(155,214,95,0.38)] bg-[rgba(155,214,95,0.12)]',
-      value: 'text-[#c9f59f]',
-      bar: 'bg-[#9bd65f]',
+      row: 'border-[rgba(152,188,105,0.36)] bg-[rgba(152,188,105,0.10)]',
+      value: 'text-[#d5edb8]',
+      bar: 'bg-[#98bc69]',
     },
     caution: {
       row: 'border-[rgba(240,214,74,0.40)] bg-[rgba(240,214,74,0.12)]',
@@ -1214,28 +1279,36 @@ function TherapyComponentRow({ label, component }: { label: string; component: T
     unavailable: {
       row: 'border-white/10 bg-white/[0.06]',
       value: 'text-white/60',
-      bar: 'bg-white/25',
+      bar: 'bg-transparent',
     },
   }[tone]
 
   return (
     <div
-      data-testid={`therapy-component-${label.toLowerCase()}`}
+      data-testid={testId}
       data-score-tone={tone}
       className={`rounded-[10px] border px-3 py-2 ${toneClasses.row}`}
     >
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className="font-bold text-white">{label}</span>
         <span className={`truncate text-right font-semibold ${toneClasses.value}`}>
-          {component ? (value ?? `${pct}%`) : 'Unavailable'}
+          {displayValue}
         </span>
       </div>
-      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/15">
+      <div className="relative mt-2 h-2 overflow-hidden rounded-full bg-white/20">
         <div
           className={`h-full rounded-full ${toneClasses.bar}`}
-          style={{ width: `${component ? pct : 0}%` }}
+          style={{ width: `${fillPercent}%` }}
         />
+        {tone !== 'unavailable' ? (
+          <span
+            aria-label={`${label} target`}
+            className="absolute inset-y-[-2px] w-0.5 rounded-full bg-white shadow-[0_0_0_1px_rgba(38,36,96,0.45)]"
+            style={{ left: `${targetPercent}%` }}
+          />
+        ) : null}
       </div>
+      <p className="mt-1.5 text-[10px] font-medium text-white/55">{targetLabel}</p>
     </div>
   )
 }
