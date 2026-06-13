@@ -1007,17 +1007,14 @@ function NightMetric({
       : 'text-[var(--foreground)]'
 
   return (
-    <Card className={`min-w-0 ${className}`}>
-      <CardContent className="flex min-h-32 h-full flex-col justify-center px-5 py-5">
-        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
-        <p className={`mt-2 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
-        <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{note}</p>
-        <p
-          aria-hidden={!detail}
-          className={`mt-2 min-h-4 text-[11px] leading-4 text-[var(--muted-foreground)] ${detail ? '' : 'invisible'}`}
-        >
-          {detail ?? 'Reserved detail'}
-        </p>
+    <Card className={`h-full min-w-0 ${className}`}>
+      <CardContent className="flex h-full min-h-32 items-center px-5 py-5">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
+          <p className={`mt-2 text-2xl font-semibold leading-none sm:text-3xl ${valueClass}`}>{value}</p>
+          <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{note}</p>
+          {detail ? <p className="mt-2 text-[11px] leading-4 text-[var(--muted-foreground)]">{detail}</p> : null}
+        </div>
       </CardContent>
     </Card>
   )
