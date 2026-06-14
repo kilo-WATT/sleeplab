@@ -13,6 +13,7 @@ import {
 
 import type { EventRecord, WaveformSignalResponse } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
+import { eventInterval } from '../lib/eventTiming'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons/ChevronIcons'
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
@@ -32,12 +33,6 @@ function formatTime(value: unknown) {
     minute: '2-digit',
     timeZone: getDisplayTz(),
   })
-}
-
-function eventBounds(event: EventRecord): [number, number] {
-  const end = new Date(event.event_datetime).getTime()
-  const durationMs = Math.max((event.duration_seconds ?? 2) * 1000, 2000)
-  return [end - durationMs, end]
 }
 
 function timeTicks([start, end]: [number, number]): number[] {
@@ -94,7 +89,7 @@ export default function FullNightFlowChart({
   const domainDuration = Math.max(domainEnd - domainStart, 1)
   const xTicks = timeTicks(timeDomain)
   const visibleEvents = events.filter((event) => {
-    const [start, end] = eventBounds(event)
+    const { start, end } = eventInterval(event, domainStart)
     return end >= domainStart && start <= domainEnd
   })
 
@@ -222,7 +217,7 @@ export default function FullNightFlowChart({
             <YAxis domain={[-limit, limit]} tick={{ fill: '#7d695d', fontSize: 10 }} width={44} />
             <ReferenceLine y={0} stroke="rgba(125,105,93,0.45)" />
             {visibleEvents.map((event) => {
-              const [start, end] = eventBounds(event)
+              const { start, end } = eventInterval(event, domainStart)
               const color = EVENT_COLORS[event.event_type] ?? '#888'
               return (
                 <ReferenceArea

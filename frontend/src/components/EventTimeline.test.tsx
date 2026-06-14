@@ -84,6 +84,32 @@ describe('EventTimeline', () => {
     expect(Number.parseFloat(marker.style.width)).toBeCloseTo(20)
   })
 
+  it('positions respiratory event duration forward from the stored onset', () => {
+    const domainStart = new Date('2026-06-02T04:00:00Z').getTime()
+    const domainEnd = new Date('2026-06-02T04:10:00Z').getTime()
+
+    render(
+      <EventTimeline
+        startDatetime="2026-06-02T04:00:00Z"
+        durationSeconds={600}
+        wholeNightDomain={[domainStart, domainEnd]}
+        events={[
+          {
+            id: 1,
+            event_type: 'Obstructive Apnea',
+            onset_seconds: 300,
+            duration_seconds: 60,
+            event_datetime: '2026-06-02T04:05:00Z',
+          },
+        ]}
+      />,
+    )
+
+    const marker = screen.getByRole('button', { name: /obstructive apnea/i })
+    expect(Number.parseFloat(marker.style.left)).toBeCloseTo(50)
+    expect(Number.parseFloat(marker.style.width)).toBeCloseTo(10)
+  })
+
   it('keeps whole-night events visible while showing the selected graph window', () => {
     const domainStart = new Date('2026-06-02T04:00:00Z').getTime()
     const domainEnd = new Date('2026-06-02T04:10:00Z').getTime()
