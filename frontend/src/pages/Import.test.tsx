@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import OximeterImportSummary from '../components/OximeterImportSummary'
-import { shouldPollImportRuns } from '../components/importProgress'
+import { shouldDismissImportRunOnNavigation, shouldPollImportRuns } from '../components/importProgress'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
 import { ImportProgressCard, LoaderInspectionPanel } from './Import'
 
@@ -255,5 +255,11 @@ describe('ImportProgressCard', () => {
     expect(shouldPollImportRuns(importRun('success'), true)).toBe(false)
     expect(shouldPollImportRuns(importRun('failed'), true)).toBe(false)
     expect(shouldPollImportRuns(undefined, true)).toBe(true)
+  })
+
+  it('dismisses completed notices on navigation but keeps active progress visible', () => {
+    expect(shouldDismissImportRunOnNavigation(importRun('success'), '/import', '/dashboard')).toBe(true)
+    expect(shouldDismissImportRunOnNavigation(importRun('running'), '/import', '/dashboard')).toBe(false)
+    expect(shouldDismissImportRunOnNavigation(importRun('success'), '/dashboard', '/dashboard')).toBe(false)
   })
 })

@@ -33,7 +33,7 @@ import {
   notifyImportCompleted,
 } from './lib/aiSummaryCache'
 import { ImportProgressPanel } from './components/ImportProgressPanel'
-import { isImportRunActive } from './components/importProgress'
+import { isImportRunActive, shouldDismissImportRunOnNavigation } from './components/importProgress'
 
 /**
  * Type definition for the theme mode.
@@ -113,6 +113,17 @@ function AppLayout() {
   const [importProgressNow, setImportProgressNow] = useState(0)
   const userMenuRef = useRef<HTMLDivElement | null>(null)
   const wasSyncingRef = useRef(false)
+  const previousPathRef = useRef(location.pathname)
+
+  useEffect(() => {
+    const previousPath = previousPathRef.current
+    previousPathRef.current = location.pathname
+    if (shouldDismissImportRunOnNavigation(importRun, previousPath, location.pathname)) {
+      // Route changes acknowledge terminal notices; active progress remains global.
+      setImportRun(null)
+      setImportError(null)
+    }
+  }, [importRun, location.pathname])
 
   useEffect(() => {
     if (!user || isLoading) {

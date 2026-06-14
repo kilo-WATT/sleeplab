@@ -26,7 +26,7 @@ from importer.loaders import (
 
 from ..auth import get_current_user
 from ..database import SessionLocal, get_db
-from ..import_runs import create_import_run, resmed_backend_conflict
+from ..import_runs import create_import_run, resmed_backend_conflict, reusable_import_run
 from ..oximeter import OximeterParseError, OximeterRecording, parse_viatom_binary
 from ..settings_store import get_timezone_settings, normalize_timezone
 
@@ -511,6 +511,16 @@ def finish_source_import(
                 "data, then re-import the full card with one backend."
             ),
         )
+
+    reusable_run_id = reusable_import_run(db, user_id=session.user_id, plan=plan)
+    if reusable_run_id:
+        UPLOAD_SESSIONS.pop(upload_id, None)
+        shutil.rmtree(session.temp_root, ignore_errors=True)
+        return {
+            "status": "unchanged",
+            "message": "This exact SD-card snapshot is already fully imported.",
+            "import_run_id": reusable_run_id,
+        }
 
     run_id, machine_id = create_import_run(
         db,

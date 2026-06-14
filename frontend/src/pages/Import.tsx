@@ -218,8 +218,14 @@ export default function Import() {
     setError(null)
     try {
       const result = await api.finishSourceImport(sourceUploadId)
-      notifyImportStarted()
       setSourceUploadId(null)
+      if (result.status === 'unchanged') {
+        setSourceImportMessage(result.message)
+        const runs = await api.getImportRuns(10)
+        setImportRuns(runs)
+        return
+      }
+      notifyImportStarted()
       setSourceImportMessage(
         result.import_run_id
           ? `Import started. Run ${result.import_run_id.slice(0, 8)} is now processing in the background.`

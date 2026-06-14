@@ -28,3 +28,11 @@ export function formatImportElapsed(startedAt: string | null, now: number) {
   const minutes = Math.floor(seconds / 60)
   return `Elapsed ${minutes}:${String(seconds % 60).padStart(2, '0')}`
 }
+
+export function shouldDismissImportRunOnNavigation(
+  run: ImportRunSummary | null,
+  previousPath: string,
+  nextPath: string,
+) {
+  return previousPath !== nextPath && run !== null && !isImportRunActive(run)
+}

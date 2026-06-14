@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -104,9 +104,11 @@ def _validate_local_path(raw: str) -> Path:
 
 @router.get("/settings", response_model=ImportSettingsResponse)
 def get_import_settings(
+    response: Response,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    response.headers["Cache-Control"] = "no-store"
     row = get_user_import_settings_row(db, current_user["id"])
 
     enabled = os.environ.get("SLEEPHQ_ENABLED", "false").lower() == "true"
@@ -159,9 +161,11 @@ def get_import_settings(
 @router.put("/settings", response_model=ImportSettingsResponse)
 def save_import_settings(
     body: ImportSettingsUpdate,
+    response: Response,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    response.headers["Cache-Control"] = "no-store"
     # Validate local path if provided
     if body.local_datalog_path is not None and body.local_datalog_path != "":
         _validate_local_path(body.local_datalog_path)
@@ -293,7 +297,7 @@ def save_import_settings(
         )
 
     db.commit()
-    return get_import_settings(current_user=current_user, db=db)
+    return get_import_settings(response=response, current_user=current_user, db=db)
 
 
 def _run_sleephq_import_task(

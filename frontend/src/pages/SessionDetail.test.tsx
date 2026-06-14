@@ -289,6 +289,9 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByTestId('therapy-component-leak')).toHaveAttribute('data-score-tone', 'caution')
     expect(screen.getByTestId('therapy-component-duration')).toHaveAttribute('data-score-tone', 'poor')
     expect(screen.getByTestId('therapy-component-spo2')).toHaveAttribute('data-score-tone', 'unavailable')
+    expect(screen.getByTestId('therapy-component-ahi').querySelector('[data-score-zone="good"]')).toHaveClass('bg-[#73b83f]')
+    expect(screen.getByTestId('therapy-component-ahi').querySelector('[data-score-zone="caution"]')).toHaveClass('bg-[#e0b72f]')
+    expect(screen.getByTestId('therapy-component-ahi').querySelector('[data-score-zone="poor"]')).toHaveClass('bg-[#df6a61]')
     expect(within(screen.getByTestId('therapy-component-ahi')).getByLabelText('AHI target')).toBeInTheDocument()
     expect(within(screen.getByTestId('therapy-component-ahi')).getByLabelText('AHI value')).toBeInTheDocument()
     expect(within(screen.getByTestId('therapy-component-leak')).getByLabelText('Leak target')).toBeInTheDocument()
@@ -319,6 +322,8 @@ describe('SessionDetail timezone display', () => {
     fireEvent.click(within(eventSelector).getByRole('row', { name: /OA 04:05 AM 12s/i }))
 
     expect(screen.getByText('Selected event')).toBeInTheDocument()
+    expect(screen.getByTestId('selected-event-card-content')).toHaveClass('pt-5', 'sm:pt-6')
+    expect(screen.getByTestId('selected-event-card-content').firstElementChild).toHaveTextContent('Selected event')
     expect(screen.queryByLabelText('Selected graph window')).not.toBeInTheDocument()
     expect(screen.queryByText('Event Inspector')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Clear selection' })).toBeInTheDocument()

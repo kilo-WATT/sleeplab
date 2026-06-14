@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from api.import_runs import IMPORT_CAPABILITY_REVISION, import_fingerprint
 from importer.loaders import ImportPlanError, create_import_plan, prepare_execution
 
 
@@ -31,6 +32,8 @@ def test_resmed_plan_reports_coverage_and_execution(tmp_path: Path):
     execution = prepare_execution(plan, tmp_path, plan.source_manifest.fingerprint)
     assert execution.backend_id == "sleeplab-native-resmed"
     assert execution.import_root == tmp_path / "DATALOG"
+    assert IMPORT_CAPABILITY_REVISION in import_fingerprint(plan)
+    assert plan.source_manifest.fingerprint in import_fingerprint(plan)
 
 
 def test_source_fingerprint_changes_when_content_changes(tmp_path: Path):

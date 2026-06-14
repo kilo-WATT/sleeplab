@@ -11,6 +11,50 @@ from importer.loaders.planning import ImportPlan, _source_role
 
 _PARSER_PROVENANCE_PREFIX = "native_resmed_cpap_parser"
 _LEGACY_PROVENANCE_PREFIX = "native_resmed_"
+IMPORT_CAPABILITY_REVISION = "resmed-parser-foundation-v1"
+
+
+def import_fingerprint(plan: ImportPlan) -> str:
+    """Return the source and capability contract for an import plan."""
+
+    adapter_id = plan.inspection["devices"][0]["adapter_id"]
+    return (
+        f"{plan.plan_version}:{IMPORT_CAPABILITY_REVISION}:"
+        f"{plan.source_manifest.fingerprint}:{adapter_id}"
+    )
+
+
+def reusable_import_run(
+    db: Session,
+    *,
+    user_id: str,
+    plan: ImportPlan,
+) -> str | None:
+    """Return a successful run for this exact card and capability revision."""
+
+    device = plan.inspection["devices"][0]
+    return db.execute(
+        text("""
+            SELECT id::text
+            FROM import_runs
+            WHERE user_id = CAST(:user_id AS uuid)
+              AND adapter_id = :adapter_id
+              AND adapter_version IS NOT DISTINCT FROM :adapter_version
+              AND source_fingerprint = :source_fingerprint
+              AND import_fingerprint = :import_fingerprint
+              AND status = 'success'
+              AND imported_session_count > 0
+            ORDER BY completed_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        """),
+        {
+            "user_id": user_id,
+            "adapter_id": device["adapter_id"],
+            "adapter_version": device["adapter_version"],
+            "source_fingerprint": plan.source_manifest.fingerprint,
+            "import_fingerprint": import_fingerprint(plan),
+        },
+    ).scalar_one_or_none()
 
 
 def create_import_run(
@@ -111,7 +155,7 @@ def create_import_run(
             "adapter_id": adapter_id,
             "adapter_version": adapter_version,
             "source_fingerprint": plan.source_manifest.fingerprint,
-            "import_fingerprint": f"{plan.plan_version}:{plan.source_manifest.fingerprint}:{adapter_id}",
+            "import_fingerprint": import_fingerprint(plan),
             "source_label": source_label,
             "validation_status": validation_status,
             "identity_confidence": identity.get("confidence") or device["confidence"],

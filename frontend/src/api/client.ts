@@ -999,7 +999,7 @@ export const api = {
     }
     return postForm<OximeterImportResponse>('/upload/oximeter', formData)
   },
-  getImportSettings: () => get<ImportSettings>('/import/settings'),
+  getImportSettings: () => request<ImportSettings>('/import/settings', { cache: 'no-store' }),
   saveImportSettings: (payload: Partial<ImportSettings>) => put<ImportSettings>('/import/settings', payload),
   triggerSleepHQImport: () => post<{ status: string; message: string }>('/import/trigger'),
   triggerLocalImport: () => post<{ status: string; message: string }>('/import/trigger-local'),

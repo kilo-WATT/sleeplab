@@ -1135,23 +1135,25 @@ function SelectedEventReadout({
 }) {
   return (
     <Card>
-      <CardContent className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Selected event</p>
-          <p className="mt-1 font-bold text-[var(--foreground)]">
-            {event.event_type} at {fmtTime(event.event_datetime)}
-            {event.duration_seconds ? ` · ${event.duration_seconds}s` : ''}
-          </p>
+      <CardContent data-testid="selected-event-card-content" className="px-5 pb-5 pt-5 sm:px-6 sm:pb-6 sm:pt-6">
+        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Selected event</p>
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="font-bold text-[var(--foreground)]">
+              {event.event_type} at {fmtTime(event.event_datetime)}
+              {event.duration_seconds ? ` · ${event.duration_seconds}s` : ''}
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-x-5 gap-y-2 text-xs sm:flex sm:flex-wrap sm:items-start">
+            <span aria-label="Selected event flow range"><strong>Flow</strong> {flowMin?.toFixed(2) ?? '—'} to {flowMax?.toFixed(2) ?? '—'} L/s</span>
+            <span aria-label="Selected event average pressure"><strong>Avg pressure</strong> {averagePressure?.toFixed(1) ?? '—'} cmH₂O</span>
+            <span aria-label="Selected event maximum leak"><strong>Max leak</strong> {maxLeak?.toFixed(1) ?? '—'} L/min</span>
+            <span aria-label="Selected event sample quality"><strong>Samples</strong> {returnedSamples.toLocaleString()} / {sourceSamples.toLocaleString()}</span>
+          </div>
+          <Button variant="outline" size="sm" className="min-h-11 self-start sm:min-h-0" onClick={onClear}>
+            Clear selection
+          </Button>
         </div>
-        <div className="grid grid-cols-2 gap-x-5 gap-y-2 text-xs sm:flex sm:flex-wrap sm:items-center">
-          <span aria-label="Selected event flow range"><strong>Flow</strong> {flowMin?.toFixed(2) ?? '—'} to {flowMax?.toFixed(2) ?? '—'} L/s</span>
-          <span aria-label="Selected event average pressure"><strong>Avg pressure</strong> {averagePressure?.toFixed(1) ?? '—'} cmH₂O</span>
-          <span aria-label="Selected event maximum leak"><strong>Max leak</strong> {maxLeak?.toFixed(1) ?? '—'} L/min</span>
-          <span aria-label="Selected event sample quality"><strong>Samples</strong> {returnedSamples.toLocaleString()} / {sourceSamples.toLocaleString()}</span>
-        </div>
-        <Button variant="outline" size="sm" className="min-h-11 sm:min-h-0" onClick={onClear}>
-          Clear selection
-        </Button>
       </CardContent>
     </Card>
   )
@@ -1333,11 +1335,18 @@ function TherapyGauge({
               const start = index === 0 ? 0 : zones[index - 1].end
               const width = ((zone.end - start) / max) * 100
               const zoneClass = zone.tone === 'good'
-                ? 'bg-[#829f62]'
+                ? 'bg-[#73b83f]'
                 : zone.tone === 'caution'
-                  ? 'bg-[#c7ad55]'
-                  : 'bg-[#c47775]'
-              return <span key={`${zone.tone}-${zone.end}`} className={zoneClass} style={{ width: `${width}%` }} />
+                  ? 'bg-[#e0b72f]'
+                  : 'bg-[#df6a61]'
+              return (
+                <span
+                  key={`${zone.tone}-${zone.end}`}
+                  data-score-zone={zone.tone}
+                  className={zoneClass}
+                  style={{ width: `${width}%` }}
+                />
+              )
             })}
           </div>
         ) : null}

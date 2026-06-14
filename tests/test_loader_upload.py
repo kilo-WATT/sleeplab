@@ -164,6 +164,7 @@ def test_source_finish_routes_by_cpap_parser_flag(monkeypatch, flag_value, expec
         monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", flag_value)
         monkeypatch.setattr(upload, "cpap_parser_runtime_available", lambda: True)
         monkeypatch.setattr(upload, "resmed_backend_conflict", lambda *_args, **_kwargs: False)
+        monkeypatch.setattr(upload, "reusable_import_run", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(
             upload,
             "create_import_run",
@@ -184,6 +185,43 @@ def test_source_finish_routes_by_cpap_parser_flag(monkeypatch, flag_value, expec
     finally:
         UPLOAD_SESSIONS.pop(upload_id, None)
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_source_finish_skips_exact_successful_card_snapshot(monkeypatch):
+    upload_id = _start("repeat-user", "RESMED-SD")
+    temp_root = UPLOAD_SESSIONS[upload_id].temp_root
+    upload_source_batch(
+        upload_id,
+        [
+            _file("STR.edf", b"summary"),
+            _file("DATALOG/20260601/20260601_220000_PLD.edf", b"session"),
+        ],
+        current_user={"id": "repeat-user"},
+    )
+    inspect_uploaded_source(upload_id, current_user={"id": "repeat-user"})
+    monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", "1")
+    monkeypatch.setattr(upload, "cpap_parser_runtime_available", lambda: True)
+    monkeypatch.setattr(upload, "resmed_backend_conflict", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(upload, "reusable_import_run", lambda *_args, **_kwargs: "existing-run")
+    monkeypatch.setattr(
+        upload,
+        "create_import_run",
+        lambda *_args, **_kwargs: pytest.fail("an unchanged card must not create another run"),
+    )
+    tasks = BackgroundTasks()
+
+    result = finish_source_import(
+        upload_id,
+        tasks,
+        current_user={"id": "repeat-user"},
+        db=object(),
+    )
+
+    assert result["status"] == "unchanged"
+    assert result["import_run_id"] == "existing-run"
+    assert tasks.tasks == []
+    assert upload_id not in UPLOAD_SESSIONS
+    assert not temp_root.exists()
 
 
 def test_source_finish_rejects_missing_parser_runtime_before_creating_run(monkeypatch):

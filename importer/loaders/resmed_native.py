@@ -570,15 +570,26 @@ class ResMedNativeLoader(LoaderAdapter):
         ]
 
     def _session_blocks(self, detailed: list, machine_key: str, local_date: str) -> list[SessionBlock]:
-        blocks: list[SessionBlock] = []
+        spans: dict[tuple[datetime, datetime], list[tuple[int, object]]] = {}
         for index, cpap_session in enumerate(detailed):
+            spans.setdefault(
+                (cpap_session.start_time, cpap_session.end_time),
+                [],
+            ).append((index, cpap_session))
+
+        blocks: list[SessionBlock] = []
+        for block_index, ((start_time, end_time), sources) in enumerate(sorted(spans.items())):
+            source_file_ids = tuple(
+                f"{local_date}:{session.file_type}:{source_index}"
+                for source_index, session in sources
+            )
             blocks.append(
                 SessionBlock(
-                    source_block_key=f"resmed:{machine_key}:{local_date}:{index}",
-                    start_time=cpap_session.start_time,
-                    end_time=cpap_session.end_time,
-                    block_kind=cpap_session.file_type or "recording",
-                    source_file_ids=(f"{local_date}:{cpap_session.file_type}:{index}",),
+                    source_block_key=f"resmed:{machine_key}:{local_date}:{block_index}",
+                    start_time=start_time,
+                    end_time=end_time,
+                    block_kind="recording",
+                    source_file_ids=source_file_ids,
                 )
             )
         return blocks

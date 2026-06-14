@@ -1355,6 +1355,28 @@ def test_dedupe_events_preserves_zero_duration_arousal():
     ]
 
 
+def test_parser_session_blocks_merge_identical_signal_file_spans():
+    from importer.loaders.resmed_native import ResMedNativeLoader
+
+    start = datetime(2026, 6, 13, 22, 56)
+    end = datetime(2026, 6, 14, 5, 21)
+    detailed = [
+        SimpleNamespace(start_time=start, end_time=end, file_type="BRP"),
+        SimpleNamespace(start_time=start, end_time=end, file_type="PLD"),
+    ]
+
+    blocks = ResMedNativeLoader()._session_blocks(detailed, "machine", "2026-06-13")
+
+    assert len(blocks) == 1
+    assert blocks[0].start_time == start
+    assert blocks[0].end_time == end
+    assert blocks[0].block_kind == "recording"
+    assert blocks[0].source_file_ids == (
+        "2026-06-13:BRP:0",
+        "2026-06-13:PLD:1",
+    )
+
+
 def test_derive_large_leak_events_uses_end_time_and_duration():
     csl_start = datetime(2026, 6, 1, 23, 50, tzinfo=UTC)
     block_start = csl_start + timedelta(minutes=10)
