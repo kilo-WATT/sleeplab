@@ -10,8 +10,7 @@ import {
   YAxis,
 } from 'recharts'
 
-import type { EventWindowResponse } from '../api/client'
-import { eventInterval } from '../lib/eventTiming'
+import type { EventRecord, EventWindowResponse } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
 import { ChevronLeftIcon, ChevronRightIcon } from './icons/ChevronIcons'
@@ -111,6 +110,15 @@ const EVENT_COLORS: Record<string, string> = {
 }
 
 /**
+ * Helper function for event bounds.
+ */
+function eventBounds(event: EventRecord): { startTs: number; endTs: number } {
+  const endTs = new Date(event.event_datetime).getTime()
+  const durationMs = Math.max((event.duration_seconds ?? 2) * 1000, 2000)
+  return { startTs: endTs - durationMs, endTs }
+}
+
+/**
  * React component or element to render the event band.
  *
  * @returns The rendered React element.
@@ -168,13 +176,13 @@ function EventBands({ data }: { data: EventWindowResponse }) {
   return (
     <>
       {neighbors.map((event) => {
-        const { start, end } = eventInterval(event)
-        return <EventBand key={event.id} startTs={start} endTs={end} eventType={event.event_type} selected={false} />
+        const { startTs, endTs } = eventBounds(event)
+        return <EventBand key={event.id} startTs={startTs} endTs={endTs} eventType={event.event_type} selected={false} />
       })}
       {selected ? (
         <EventBand
-          startTs={eventInterval(selected).start}
-          endTs={eventInterval(selected).end}
+          startTs={eventBounds(selected).startTs}
+          endTs={eventBounds(selected).endTs}
           eventType={selected.event_type}
           selected
         />

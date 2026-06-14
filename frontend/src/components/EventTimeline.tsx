@@ -2,7 +2,6 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import type { EventRecord } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
-import { eventInterval } from '../lib/eventTiming'
 
 /**
  * Properties and structure for the props.
@@ -43,6 +42,11 @@ function fmtTime(ts: number): string {
 /**
  * Returns the best available timestamp for an event.
  */
+function eventTimestamp(event: EventRecord, startTs: number): number {
+  const ts = new Date(event.event_datetime).getTime()
+  return Number.isFinite(ts) ? ts : startTs + event.onset_seconds * 1000
+}
+
 /**
  * Renders a proportional event timeline for the current session.
  */
@@ -171,14 +175,16 @@ export default function EventTimeline({
           ) : null}
           {events.map((evt) => {
             const isSelected = selectedEventId === evt.id
-            const { start: eventStart, end: eventEnd } = eventInterval(evt, fallbackStartTs)
-            const markerStartTs = Math.max(domainStart, eventStart)
+            const ts = eventTimestamp(evt, fallbackStartTs)
+            const markerStartTs = evt.duration_seconds
+              ? Math.max(domainStart, ts - evt.duration_seconds * 1000)
+              : ts
             const widthPct = evt.duration_seconds
-              ? Math.max(((eventEnd - eventStart) / timelineDurationMs) * 100, isSelected ? 0.8 : 0.3)
+              ? Math.max((evt.duration_seconds * 1000 / timelineDurationMs) * 100, isSelected ? 0.8 : 0.3)
               : 0.3
             const xPct = Math.min(Math.max(((markerStartTs - domainStart) / timelineDurationMs) * 100, 0), 100 - widthPct)
             const color = EVENT_COLORS[evt.event_type] ?? '#888'
-            const timeLabel = fmtTime(eventStart)
+            const timeLabel = fmtTime(ts)
             const durationLabel = evt.duration_seconds ? `${evt.duration_seconds}s` : 'Duration not available'
             return (
               <button
