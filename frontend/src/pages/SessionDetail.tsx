@@ -1188,7 +1188,7 @@ function TherapyScoreCard({ session }: { session: SessionDetailType }) {
             </div>
           </div>
 
-          <p className="mt-3 text-xs leading-4 text-white/75 md:mt-auto md:pt-4">{score.callout}</p>
+          <p data-testid="therapy-score-callout" className="mt-4 text-xs leading-4 text-white/75">{score.callout}</p>
         </div>
 
         <div data-testid="therapy-score-components" className="space-y-2">

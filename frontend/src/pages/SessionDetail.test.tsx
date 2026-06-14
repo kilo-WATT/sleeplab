@@ -255,6 +255,7 @@ describe('SessionDetail timezone display', () => {
     const summary = screen.getByTestId('night-summary')
     const metrics = screen.getByTestId('core-metrics')
     const components = screen.getByTestId('therapy-score-components')
+    const callout = screen.getByTestId('therapy-score-callout')
     const eventSelector = screen.getByTestId('desktop-event-selector')
 
     expect(summary.className).toContain('space-y-3')
@@ -267,6 +268,8 @@ describe('SessionDetail timezone display', () => {
     }
     expect(metrics.querySelector('[aria-hidden="true"]')).not.toBeInTheDocument()
     expect(components.className).toContain('space-y-2')
+    expect(callout).toHaveClass('mt-4')
+    expect(callout).not.toHaveClass('mt-auto', 'md:mt-auto')
     expect(score.className).not.toContain('col-span')
     expect(score.className).not.toContain('w-screen')
     expect(score.className).toContain('overflow-visible')
