@@ -1063,10 +1063,9 @@ function EventTable({
         <table className="w-full table-fixed border-collapse text-left text-xs">
           <thead className="sticky top-0 bg-[var(--surface-strong)] text-[var(--muted-foreground)]">
             <tr>
-              <th className="w-[18%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Code</th>
-              <th className="w-[25%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Time</th>
-              <th className="w-[20%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Duration</th>
-              <th className="w-[37%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Type</th>
+              <th className="w-[22%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Code</th>
+              <th className="w-[43%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Time</th>
+              <th className="w-[35%] px-3 py-2 font-bold uppercase tracking-[0.12em]">Duration</th>
             </tr>
           </thead>
           <tbody>
@@ -1095,9 +1094,6 @@ function EventTable({
                   </td>
                   <td className="break-words px-3 py-2 text-[var(--muted-foreground)]">
                     {event.duration_seconds ? `${event.duration_seconds}s` : '-'}
-                  </td>
-                  <td className="px-3 py-2 text-[var(--muted-foreground)]">
-                    {event.event_type}
                   </td>
                 </tr>
               )

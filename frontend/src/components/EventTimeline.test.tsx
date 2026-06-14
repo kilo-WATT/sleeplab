@@ -118,6 +118,35 @@ describe('EventTimeline', () => {
     expect(Number.parseFloat(screen.getByLabelText('Selected graph window').style.width)).toBeCloseTo(16.67, 1)
   })
 
+  it('renders a selected event as one solid marker without a second selection ring', () => {
+    const domainStart = new Date('2026-06-02T04:00:00Z').getTime()
+
+    render(
+      <EventTimeline
+        startDatetime="2026-06-02T04:00:00Z"
+        durationSeconds={3600}
+        wholeNightDomain={[domainStart, domainStart + 3_600_000]}
+        selectedTimeDomain={[domainStart + 1_500_000, domainStart + 2_100_000]}
+        selectedEventId={2}
+        events={[
+          {
+            id: 2,
+            event_type: 'Obstructive Apnea',
+            onset_seconds: 1800,
+            duration_seconds: 10,
+            event_datetime: '2026-06-02T04:30:00Z',
+          },
+        ]}
+      />,
+    )
+
+    const marker = screen.getByRole('button', { name: /obstructive apnea/i })
+    expect(marker).toHaveAttribute('aria-pressed', 'true')
+    expect(marker).toHaveClass('opacity-100')
+    expect(marker).not.toHaveClass('ring-2', 'ring-white')
+    expect(marker.className).not.toContain('shadow-[')
+  })
+
   it('pans the selected window by dragging the navigator box', () => {
     const domainStart = new Date('2026-06-02T04:00:00Z').getTime()
     const onWindowChange = vi.fn()

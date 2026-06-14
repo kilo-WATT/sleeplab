@@ -314,7 +314,9 @@ describe('SessionDetail timezone display', () => {
     }])
     renderSessionDetail()
 
-    fireEvent.click(await screen.findByRole('row', { name: /OA 04:05 AM 12s Obstructive Apnea/i }))
+    const eventSelector = await screen.findByTestId('desktop-event-selector')
+    expect(within(eventSelector).queryByRole('columnheader', { name: 'Type' })).not.toBeInTheDocument()
+    fireEvent.click(within(eventSelector).getByRole('row', { name: /OA 04:05 AM 12s/i }))
 
     expect(screen.getByText('Selected event')).toBeInTheDocument()
     expect(screen.queryByText('Event Inspector')).not.toBeInTheDocument()

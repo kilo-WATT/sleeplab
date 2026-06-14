@@ -191,9 +191,10 @@ export default function EventTimeline({
                 key={evt.id}
                 type="button"
                 aria-label={`${evt.event_type} at ${timeLabel}`}
-                className={`absolute rounded-sm opacity-85 transition focus:outline-none focus:ring-2 focus:ring-[var(--accent)] ${
+                aria-pressed={isSelected}
+                className={`absolute rounded-sm opacity-85 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                   isSelected
-                    ? 'top-1 h-7 z-10 min-w-1.5 ring-2 ring-white shadow-[0_0_0_3px_rgba(148,139,255,0.35),0_0_18px_rgba(148,139,255,0.75)]'
+                    ? 'top-1 h-7 z-10 min-w-1.5 opacity-100'
                     : 'top-1.5 h-6 min-w-1'
                 }`}
                 style={{
