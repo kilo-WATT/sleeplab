@@ -977,7 +977,8 @@ function UnavailableDataCard({
 }) {
   return (
     <Card>
-      <CardContent className={`p-5 sm:p-6 ${centered ? 'flex min-h-24 flex-col justify-center' : ''}`}>
+      {/* pt-5/sm:pt-6 re-assert symmetric top padding: cn() has no tailwind-merge, so CardContent's built-in pt-0 would otherwise win the cascade and jam the title against the top edge. */}
+      <CardContent className={`p-5 pt-5 sm:p-6 sm:pt-6 ${centered ? 'flex min-h-24 flex-col justify-center' : ''}`}>
         <p className="text-base font-bold text-[var(--foreground)]">{title}</p>
         <p className="mt-1.5 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">{description}</p>
       </CardContent>
