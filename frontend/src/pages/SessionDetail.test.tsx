@@ -319,6 +319,7 @@ describe('SessionDetail timezone display', () => {
     fireEvent.click(within(eventSelector).getByRole('row', { name: /OA 04:05 AM 12s/i }))
 
     expect(screen.getByText('Selected event')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Selected graph window')).not.toBeInTheDocument()
     expect(screen.queryByText('Event Inspector')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Clear selection' })).toBeInTheDocument()
   })

@@ -96,6 +96,7 @@ export default function SessionDetail() {
   const [fullNightFlow, setFullNightFlow] = useState<WaveformSignalResponse | null>(null)
   const [waveformBounds, setWaveformBounds] = useState<[number, number] | null>(null)
   const [waveformWindow, setWaveformWindow] = useState<[number, number] | null>(null)
+  const [showNavigatorWindow, setShowNavigatorWindow] = useState(false)
   const [waveformLoading, setWaveformLoading] = useState(false)
   const [waveformError, setWaveformError] = useState<string | null>(null)
   const [spo2, setSpo2] = useState<SpO2Response | null>(null)
@@ -128,6 +129,7 @@ export default function SessionDetail() {
     setFullNightFlow(null)
     setWaveformBounds(null)
     setWaveformWindow(null)
+    setShowNavigatorWindow(false)
     setWaveformLoading(false)
     setWaveformError(null)
     setEquipment(null)
@@ -235,6 +237,7 @@ export default function SessionDetail() {
     setSelectedEventId(event.id)
     setWaveformLoading(Boolean(session?.data_availability.full_night_flow_available))
     setWaveformError(null)
+    setShowNavigatorWindow(false)
     setWaveformWindow(clampWaveformWindow(new Date(event.event_datetime).getTime(), 5))
   }
 
@@ -246,6 +249,7 @@ export default function SessionDetail() {
   function clearSelectedEvent() {
     setSelectedEventId(null)
     setWaveformLoading(Boolean(session?.data_availability.full_night_flow_available))
+    setShowNavigatorWindow(false)
     setWaveformWindow(null)
   }
 
@@ -254,6 +258,7 @@ export default function SessionDetail() {
     setWaveformLoading(true)
     setWaveformError(null)
     if (minutes == null) {
+      setShowNavigatorWindow(false)
       setWaveformWindow(null)
       return
     }
@@ -264,6 +269,7 @@ export default function SessionDetail() {
         : waveformBounds
           ? waveformBounds[0] + (waveformBounds[1] - waveformBounds[0]) / 2
           : new Date(session?.start_datetime ?? 0).getTime()
+    setShowNavigatorWindow(true)
     setWaveformWindow(clampWaveformWindow(selectedCenter, minutes))
   }
 
@@ -271,6 +277,7 @@ export default function SessionDetail() {
     if (!waveformWindow) return
     setWaveformLoading(true)
     setWaveformError(null)
+    setShowNavigatorWindow(true)
     const duration = waveformWindow[1] - waveformWindow[0]
     const center = waveformWindow[0] + duration / 2 + direction * duration * 0.8
     setWaveformWindow(clampWaveformWindow(center, duration / 60_000))
@@ -279,6 +286,7 @@ export default function SessionDetail() {
   function setSharedWaveformWindow(window: [number, number]) {
     setWaveformLoading(Boolean(session?.data_availability.full_night_flow_available))
     setWaveformError(null)
+    setShowNavigatorWindow(true)
     setWaveformWindow(window)
   }
 
@@ -566,7 +574,7 @@ export default function SessionDetail() {
                   durationSeconds={session.duration_seconds}
                   startDatetime={session.start_datetime}
                   wholeNightDomain={wholeNightDomain}
-                  selectedTimeDomain={waveformWindow}
+                  selectedTimeDomain={showNavigatorWindow ? waveformWindow : null}
                   selectedEventId={selectedEventId}
                   onSelectEvent={inspectEvent}
                   onWindowChange={setSharedWaveformWindow}
