@@ -145,6 +145,7 @@ def run_cpap_parser_import(
     # at module load; they are only needed on this opt-in path.
     from importer.db import finish_import_run, get_conn, update_import_run_progress
 
+    from .incremental import detailed_dates, stage_incremental_source
     from .models import ImportOptions
     from .persist import persist_import_run
     from .resmed_native import ResMedNativeLoader
@@ -158,6 +159,21 @@ def run_cpap_parser_import(
     if detected is None:
         raise ImportPlanError(f"No ResMed source detected under {root} for the cpap-parser loader.")
 
+    # Incremental import: skip re-parsing nights already imported with detail by
+    # staging a source that omits their DATALOG day folders. A re-detect failure
+    # on the subset falls back to the full source; the persist-time filter is the
+    # safety net that prevents clobbering existing detail either way.
+    skip_conn = get_conn()
+    try:
+        skip_dates = detailed_dates(skip_conn, user_id, machine_id)
+    finally:
+        skip_conn.close()
+    staged_root, cleanup_staged = stage_incremental_source(detected.source_root, skip_dates)
+    parse_source = detected if staged_root == detected.source_root else next(
+        (candidate for candidate in loader.detect(staged_root) if candidate.adapter_id == CPAP_PARSER_ADAPTER_ID),
+        detected,
+    )
+
     progress_conn = get_conn()
     try:
         update_import_run_progress(
@@ -170,7 +186,7 @@ def run_cpap_parser_import(
         # populate the per-sample tables (session_metrics/session_waveform) that
         # the vendor-neutral ImportRun deliberately does not carry.
         run, directory = loader.import_data_with_directory(
-            detected, ImportOptions(include_waveforms=include_waveforms)
+            parse_source, ImportOptions(include_waveforms=include_waveforms)
         )
         update_import_run_progress(
             progress_conn,
@@ -181,11 +197,15 @@ def run_cpap_parser_import(
         )
     except ImportError as exc:
         # The loader lazily imports cpap_parser; surface a clear dependency error.
+        cleanup_staged()
         raise ImportError(
             "The cpap-parser execution path requires the pinned 'cpap-parser' package "
             "(and its cpap-py backend). Install it, or unset SLEEPLAB_USE_CPAP_PARSER "
             "to fall back to the legacy native importer."
         ) from exc
+    except Exception:
+        cleanup_staged()
+        raise
     finally:
         progress_conn.close()
 
@@ -232,6 +252,7 @@ def run_cpap_parser_import(
     finally:
         persist_progress_conn.close()
         conn.close()
+        cleanup_staged()
 
 
 def _cpap_parser_run_status(run, counts: dict[str, int]) -> str:

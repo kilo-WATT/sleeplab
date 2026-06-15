@@ -146,7 +146,14 @@ def persist_import_run(
         upsert_settings_snapshot,
     )
 
+    from .incremental import detailed_dates
+
     machine_tz_name, machine_tz = _resolve_machine_tz(db_conn, user_id)
+
+    # Nights already imported with detail. A summary-only session for one of these
+    # (e.g. derived from STR when incremental staging omitted its DATALOG folder)
+    # must never overwrite the existing detail, so we skip it below.
+    already_detailed = detailed_dates(db_conn, user_id, machine_id)
 
     counts = {
         "sessions": 0,
@@ -156,6 +163,7 @@ def persist_import_run(
         "settings": 0,
         "derived_values": 0,
         "summary_only_days": 0,
+        "skipped_existing_nights": 0,
         "metric_rows": 0,
         "waveform_rows": 0,
         "waveform_chunks": 0,
@@ -182,6 +190,13 @@ def persist_import_run(
         derived = {value.key: value for value in session.derived_values}
         has_detailed = bool(_derived_scalar(derived, "has_detailed_data", default=False))
         folder_date = _parse_local_date(session.machine_local_date)
+
+        # Incremental safety net: never let a summary-only night clobber a date
+        # that is already imported with detail.
+        if not has_detailed and folder_date in already_detailed:
+            counts["skipped_existing_nights"] += 1
+            continue
+
         start_dt = _localize(session.start_time, machine_tz)
         duration_seconds = _session_duration_seconds(session, derived)
 
