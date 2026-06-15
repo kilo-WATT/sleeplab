@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { OverviewDailyStat } from '../api/client'
-import { deriveInsightChips, deriveNightNotes } from './Trends'
+import { deriveInsightChips, deriveNightNotes } from './trendInsights'
 
 /** Build an OverviewDailyStat with all-null clinical fields, overriding only what a test needs. */
 function night(overrides: Partial<OverviewDailyStat> = {}): OverviewDailyStat {

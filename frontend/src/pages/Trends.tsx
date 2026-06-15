@@ -10,10 +10,9 @@ import Sparkline from '../components/Sparkline'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
+import type { InsightChip, StatusTone } from '../lib/trendInsights'
+import { deriveInsightChips, deriveNightNotes, LEAK_OK_LPM, meanOf } from '../lib/trendInsights'
 import { leakToLpm } from '../lib/units'
-
-/** Coarse clinical status used for badges and insight chips across the page. */
-type StatusTone = 'good' | 'watch' | 'alert' | 'neutral'
 
 /** Soft badge styling per status tone. All tokens adapt to light/dark mode. */
 const STATUS_BADGE: Record<StatusTone, string> = {
@@ -31,8 +30,6 @@ const STATUS_ACCENT: Record<StatusTone, string> = {
   neutral: 'var(--muted-foreground)',
 }
 
-/** Threshold below which residual leak is generally treated as acceptable (ResMed-style). */
-const LEAK_OK_LPM = 24
 /** Nights at the end of the range that get visually distinguished as "recent". */
 const RECENT_NIGHTS = 7
 
@@ -453,62 +450,9 @@ function getMetric(key: MetricKey) {
   return TREND_METRICS.find((metric) => metric.key === key) ?? TREND_METRICS[0]
 }
 
-/** Mean of the non-null numbers in a list, or null when there are none. */
-function meanOf(values: Array<number | null | undefined>): number | null {
-  const present = values.filter((value): value is number => value != null)
-  if (present.length === 0) return null
-  return present.reduce((sum, value) => sum + value, 0) / present.length
-}
-
 /** Ordered (oldest → newest) non-null values of one metric across nights, for sparklines. */
 function seriesOf(nights: OverviewDailyStat[], key: MetricKey): number[] {
   return nights.map((night) => metricNumber(night[key])).filter((value): value is number => value != null)
-}
-
-/** An at-a-glance status chip derived from the loaded data. */
-export interface InsightChip {
-  label: string
-  tone: StatusTone
-}
-
-/**
- * Derive a short, factual set of status chips from the loaded nights. These summarize
- * the current picture (AHI control, central events, leak, oximetry availability) without
- * overclaiming when a signal is missing.
- */
-export function deriveInsightChips(nights: OverviewDailyStat[], avgAhi: number | null): InsightChip[] {
-  const chips: InsightChip[] = []
-
-  if (avgAhi != null) {
-    if (avgAhi < 5) chips.push({ label: 'AHI controlled', tone: 'good' })
-    else if (avgAhi < 15) chips.push({ label: 'AHI mildly elevated', tone: 'watch' })
-    else chips.push({ label: 'AHI elevated', tone: 'alert' })
-  }
-
-  const avgCentral = meanOf(nights.map((night) => night.central_apnea_index))
-  if (avgCentral != null && avgCentral >= 5) {
-    chips.push({ label: 'Central apnea elevated', tone: 'alert' })
-  }
-
-  const avgLeak = meanOf(nights.map((night) => night.avg_leak))
-  const hasLargeLeak = nights.some((night) => (night.large_leak_minutes ?? 0) > 0)
-  if (avgLeak != null && avgLeak >= LEAK_OK_LPM) {
-    chips.push({ label: 'Leaks high', tone: 'alert' })
-  } else if (hasLargeLeak) {
-    chips.push({ label: 'Leaks intermittent', tone: 'watch' })
-  } else if (avgLeak != null) {
-    chips.push({ label: 'Leaks controlled', tone: 'good' })
-  }
-
-  const hasSpo2 = nights.some((night) => night.avg_spo2 != null || night.min_spo2 != null)
-  if (!hasSpo2) {
-    chips.push({ label: 'SpO₂ unavailable', tone: 'neutral' })
-  } else {
-    const minSpo2 = meanOf(nights.map((night) => night.min_spo2))
-    if (minSpo2 != null && minSpo2 < 88) chips.push({ label: 'SpO₂ dips low', tone: 'watch' })
-  }
-
-  return chips.slice(0, 4)
 }
 
 /**
@@ -902,6 +846,20 @@ function metricNumber(value: OverviewDailyStat[MetricKey]) {
 }
 
 /**
+ * In-chart caption for the recent-nights highlight band. Recharts clones this element
+ * with the band's `viewBox`, so we anchor the text to the top-right edge of the band
+ * (where it overlaps the empty top of the plot) and keep it small to avoid hiding the line.
+ */
+function RecentBandLabel({ viewBox }: { viewBox?: { x?: number; y?: number; width?: number; height?: number } }) {
+  const { x = 0, y = 0, width = 0 } = viewBox ?? {}
+  return (
+    <text x={x + width - 6} y={y + 12} textAnchor="end" fontSize={10} fontWeight={700} fill="var(--accent)">
+      Recent {RECENT_NIGHTS} nights
+    </text>
+  )
+}
+
+/**
  * Normalize a night's leak to L/min using its own leak_unit, so every downstream
  * aggregate (average, min/max, chart, table) works in a single unit. Legacy nights
  * are stored in L/s and parser nights in L/min; converting here once avoids the old
@@ -1043,22 +1001,6 @@ function OverviewChart({
           </div>
           <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">{metric.unit || 'Index'}</p>
         </div>
-        {hasLegend && (
-          <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--muted-foreground)]">
-            {metric.referenceLines?.map((line) => (
-              <span key={line.value} className="inline-flex items-center gap-1.5">
-                <span className="inline-block h-0 w-4 border-t-2 border-dashed" style={{ borderColor: line.color }} />
-                {metric.shortLabel} {line.value}{line.note ? ` · ${line.note}` : ''}
-              </span>
-            ))}
-            {recentStart && (
-              <span className="inline-flex items-center gap-1.5">
-                <span className="inline-block h-3 w-3 rounded-sm bg-[var(--accent-soft)]" />
-                Recent {RECENT_NIGHTS} nights
-              </span>
-            )}
-          </div>
-        )}
         <MetricSummaryCards nights={nights} metric={metric} />
         <ResponsiveContainer width="100%" height={320}>
           <ComposedChart
@@ -1100,7 +1042,16 @@ function OverviewChart({
               }}
             />
             {recentStart && lastDate ? (
-              <ReferenceArea x1={recentStart} x2={lastDate} fill="var(--accent-soft)" fillOpacity={1} stroke="none" />
+              <ReferenceArea
+                x1={recentStart}
+                x2={lastDate}
+                fill="var(--accent-soft)"
+                fillOpacity={1}
+                stroke="var(--accent)"
+                strokeOpacity={0.3}
+                strokeDasharray="3 3"
+                label={<RecentBandLabel />}
+              />
             ) : null}
             {metric.referenceLines?.map((line) => (
               <ReferenceLine
@@ -1137,31 +1088,28 @@ function OverviewChart({
             ) : null}
           </ComposedChart>
         </ResponsiveContainer>
+        {hasLegend && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--muted-foreground)]">
+            {metric.referenceLines?.map((line) => (
+              <span key={line.value} className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-0 w-4 border-t-2 border-dashed" style={{ borderColor: line.color }} />
+                {metric.shortLabel} {line.value}{line.note ? ` · ${line.note}` : ''}
+              </span>
+            ))}
+            {recentStart && (
+              <span className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-3 w-3 rounded-sm border border-dashed bg-[var(--accent-soft)]"
+                  style={{ borderColor: 'var(--accent-border)' }}
+                />
+                Recent {RECENT_NIGHTS} nights
+              </span>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   )
-}
-
-/** A short, factual flag describing something notable about a single night. */
-export interface NightNote {
-  label: string
-  tone: StatusTone
-}
-
-/** Derive note badges for one night without overclaiming on missing signals. */
-export function deriveNightNotes(night: OverviewDailyStat): NightNote[] {
-  const notes: NightNote[] = []
-  const leak = night.avg_leak
-  const ahi = night.ahi
-  const cai = night.central_apnea_index
-
-  if (night.usage_hours < 4) notes.push({ label: 'Short session', tone: 'watch' })
-  if (leak != null && leak >= LEAK_OK_LPM) notes.push({ label: 'High leak', tone: 'alert' })
-  if (cai != null && ahi != null && ahi > 0 && cai / ahi >= 0.5 && cai >= 2) {
-    notes.push({ label: 'More CA', tone: 'watch' })
-  }
-  if (leak != null && leak < 5) notes.push({ label: 'Low leak', tone: 'good' })
-  return notes
 }
 
 /**
