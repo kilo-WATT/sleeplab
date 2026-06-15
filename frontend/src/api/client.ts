@@ -515,6 +515,7 @@ export interface Equipment {
   model: string | null
   notes: string | null
   days_in_use: number | null
+  is_default: boolean
   created_at: string
   updated_at: string
 }
@@ -937,6 +938,7 @@ export const api = {
   listEquipment: () => get<Equipment[]>('/equipment/'),
   createEquipment: (payload: EquipmentCreate) => post<Equipment>('/equipment/', payload),
   updateEquipment: (id: string, payload: EquipmentUpdate) => put<Equipment>(`/equipment/${id}`, payload),
+  setDefaultEquipment: (id: string) => put<Equipment>(`/equipment/${id}/default`),
   deleteEquipment: (id: string) => request<void>(`/equipment/${id}`, { method: 'DELETE' }),
   getInferredEquipment: (refDate: string) => get<InferredEquipment>('/equipment/inferred', { ref_date: refDate }),
   register: (payload: RegisterRequest) => post<AuthResponse>('/auth/register', payload),

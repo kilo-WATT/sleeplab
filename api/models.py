@@ -340,6 +340,7 @@ class EquipmentResponse(BaseModel):
         model: The item model name.
         notes: General description notes.
         days_in_use: Calculated count of service days relative to target date.
+        is_default: Whether this is the user's chosen default/active item for its type.
         created_at: Database record creation timestamp.
         updated_at: Database record update timestamp.
     """
@@ -353,6 +354,7 @@ class EquipmentResponse(BaseModel):
     model: str | None
     notes: str | None
     days_in_use: int | None
+    is_default: bool = False
     created_at: datetime
     updated_at: datetime
 
