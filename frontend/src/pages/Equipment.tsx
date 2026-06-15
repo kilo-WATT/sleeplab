@@ -7,7 +7,7 @@ import EquipmentCatalog from '../components/EquipmentCatalog'
  */
 export default function EquipmentPage() {
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-4xl">
       <EquipmentCatalog />
     </div>
   )

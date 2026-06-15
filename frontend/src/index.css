@@ -84,6 +84,8 @@
     --danger-text: #8e3d40;
     --success-soft: rgba(106, 161, 54, 0.12);
     --success-text: #4f7a28;
+    --warning-soft: rgba(233, 120, 75, 0.14);
+    --warning-text: #9a5b16;
   }
 
   [data-theme='dark'] {
@@ -126,6 +128,8 @@
     --danger-text: #f3c0c3;
     --success-soft: rgba(106, 161, 54, 0.22);
     --success-text: #c6eb9e;
+    --warning-soft: rgba(233, 120, 75, 0.24);
+    --warning-text: #f3c9a0;
   }
 
   * {
