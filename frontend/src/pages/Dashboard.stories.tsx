@@ -30,13 +30,21 @@ const mockSummaryPopulated: SummaryStats = {
   },
 }
 
+// Dates are anchored to "now" so the headline metrics (computed over the trailing
+// 30-night window) stay populated regardless of when the story is viewed.
+function recentDate(daysAgo: number): string {
+  const date = new Date()
+  date.setDate(date.getDate() - daysAgo)
+  return date.toISOString().slice(0, 10)
+}
+
 const mockSessionsPopulated: SessionSummary[] = [
   {
     id: '1',
     session_id: '1',
-    folder_date: '2023-10-01',
+    folder_date: recentDate(1),
     block_index: 0,
-    start_datetime: '2023-10-01T22:00:00Z',
+    start_datetime: `${recentDate(1)}T22:00:00Z`,
     duration_seconds: 27000,
     duration_hours: 7.5,
     ahi: 3.1,
@@ -55,9 +63,9 @@ const mockSessionsPopulated: SessionSummary[] = [
   {
     id: '2',
     session_id: '2',
-    folder_date: '2023-10-02',
+    folder_date: recentDate(2),
     block_index: 0,
-    start_datetime: '2023-10-02T22:30:00Z',
+    start_datetime: `${recentDate(2)}T22:30:00Z`,
     duration_seconds: 28800,
     duration_hours: 8.0,
     ahi: 2.2,

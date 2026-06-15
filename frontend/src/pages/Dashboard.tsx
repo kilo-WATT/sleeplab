@@ -7,6 +7,7 @@ import noDataIllustration from '../assets/no-data.webp'
 import AISummaryCard from '../components/AISummaryCard'
 import CalendarHeatmap, { type CalendarMetric } from '../components/CalendarHeatmap'
 import AHITrendChart from '../components/AHITrendChart'
+import Sparkline from '../components/Sparkline'
 import WearableSleepSummaryChart from '../components/WearableSleepSummaryChart'
 import { ChevronRightIcon } from '../components/icons/ChevronIcons'
 import InfoPopover from '../components/InfoPopover'
@@ -15,7 +16,40 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
+import { computeOverviewMetrics, OVERVIEW_WINDOW_NIGHTS, pluralize, type MetricDelta } from '../lib/overviewMetrics'
 import { leakToLpm } from '../lib/units'
+
+/** Insurance/adherence reference line drawn on the compliance bar (70% of nights ≥4h). */
+const COMPLIANCE_THRESHOLD_PCT = 70
+
+/**
+ * Render a directional delta versus the prior equal-length window
+ * (e.g. "▼ 0.3 vs prior 30"). Color signals improvement/regression per metric.
+ */
+function DeltaIndicator({
+  delta,
+  render,
+  flatText = 'stable',
+}: {
+  delta: MetricDelta
+  render: (absValue: number) => string
+  flatText?: string
+}) {
+  const arrow = delta.direction === 'up' ? '▲' : delta.direction === 'down' ? '▼' : '▶'
+  const toneClass =
+    delta.tone === 'good'
+      ? 'text-[var(--green-700)]'
+      : delta.tone === 'bad'
+        ? 'text-[var(--danger-text)]'
+        : 'text-[var(--muted-foreground)]'
+  const text = delta.value == null || delta.direction === 'flat' ? flatText : render(Math.abs(delta.value))
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-bold ${toneClass}`}>
+      <span aria-hidden="true">{arrow}</span>
+      <span>{text}</span>
+    </span>
+  )
+}
 
 /**
  * Helper function for ahi tone.
@@ -46,13 +80,6 @@ function currentStreak(sessions: SessionSummary[]) {
   }
 
   return streak
-}
-
-interface FlaggedNight {
-  date: string
-  label: string
-  detail: string
-  severity: 'high' | 'warn'
 }
 
 function buildPrimaryByDate(sessions: SessionSummary[]): Map<string, SessionSummary> {
@@ -171,24 +198,15 @@ export default function Dashboard() {
     )
   }
 
-  const { event_breakdown: eb } = summary
-  const totalEvents = Object.values(eb).reduce((a, b) => a + b, 0)
   const streakCount = currentStreak(sessions)
-  const respiratoryEventsPerNight = summary.nights_with_data > 0
-    ? totalEvents / summary.nights_with_data
-    : 0
+
+  // Single source of truth for the headline metrics, computed over one explicit
+  // trailing window. Hero cards, the AI Insights denominator, and Nights-to-Review
+  // all read from here so every figure on the page agrees.
+  const metrics = computeOverviewMetrics(sessions)
 
   const primaryByDate = buildPrimaryByDate(sessions)
   const primarySessions = [...primaryByDate.values()]
-
-  const avgUsage = primarySessions.length > 0
-    ? primarySessions.reduce((sum, s) => sum + s.duration_hours, 0) / primarySessions.length
-    : null
-
-  const leakSessions = primarySessions.filter(s => s.avg_leak !== null)
-  const avgLeak = leakSessions.length > 0
-    ? leakSessions.reduce((sum, s) => sum + (leakToLpm(s.avg_leak, s.leak_unit) ?? 0), 0) / leakSessions.length
-    : null
 
   const bestNight = primarySessions
     .filter(s => s.ahi !== null)
@@ -199,58 +217,31 @@ export default function Dashboard() {
     perDayData[date] = { pressure: s.avg_pressure, leak: leakToLpm(s.avg_leak, s.leak_unit) }
   }
 
-  const flaggedNights: FlaggedNight[] = []
-  const flaggedDatesSet = new Set<string>()
+  // The trend chart only distinguishes high vs warn dots; fold the third tier in.
+  const trendFlags = metrics.flaggedNights.map((n) => ({
+    date: n.date,
+    severity: n.tone === 'high' ? ('high' as const) : ('warn' as const),
+  }))
 
-  const ahiSorted = primarySessions
-    .filter(s => s.ahi !== null)
-    .sort((a, b) => (b.ahi ?? 0) - (a.ahi ?? 0))
-  if (ahiSorted[0]) {
-    const s = ahiSorted[0]
-    flaggedNights.push({
-      date: s.folder_date,
-      label: 'Highest AHI',
-      detail: `AHI ${s.ahi?.toFixed(1)}`,
-      severity: (s.ahi ?? 0) >= 15 ? 'high' : 'warn',
-    })
-    flaggedDatesSet.add(s.folder_date)
-  }
-
-  const leakSorted = primarySessions
-    .filter(s => s.avg_leak !== null)
-    .sort((a, b) => (b.avg_leak ?? 0) - (a.avg_leak ?? 0))
-  if (leakSorted[0] && !flaggedDatesSet.has(leakSorted[0].folder_date)) {
-    const s = leakSorted[0]
-    flaggedNights.push({
-      date: s.folder_date,
-      label: 'Highest leak',
-      detail: `${leakToLpm(s.avg_leak, s.leak_unit)?.toFixed(0)} L/min`,
-      severity: (leakToLpm(s.avg_leak, s.leak_unit) ?? 0) >= 40 ? 'high' : 'warn',
-    })
-    flaggedDatesSet.add(s.folder_date)
-  }
-
-  for (const s of primarySessions.filter(s => s.duration_hours < 4)) {
-    if (!flaggedDatesSet.has(s.folder_date) && flaggedNights.length < 5) {
-      flaggedNights.push({
-        date: s.folder_date,
-        label: 'Short session',
-        detail: `${s.duration_hours.toFixed(1)}h usage`,
-        severity: 'warn',
+  const nightWord = pluralize(metrics.windowNights, 'night')
+  const throughLabel = metrics.through
+    ? new Date(`${metrics.through}T00:00:00`).toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
       })
-      flaggedDatesSet.add(s.folder_date)
-    }
-  }
+    : null
+  const windowLabel = `Last ${metrics.windowNights} ${nightWord}${throughLabel ? ` · through ${throughLabel}` : ''}`
 
   const hasSpo2 = sessions.some(s => s.has_spo2)
   const caveat = [
-    `Based on ${summary.nights_with_data} of ${summary.total_nights} nights`,
+    `Based on ${metrics.recordedNights} of ${metrics.windowNights} ${nightWord}`,
     !hasSpo2 ? 'no SpO₂ data' : null,
   ].filter(Boolean).join(' · ')
 
   const statHelp = {
     streaks: 'How many nights in a row you have recent imported CPAP data for. Longer streaks usually mean more consistent therapy use.',
-    compliance: 'The share of nights in your recorded date range where the machine has usable therapy data. Higher percentages generally mean more consistent therapy use.',
+    compliance: `The share of the last ${OVERVIEW_WINDOW_NIGHTS} nights with at least 4 hours of recorded therapy. Insurance programs commonly require 70%.`,
     avgAhi: 'AHI means apnea-hypopnea index: the average number of breathing events per hour. Under 5 is commonly treated as a good control target.',
     avgPressure: 'The average treatment pressure your machine delivered during recorded nights. This can help show whether your pressure settings are in the right range.',
     respiratoryEvents: 'The average number of breathing events seen on each recorded night. Lower numbers usually suggest steadier breathing during treatment.',
@@ -262,7 +253,7 @@ export default function Dashboard() {
   const primaryCardContent = 'flex h-full flex-col items-start px-4 pb-4 pt-5 sm:px-6 sm:pb-6 sm:pt-7'
   const mobilePrimaryChipContent = 'flex h-full flex-col items-start px-4 pb-4 pt-5 sm:px-6 sm:pb-5 sm:pt-5 lg:min-h-[108px]'
   const statLabelClass = 'flex items-center gap-1.5 text-xs font-bold text-[var(--foreground)] sm:gap-2 sm:text-sm'
-  const statValueClass = 'mt-2 text-3xl font-semibold sm:text-4xl'
+  const statValueClass = 'text-3xl font-semibold sm:text-4xl'
   const statDescriptionClass = 'mt-1 text-xs leading-5 text-[var(--muted-foreground)] sm:text-sm'
   const statLinkClass = 'mt-3 hidden items-center gap-1 text-xs font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)] sm:inline-flex sm:text-sm'
 
@@ -273,6 +264,7 @@ export default function Dashboard() {
   const reviewDotClass = {
     high: 'bg-[var(--danger-text)]',
     warn: 'bg-[var(--orange-500)]',
+    info: 'bg-[var(--yellow-500)]',
   } as const
 
   const calMetrics: { key: CalendarMetric; label: string }[] = [
@@ -315,14 +307,17 @@ export default function Dashboard() {
   return (
     <div className="flex flex-col gap-5 sm:gap-8">
       <section className="order-1 space-y-3 sm:space-y-4" aria-label="Overview metrics">
-        {streakCount > 0 && (
-          <div className="flex items-center justify-end">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1 text-xs font-semibold text-[var(--muted-foreground)]">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)] sm:text-sm">
+            {windowLabel}
+          </p>
+          {streakCount > 0 && (
+            <div className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1 text-xs font-semibold text-[var(--muted-foreground)]">
               <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" aria-hidden="true" />
-              {streakCount}-night streak
+              {streakCount}-{pluralize(streakCount, 'night')} streak
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="grid grid-cols-6 gap-3 lg:grid-cols-12 lg:gap-4">
           <Card className="order-1 col-span-3 lg:col-span-4">
@@ -331,12 +326,21 @@ export default function Dashboard() {
               <span>Average AHI</span>
               <InfoPopover title="Average AHI">{statHelp.avgAhi}</InfoPopover>
             </div>
-            <div className={`${statValueClass} ${ahiTone(summary.avg_ahi)}`}>{summary.avg_ahi?.toFixed(1) ?? '—'}</div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <div className={`${statValueClass} ${ahiTone(metrics.avgAhi)}`}>{metrics.avgAhi?.toFixed(1) ?? '—'}</div>
+              <Sparkline values={metrics.ahiSeries} color="var(--green-500)" className="h-9 w-24 shrink-0 sm:w-28" />
+            </div>
             <div className={statDescriptionClass}>Breathing events each hour</div>
-            <Link className={statLinkClass} to="/trends#ahi-trend">
-              <span>View AHI trend</span>
-              <ChevronRightIcon className="h-4 w-4" />
-            </Link>
+            <div className="mt-auto flex w-full items-center justify-between gap-2 pt-3">
+              <DeltaIndicator
+                delta={metrics.ahiDelta}
+                render={(v) => `${v.toFixed(1)} vs prior ${metrics.windowNights}`}
+              />
+              <Link className={statLinkClass} to="/trends#ahi-trend">
+                <span>View AHI trend</span>
+                <ChevronRightIcon className="h-4 w-4" />
+              </Link>
+            </div>
             </CardContent>
           </Card>
 
@@ -346,18 +350,35 @@ export default function Dashboard() {
               <span>Compliance</span>
               <InfoPopover title="Compliance">{statHelp.compliance}</InfoPopover>
             </div>
-            <div className={`${statValueClass} text-[var(--foreground)]`}>{summary.compliance_pct}%</div>
-            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--border)]">
+            <div className={`mt-2 ${statValueClass} text-[var(--foreground)]`}>{metrics.compliancePct.toFixed(1)}%</div>
+            <div className="relative mt-3 mb-1 h-2 w-full rounded-full bg-[var(--border)]">
               <div
-                className="h-1.5 rounded-full bg-[var(--accent)] transition-all"
-                style={{ width: `${Math.min(summary.compliance_pct, 100)}%` }}
+                className="h-2 rounded-full bg-[var(--accent)] transition-all"
+                style={{ width: `${Math.min(metrics.compliancePct, 100)}%` }}
+              />
+              <span
+                className="absolute -top-1 bottom-[-0.25rem] w-px bg-[var(--foreground)] opacity-60"
+                style={{ left: `${COMPLIANCE_THRESHOLD_PCT}%` }}
+                title={`${COMPLIANCE_THRESHOLD_PCT}% required`}
+                aria-hidden="true"
               />
             </div>
-            <div className={statDescriptionClass}>Nights with usable data</div>
-            <Link className={statLinkClass} to="/trends#usage-trend">
-              <span>View usage trend</span>
-              <ChevronRightIcon className="h-4 w-4" />
-            </Link>
+            <div className={statDescriptionClass}>
+              <b className="font-semibold text-[var(--foreground)]">
+                {metrics.compliantNights}/{metrics.windowNights}
+              </b>{' '}
+              {pluralize(metrics.windowNights, 'night')} ≥ 4h · 70% req.
+            </div>
+            <div className="mt-auto flex w-full items-center justify-between gap-2 pt-3">
+              <DeltaIndicator
+                delta={metrics.complianceDelta}
+                render={(v) => `${v.toFixed(1)} pts vs prior ${metrics.windowNights}`}
+              />
+              <Link className={statLinkClass} to="/trends#usage-trend">
+                <span>View usage trend</span>
+                <ChevronRightIcon className="h-4 w-4" />
+              </Link>
+            </div>
             </CardContent>
           </Card>
 
@@ -367,12 +388,21 @@ export default function Dashboard() {
               <span>Average Pressure</span>
               <InfoPopover title="Average pressure">{statHelp.avgPressure}</InfoPopover>
             </div>
-            <div className={`${statValueClass} text-[var(--foreground)]`}>{summary.avg_pressure?.toFixed(1) ?? '—'}</div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <div className={`${statValueClass} text-[var(--foreground)]`}>{metrics.avgPressure?.toFixed(1) ?? '—'}</div>
+              <Sparkline values={metrics.pressureSeries} color="var(--blue-500)" className="h-9 w-24 shrink-0 sm:w-28" />
+            </div>
             <div className={statDescriptionClass}>Typical treatment pressure (cmH₂O)</div>
-            <Link className={statLinkClass} to="/calendar#calendar-grid">
-              <span>View session details</span>
-              <ChevronRightIcon className="h-4 w-4" />
-            </Link>
+            <div className="mt-auto flex w-full items-center justify-between gap-2 pt-3">
+              <DeltaIndicator
+                delta={metrics.pressureDelta}
+                render={(v) => `${v.toFixed(1)} vs prior ${metrics.windowNights}`}
+              />
+              <Link className={statLinkClass} to="/calendar#calendar-grid">
+                <span>View session details</span>
+                <ChevronRightIcon className="h-4 w-4" />
+              </Link>
+            </div>
             </CardContent>
           </Card>
 
@@ -382,7 +412,7 @@ export default function Dashboard() {
               <span>Resp. Events</span>
               <InfoPopover title="Respiratory events">{statHelp.respiratoryEvents}</InfoPopover>
             </div>
-            <div className={chipValue}>{respiratoryEventsPerNight.toFixed(1)}</div>
+            <div className={chipValue}>{metrics.respEventsPerNight != null ? metrics.respEventsPerNight.toFixed(1) : '—'}</div>
             <div className={chipDesc}>avg per night</div>
             </CardContent>
           </Card>
@@ -393,7 +423,7 @@ export default function Dashboard() {
               <span>Avg Usage</span>
               <InfoPopover title="Average usage">{statHelp.avgUsage}</InfoPopover>
             </div>
-            <div className={chipValue}>{avgUsage != null ? `${avgUsage.toFixed(1)}h` : '—'}</div>
+            <div className={chipValue}>{metrics.avgUsageHours != null ? `${metrics.avgUsageHours.toFixed(1)}h` : '—'}</div>
             <div className={chipDesc}>per night</div>
             </CardContent>
           </Card>
@@ -404,7 +434,7 @@ export default function Dashboard() {
               <span>Avg Leak</span>
               <InfoPopover title="Average leak">{statHelp.avgLeak}</InfoPopover>
             </div>
-            <div className={chipValue}>{avgLeak != null ? `${avgLeak.toFixed(0)}` : '—'}</div>
+            <div className={chipValue}>{metrics.avgLeakLpm != null ? metrics.avgLeakLpm.toFixed(1) : '—'}</div>
             <div className={chipDesc}>L/min avg</div>
             </CardContent>
           </Card>
@@ -439,19 +469,19 @@ export default function Dashboard() {
         <Card>
           <CardHeader>
             <CardTitle>Nights to Review</CardTitle>
-            <CardDescription>Sessions worth a closer look.</CardDescription>
+            <CardDescription>Sorted by severity — worth a closer look.</CardDescription>
           </CardHeader>
           <CardContent>
-            {flaggedNights.length === 0 ? (
+            {metrics.flaggedNights.length === 0 ? (
               <p className="py-4 text-center text-sm text-[var(--muted-foreground)]">
-                No flagged nights in your recent data.
+                No flagged nights in the last {metrics.windowNights} {pluralize(metrics.windowNights, 'night')}.
               </p>
             ) : (
               <ul className="space-y-2">
-                {flaggedNights.map((n) => (
+                {metrics.flaggedNights.map((n) => (
                   <li key={`${n.label}-${n.date}`} className="flex items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3">
                     <div className="flex min-w-0 items-center gap-3">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${reviewDotClass[n.severity]}`} />
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${reviewDotClass[n.tone]}`} />
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-[var(--foreground)]">{n.label}</p>
                         <p className="text-xs text-[var(--muted-foreground)]">{n.detail}</p>
@@ -506,7 +536,7 @@ export default function Dashboard() {
         <AHITrendChart
           trend={summary.ahi_trend}
           perDayData={perDayData}
-          flaggedNights={flaggedNights}
+          flaggedNights={trendFlags}
         />
       </div>
 
