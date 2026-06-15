@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import type { SessionSummary } from '../api/client'
@@ -18,8 +18,20 @@ interface CalendarEntry {
   ahi: number | null
   hours: number
   leak: number | null
+  pressure: number | null
   durationSeconds: number
+  /** True when the night has detailed recorded metrics; false for summary-only
+   *  nights (machine ran and logged usage, but nothing was recorded — e.g. the
+   *  SD card was left out). */
+  recorded: boolean
 }
+
+// Diagonal slashes overlaid on a solid color: "used, but not fully recorded".
+const SLASH_OVERLAY =
+  'repeating-linear-gradient(45deg, rgba(255,255,255,0.5), rgba(255,255,255,0.5) 2px, transparent 2px, transparent 6px)'
+// Gray slashes on the card background: future days and days with no data at all.
+const EMPTY_HATCH =
+  'repeating-linear-gradient(45deg, var(--surface-muted), var(--surface-muted) 4px, transparent 4px, transparent 8px)'
 
 /**
  * Helper function for get ahi color.
@@ -45,30 +57,30 @@ function getAhiLabel(ahi: number | null): string {
 
 function getUsageColor(hours: number | null): string {
   if (hours === null) return 'var(--calendar-empty)'
-  if (hours >= 6) return '#6AA136'
+  if (hours >= 7) return '#6AA136'
   if (hours >= 4) return '#C9B715'
   return '#E9784B'
 }
 
 function getUsageLabel(hours: number | null): string {
   if (hours === null) return 'No data'
-  if (hours >= 6) return `${hours.toFixed(1)}h (>=6h)`
+  if (hours >= 7) return `${hours.toFixed(1)}h (>=7h)`
   if (hours >= 4) return `${hours.toFixed(1)}h (compliant)`
   return `${hours.toFixed(1)}h (<4h)`
 }
 
 function getLeakColor(leak: number | null): string {
   if (leak === null) return 'var(--calendar-empty)'
-  if (leak < 24) return '#6AA136'
-  if (leak < 40) return '#C9B715'
+  if (leak < 10) return '#6AA136'
+  if (leak < 24) return '#C9B715'
   return '#E9784B'
 }
 
 function getLeakLabel(leak: number | null): string {
   if (leak === null) return 'No data'
-  if (leak < 24) return `${leak.toFixed(0)} L/min (normal)`
-  if (leak < 40) return `${leak.toFixed(0)} L/min (elevated)`
-  return `${leak.toFixed(0)} L/min (high)`
+  if (leak < 10) return `${leak.toFixed(1)} L/min (normal)`
+  if (leak < 24) return `${leak.toFixed(1)} L/min (elevated)`
+  return `${leak.toFixed(1)} L/min (high)`
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -97,15 +109,15 @@ const LEGENDS: Record<CalendarMetric, [string, string][]> = {
     ['var(--calendar-empty)', 'No data'],
   ],
   usage: [
-    ['#6AA136', '>=6h'],
-    ['#C9B715', '4-6h'],
+    ['#6AA136', '>=7h'],
+    ['#C9B715', '4-7h'],
     ['#E9784B', '<4h'],
     ['var(--calendar-empty)', 'No data'],
   ],
   leak: [
-    ['#6AA136', '<24 L/min'],
-    ['#C9B715', '24-40'],
-    ['#E9784B', '>40'],
+    ['#6AA136', '<10 L/min'],
+    ['#C9B715', '10-24'],
+    ['#E9784B', '24+'],
     ['var(--calendar-empty)', 'No data'],
   ],
 }
@@ -155,11 +167,17 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
     for (const session of sessions) {
       const existing = entries[session.folder_date]
       if (!existing || session.duration_seconds > existing.durationSeconds) {
+        const leak = leakToLpm(session.avg_leak, session.leak_unit)
         entries[session.folder_date] = {
           ahi: session.ahi,
           hours: session.duration_hours,
-          leak: leakToLpm(session.avg_leak, session.leak_unit),
+          leak,
+          pressure: session.avg_pressure,
           durationSeconds: session.duration_seconds,
+          // A real recording always yields pressure (and usually leak). Summary-only
+          // nights (e.g. SD card left out) carry neither — AHI is excluded here
+          // because a ghost night can still report AHI 0.
+          recorded: session.avg_pressure != null || leak != null,
         }
       }
     }
@@ -201,8 +219,20 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
     return getAhiColor(entry.ahi)
   }
 
+  // Background for a calendar entry. Summary-only nights (usage logged but no
+  // detailed recording) take the same color as their metric value — a good
+  // machine-reported AHI stays green — and are slashed to flag that the night's
+  // detailed data is missing/incomplete, not to imply a worse reading.
+  function cellStyle(entry: CalendarEntry): CSSProperties {
+    if (!entry.recorded) {
+      return { backgroundColor: getDotColor(entry), backgroundImage: SLASH_OVERLAY }
+    }
+    return { background: getDotColor(entry) }
+  }
+
   function getDotTooltip(iso: string, entry: CalendarEntry | undefined): string {
     if (!entry) return `${iso}\nNo session`
+    if (!entry.recorded) return `${iso}\nUsed ${entry.hours.toFixed(1)}h · not recorded (no SD card)`
     if (metric === 'usage') return `${iso}\nUsage: ${getUsageLabel(entry.hours)}`
     if (metric === 'leak') return `${iso}\nLeak: ${getLeakLabel(entry.leak)}`
     return `${iso}\nAHI: ${entry.ahi?.toFixed(1) ?? '-'} (${getAhiLabel(entry.ahi ?? null)})`
@@ -272,7 +302,10 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
                     <span
                       key={iso}
                       className="h-3.5 w-3.5 rounded-sm transition hover:scale-110 sm:h-4 sm:w-4"
-                      style={{ background: getDotColor(entry), cursor: entry ? 'pointer' : 'default' }}
+                      style={{
+                        ...(entry ? cellStyle(entry) : { background: 'var(--calendar-empty)' }),
+                        cursor: entry ? 'pointer' : 'default',
+                      }}
                       title={getDotTooltip(iso, entry)}
                       onClick={() => entry && navigate(`/sessions/${iso}`)}
                     />
@@ -294,8 +327,28 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
 
   const monthDays = buildMonthDays(selected.year, selected.month, true)
   const recordedMonthDays = monthDays.filter((date): date is Date => Boolean(date && byDate[toIso(date)]))
-  const previewDays = recordedMonthDays.slice(0, 10)
+  // Show the most recent nights (ending on the current/last recorded day), not the
+  // first days of the month — that is what a phone-width user wants to glance at.
+  const previewDays = recordedMonthDays.slice(-10)
   const extraPreviewDays = Math.max(0, recordedMonthDays.length - previewDays.length)
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const isFutureDay = (date: Date) => date.getTime() > today.getTime()
+
+  // Drop only the trailing padding weeks that contain no real calendar date (the
+  // 6-week pad artifact) — so the trend chart isn't pushed down a screen. Keep
+  // every week that holds an actual day of the month, including the current
+  // month's future days, which render grayed out.
+  const weeks: (Date | null)[][] = []
+  for (let index = 0; index < monthDays.length; index += 7) {
+    weeks.push(monthDays.slice(index, index + 7))
+  }
+  let lastRealWeek = -1
+  weeks.forEach((week, index) => {
+    if (week.some((date) => date != null)) lastRealWeek = index
+  })
+  const visibleDays = weeks.slice(0, lastRealWeek + 1).flat()
 
   return (
     <>
@@ -318,6 +371,9 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
               Recorded nights
             </p>
             <div className="flex min-h-8 flex-wrap items-center gap-1.5">
+            {extraPreviewDays > 0 ? (
+              <span className="mr-1 text-sm font-semibold text-[var(--muted-foreground)]">+{extraPreviewDays} earlier</span>
+            ) : null}
             {previewDays.length > 0 ? previewDays.map((date) => {
               const iso = toIso(date)
               const entry = byDate[iso]
@@ -326,7 +382,7 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
                   key={iso}
                   type="button"
                   className="inline-flex h-7 min-w-7 items-center justify-center rounded-[7px] px-1 text-[11px] font-bold text-white transition hover:scale-105"
-                  style={{ background: getDotColor(entry) }}
+                  style={entry ? cellStyle(entry) : { background: 'var(--calendar-empty)' }}
                   title={getDotTooltip(iso, entry)}
                   onClick={() => navigate(`/sessions/${iso}`)}
                   aria-label={getDotTooltip(iso, entry).replace('\n', ' ')}
@@ -337,9 +393,6 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
             }) : (
               <span className="text-sm text-[var(--muted-foreground)]">No recorded nights this month.</span>
             )}
-            {extraPreviewDays > 0 ? (
-              <span className="ml-1 text-sm font-semibold text-[var(--muted-foreground)]">+{extraPreviewDays} more</span>
-            ) : null}
             </div>
           </div>
         </div>
@@ -437,22 +490,39 @@ export default function CalendarHeatmap({ sessions, metric = 'ahi', mode = 'all'
         </div>
 
         <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
-          {monthDays.map((date, index) => {
+          {visibleDays.map((date, index) => {
             if (!date) {
               return <span key={`empty-${index}`} className="aspect-square rounded-[8px] bg-[var(--surface-muted)] opacity-35" />
             }
 
             const iso = toIso(date)
             const entry = byDate[iso]
+
+            // No session: future days are plainly grayed out; past gaps (missing
+            // data) keep the slashes to flag that data is absent.
+            if (!entry) {
+              const upcoming = isFutureDay(date)
+              return (
+                <span
+                  key={iso}
+                  className="flex aspect-square min-w-0 items-center justify-center rounded-[8px] text-xs font-bold text-[var(--muted-foreground)] opacity-50 sm:rounded-[10px] sm:text-sm"
+                  style={{ background: upcoming ? 'var(--surface-muted)' : EMPTY_HATCH }}
+                  title={`${iso}\n${upcoming ? 'Upcoming' : 'No session'}`}
+                  aria-label={`${iso} ${upcoming ? 'upcoming' : 'no session'}`}
+                >
+                  {date.getDate()}
+                </span>
+              )
+            }
+
             return (
               <button
                 key={iso}
                 type="button"
-                className="aspect-square min-w-0 rounded-[8px] border border-transparent text-xs font-bold text-white transition hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-[var(--accent-border)] disabled:cursor-default disabled:text-transparent disabled:hover:scale-100 sm:rounded-[10px] sm:text-sm"
-                style={{ background: getDotColor(entry), cursor: entry ? 'pointer' : 'default' }}
+                className="aspect-square min-w-0 rounded-[8px] border border-transparent text-xs font-bold text-white transition hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-[var(--accent-border)] sm:rounded-[10px] sm:text-sm"
+                style={{ ...cellStyle(entry), cursor: 'pointer' }}
                 title={getDotTooltip(iso, entry)}
-                onClick={() => entry && navigate(`/sessions/${iso}`)}
-                disabled={!entry}
+                onClick={() => navigate(`/sessions/${iso}`)}
                 aria-label={getDotTooltip(iso, entry).replace('\n', ' ')}
               >
                 {date.getDate()}
