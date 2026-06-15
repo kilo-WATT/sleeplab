@@ -1,3 +1,4 @@
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -54,6 +55,18 @@ class SessionNoteUpdate(BaseModel):
     """Request body for setting or clearing a free-text note on a session."""
 
     note: str | None = None
+
+
+class SessionEquipmentOverrideUpdate(BaseModel):
+    """Request body for overriding one equipment type for a single night.
+
+    ``value`` is a ``user_equipment`` id (use that specific item), the literal
+    ``"none"`` (mark the type not used that night), or ``None`` (clear the
+    override and fall back to the inferred item).
+    """
+
+    equipment_type: str
+    value: str | None = None
 
 
 def _parse_yyyymmdd(value: str, name: str) -> date:
@@ -712,6 +725,7 @@ def get_session(
                 {manufacturer_select},
                 BOOL_OR(s.provenance_status LIKE 'native_resmed_cpap_parser%') AS parser_validated,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
+                (array_agg(s.equipment_overrides ORDER BY s.duration_seconds DESC))[1] AS equipment_overrides,
                 COALESCE((
                     SELECT s2.tags
                     FROM sessions s2
@@ -897,6 +911,74 @@ def update_session_tags(
         """),
         {
             "tags": tags,
+            "uid": current_user["id"],
+            "folder_date": selected["folder_date"],
+            "machine_id": str(selected["machine_id"]) if selected["machine_id"] else None,
+        },
+    )
+    db.commit()
+    return get_session(session_id=session_id, current_user=current_user, db=db)
+
+
+_EQUIPMENT_TYPES = {"cushion", "headgear", "tubing", "humidifier_chamber", "filter"}
+
+
+@router.put("/{session_id}/equipment", response_model=SessionDetail)
+def update_session_equipment_override(
+    session_id: str,
+    body: SessionEquipmentOverrideUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Override one equipment type for this night (specific item, "none", or clear).
+
+    Like notes/tags, the override is written to every block on the same calendar
+    night so the per-night value is consistent regardless of which block is read.
+    """
+    if body.equipment_type not in _EQUIPMENT_TYPES:
+        raise HTTPException(status_code=422, detail="Invalid equipment type")
+
+    selected = db.execute(
+        text("""
+            SELECT folder_date, machine_id, equipment_overrides
+            FROM sessions
+            WHERE id::text = :id AND user_id = CAST(:uid AS uuid)
+        """),
+        {"id": session_id, "uid": current_user["id"]},
+    ).mappings().first()
+    if not selected:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    overrides = dict(selected["equipment_overrides"] or {})
+    value = body.value
+    if value is None:
+        overrides.pop(body.equipment_type, None)
+    elif value == "none":
+        overrides[body.equipment_type] = "none"
+    else:
+        owned = db.execute(
+            text("""
+                SELECT 1 FROM user_equipment
+                WHERE id::text = :eid AND user_id = CAST(:uid AS uuid)
+                  AND equipment_type = :equipment_type
+            """),
+            {"eid": value, "uid": current_user["id"], "equipment_type": body.equipment_type},
+        ).first()
+        if not owned:
+            raise HTTPException(status_code=422, detail="Unknown equipment item for this type")
+        overrides[body.equipment_type] = value
+
+    db.execute(
+        text("""
+            UPDATE sessions
+            SET equipment_overrides = CAST(:overrides AS jsonb),
+                updated_at = NOW()
+            WHERE user_id = CAST(:uid AS uuid)
+              AND folder_date = :folder_date
+              AND machine_id IS NOT DISTINCT FROM CAST(:machine_id AS uuid)
+        """),
+        {
+            "overrides": json.dumps(overrides),
             "uid": current_user["id"],
             "folder_date": selected["folder_date"],
             "machine_id": str(selected["machine_id"]) if selected["machine_id"] else None,
@@ -1738,6 +1820,7 @@ def get_session_by_date(
                 m.model AS machine_model,
                 m.validation_status AS machine_validation_status,
                 (array_agg(s.note            ORDER BY s.duration_seconds DESC))[1] AS note,
+                (array_agg(s.equipment_overrides ORDER BY s.duration_seconds DESC))[1] AS equipment_overrides,
                 COALESCE((
                     SELECT s2.tags
                     FROM sessions s2

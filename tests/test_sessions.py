@@ -815,3 +815,77 @@ class TestSessionTagInsights:
         assert travel["avg_ahi"] == 15.0
         assert travel["baseline_avg_ahi"] == 20.0
         assert travel["delta_ahi"] == -5.0
+
+
+class TestSessionEquipmentOverride:
+    """Per-night equipment override (specific item / 'not used' / clear)."""
+
+    def _cushion(self, client, auth_headers, model="P30i"):
+        resp = client.post(
+            "/equipment/",
+            headers=auth_headers,
+            json={"equipment_type": "cushion", "start_date": "2025-01-01", "model": model},
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def test_mark_not_used_then_specific_then_clear(self, client, auth_headers, test_user, db):
+        sid = _seed_session(db, test_user["id"])
+        eq_id = self._cushion(client, auth_headers)
+
+        not_used = client.put(
+            f"/sessions/{sid}/equipment",
+            headers=auth_headers,
+            json={"equipment_type": "cushion", "value": "none"},
+        )
+        assert not_used.status_code == 200
+        assert not_used.json()["equipment_overrides"] == {"cushion": "none"}
+
+        specific = client.put(
+            f"/sessions/{sid}/equipment",
+            headers=auth_headers,
+            json={"equipment_type": "cushion", "value": eq_id},
+        )
+        assert specific.status_code == 200
+        assert specific.json()["equipment_overrides"] == {"cushion": eq_id}
+
+        cleared = client.put(
+            f"/sessions/{sid}/equipment",
+            headers=auth_headers,
+            json={"equipment_type": "cushion", "value": None},
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["equipment_overrides"] == {}
+
+    def test_rejects_invalid_type(self, client, auth_headers, test_user, db):
+        sid = _seed_session(db, test_user["id"])
+        resp = client.put(
+            f"/sessions/{sid}/equipment",
+            headers=auth_headers,
+            json={"equipment_type": "not_a_type", "value": "none"},
+        )
+        assert resp.status_code == 422
+
+    def test_rejects_unknown_equipment_id(self, client, auth_headers, test_user, db):
+        sid = _seed_session(db, test_user["id"])
+        resp = client.put(
+            f"/sessions/{sid}/equipment",
+            headers=auth_headers,
+            json={"equipment_type": "cushion", "value": str(uuid.uuid4())},
+        )
+        assert resp.status_code == 422
+
+    def test_nonexistent_session(self, client, auth_headers):
+        resp = client.put(
+            f"/sessions/{uuid.uuid4()}/equipment",
+            headers=auth_headers,
+            json={"equipment_type": "cushion", "value": "none"},
+        )
+        assert resp.status_code == 404
+
+    def test_unauthenticated(self, client):
+        resp = client.put(
+            "/sessions/some-id/equipment",
+            json={"equipment_type": "cushion", "value": "none"},
+        )
+        assert resp.status_code == 401

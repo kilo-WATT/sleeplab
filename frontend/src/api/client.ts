@@ -405,6 +405,8 @@ export interface SessionDetail extends SessionSummary {
   score_vs_30d_avg: number | null
   note: string | null
   tags: string[]
+  /** Per-night equipment override: type → equipment id or "none". Absent = inferred. */
+  equipment_overrides: Record<string, string>
   p95_leak: number | null
   avg_resp_rate: number | null
   avg_tidal_vol: number | null
@@ -908,6 +910,8 @@ export const api = {
   getTagInsights: () => get<TagInsight[]>('/sessions/tag-insights'),
   updateSessionNote: (id: string, note: string) => put<SessionDetail>(`/sessions/${id}/note`, { note }),
   updateSessionTags: (id: string, tags: string[]) => put<SessionDetail>(`/sessions/${id}/tags`, { tags }),
+  updateSessionEquipmentOverride: (id: string, equipmentType: string, value: string | null) =>
+    put<SessionDetail>(`/sessions/${id}/equipment`, { equipment_type: equipmentType, value }),
   updateSessionTimezone: (id: string, machineTz: string) =>
     put<SessionDetail>(`/sessions/${id}/timezone`, { machine_tz: machineTz }),
   getEvents: (id: string) => get<EventRecord[]>(`/sessions/${id}/events`),

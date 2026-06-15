@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
-import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, WearableData, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
+import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, Equipment, WearableData, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
 import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
@@ -50,6 +50,20 @@ function sameTags(a: string[], b: string[]) {
   const left = [...a].sort()
   const right = [...b].sort()
   return left.every((tag, index) => tag === right[index])
+}
+
+/** Equipment slots shown on the "Equipment this night" card, in display order. */
+const EQUIPMENT_SLOTS: { key: keyof InferredEquipment; label: string }[] = [
+  { key: 'cushion', label: 'Cushion' },
+  { key: 'headgear', label: 'Headgear' },
+  { key: 'tubing', label: 'Tubing' },
+  { key: 'humidifier_chamber', label: 'Humidifier' },
+  { key: 'filter', label: 'Filter' },
+]
+
+/** Human label for an equipment item, falling back to its slot label. */
+function equipmentName(item: Equipment, fallback: string): string {
+  return [item.brand, item.model].filter(Boolean).join(' ') || fallback
 }
 
 /**
@@ -101,6 +115,9 @@ export default function SessionDetail() {
   const [waveformError, setWaveformError] = useState<string | null>(null)
   const [spo2, setSpo2] = useState<SpO2Response | null>(null)
   const [equipment, setEquipment] = useState<InferredEquipment | null>(null)
+  const [allEquipment, setAllEquipment] = useState<Equipment[]>([])
+  const [equipmentEditing, setEquipmentEditing] = useState(false)
+  const [equipmentSavingType, setEquipmentSavingType] = useState<string | null>(null)
   const [therapyContext, setTherapyContext] = useState<SessionTherapyContext | null>(null)
   const [settingsHistory, setSettingsHistory] = useState<MachineSettingsSnapshot[]>([])
   const [loading, setLoading] = useState(true)
@@ -133,6 +150,8 @@ export default function SessionDetail() {
     setWaveformLoading(false)
     setWaveformError(null)
     setEquipment(null)
+    setAllEquipment([])
+    setEquipmentEditing(false)
     setTherapyContext(null)
     setSettingsHistory([])
     setWearableData(null)
@@ -163,6 +182,7 @@ export default function SessionDetail() {
           api.getSessionSpo2(s.id).then(setSpo2).catch(() => setSpo2(null))
         }
         api.getInferredEquipment(s.folder_date.toString()).then(setEquipment).catch(() => setEquipment(null))
+        api.listEquipment().then(setAllEquipment).catch(() => setAllEquipment([]))
         api.getSessionTherapyContext(s.id).then((context) => {
           setTherapyContext(context)
           return api.getMachineSettings(context.machine.machine_id)
@@ -403,9 +423,37 @@ export default function SessionDetail() {
   const tagsChanged = !sameTags(tagsDraft, session.tags ?? [])
   const hasDeviceSettings = Boolean(session.therapy_mode || session.mask_type || session.humidity_level != null || session.temperature_c != null)
   const normalizedSettings = therapyContext?.settings?.normalized_settings
-  const hasEquipment = Boolean(equipment && (equipment.cushion || equipment.headgear || equipment.tubing || equipment.humidifier_chamber || equipment.filter))
   const availability = session.data_availability
   const isParserBacked = availability.import_backend === 'cpap-parser'
+
+  // Merge inferred equipment with this night's overrides for display + editing.
+  const equipmentOverrides = session.equipment_overrides ?? {}
+  const equipmentSlots = EQUIPMENT_SLOTS.map(({ key, label }) => {
+    const overrideVal = equipmentOverrides[key]
+    const inferredItem = equipment?.[key] ?? null
+    const registered = allEquipment.filter((e) => e.equipment_type === key)
+    const notUsed = overrideVal === 'none'
+    const overrideItem = overrideVal && overrideVal !== 'none'
+      ? registered.find((e) => e.id === overrideVal) ?? null
+      : null
+    const effective = notUsed ? null : (overrideItem ?? inferredItem)
+    const relevant = Boolean(inferredItem || registered.length > 0 || overrideVal)
+    return { key, label, overrideVal, inferredItem, registered, notUsed, effective, relevant }
+  })
+  const showEquipmentCard = allEquipment.length > 0 || equipmentSlots.some((slot) => slot.relevant)
+
+  async function handleEquipmentOverride(equipmentType: string, value: string | null) {
+    if (!session) return
+    setEquipmentSavingType(equipmentType)
+    try {
+      const updated = await api.updateSessionEquipmentOverride(session.id, equipmentType, value)
+      setSession(updated)
+    } catch {
+      // Leave current state untouched on failure.
+    } finally {
+      setEquipmentSavingType(null)
+    }
+  }
 
   const secondaryStatContentClass = 'px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5'
 
@@ -413,22 +461,22 @@ export default function SessionDetail() {
     <div className="space-y-6">
       {/* Nav row */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Link to="/dashboard" className="inline-flex items-center gap-1 text-sm font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)]">
+        <Link to="/dashboard" className="inline-flex w-fit items-center gap-1 text-sm font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)]">
           <ChevronLeftIcon className="h-4 w-4" />
           <span>All nights</span>
         </Link>
-        <div className="flex gap-2">
+        <div className="flex w-full gap-2 sm:w-auto">
           {sessionNavigation?.previousUrl && (
-            <Link to={sessionNavigation.previousUrl}>
-              <Button variant="outline" size="sm">
+            <Link to={sessionNavigation.previousUrl} className="flex-1 sm:flex-none">
+              <Button variant="outline" size="sm" className="w-full sm:w-auto">
                 <ChevronLeftIcon className="h-4 w-4" />
                 <span>Previous night</span>
               </Button>
             </Link>
           )}
           {sessionNavigation?.nextUrl && (
-            <Link to={sessionNavigation.nextUrl}>
-              <Button variant="outline" size="sm">
+            <Link to={sessionNavigation.nextUrl} className="flex-1 sm:flex-none">
+              <Button variant="outline" size="sm" className="w-full sm:w-auto">
                 <span>Next night</span>
                 <ChevronRightIcon className="h-4 w-4" />
               </Button>
@@ -834,38 +882,83 @@ export default function SessionDetail() {
             </Card>
           )}
 
-          {hasEquipment && equipment && (
+          {showEquipmentCard && (
             <Card className="order-3 lg:col-span-2">
               <CardContent className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
-                <p className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Equipment this night</p>
-                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
-                  {([
-                    { key: 'cushion', label: 'Cushion' },
-                    { key: 'headgear', label: 'Headgear' },
-                    { key: 'tubing', label: 'Tubing' },
-                    { key: 'humidifier_chamber', label: 'Humidifier' },
-                    { key: 'filter', label: 'Filter' },
-                  ] as { key: keyof InferredEquipment; label: string }[]).map(({ key, label }) => {
-                    const item = equipment[key]
-                    if (!item) return null
-                    const name = [item.brand, item.model].filter(Boolean).join(' ') || label
-                    const category = item.mask_category ? ` · ${item.mask_category}` : ''
-                    const age = item.days_in_use != null ? `${item.days_in_use}d` : null
-                    const overdue = item.replacement_days != null && item.days_in_use != null
-                      && item.days_in_use > item.replacement_days
-                    return (
-                      <div key={key} className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2">
-                        <p className="text-xs text-[var(--muted-foreground)]">{label}</p>
-                        <p className="text-sm font-medium">{name}{category}</p>
-                        {age && (
-                          <p className={`mt-0.5 text-xs ${overdue ? 'text-[var(--danger-text)]' : 'text-[var(--muted-foreground)]'}`}>
-                            {age} old{overdue ? ' · overdue for replacement' : ''}
-                          </p>
-                        )}
-                      </div>
-                    )
-                  })}
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Equipment this night</p>
+                  <button
+                    type="button"
+                    className="text-xs font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)]"
+                    onClick={() => setEquipmentEditing((v) => !v)}
+                  >
+                    {equipmentEditing ? 'Done' : 'Edit'}
+                  </button>
                 </div>
+
+                {equipmentEditing ? (
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                    {equipmentSlots.filter((slot) => slot.registered.length > 0 || slot.overrideVal).map((slot) => {
+                      const inferredName = slot.inferredItem ? equipmentName(slot.inferredItem, slot.label) : null
+                      return (
+                        <div key={slot.key} className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2">
+                          <label htmlFor={`eq-${slot.key}`} className="text-xs text-[var(--muted-foreground)]">{slot.label}</label>
+                          <select
+                            id={`eq-${slot.key}`}
+                            value={slot.overrideVal ?? ''}
+                            disabled={equipmentSavingType === slot.key}
+                            onChange={(e) => void handleEquipmentOverride(slot.key, e.target.value === '' ? null : e.target.value)}
+                            className="mt-1 flex h-9 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] px-2 text-sm text-[var(--foreground)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] disabled:opacity-60"
+                          >
+                            <option value="">{inferredName ? `Default · ${inferredName}` : 'Default (auto)'}</option>
+                            {slot.registered.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {equipmentName(item, slot.label)}{item.mask_category ? ` · ${item.mask_category}` : ''}
+                              </option>
+                            ))}
+                            <option value="none">Not used this night</option>
+                          </select>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
+                    {equipmentSlots.filter((slot) => slot.notUsed || slot.effective).map((slot) => {
+                      if (slot.notUsed) {
+                        return (
+                          <div key={slot.key} className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2">
+                            <p className="text-xs text-[var(--muted-foreground)]">{slot.label}</p>
+                            <p className="text-sm font-medium text-[var(--muted-foreground)] line-through">Not used this night</p>
+                          </div>
+                        )
+                      }
+                      const item = slot.effective
+                      if (!item) return null
+                      const name = equipmentName(item, slot.label)
+                      const category = item.mask_category ? ` · ${item.mask_category}` : ''
+                      const age = item.days_in_use != null ? `${item.days_in_use}d` : null
+                      const overdue = item.replacement_days != null && item.days_in_use != null
+                        && item.days_in_use > item.replacement_days
+                      return (
+                        <div key={slot.key} className="rounded-[12px] bg-[var(--surface-soft)] px-3 py-2">
+                          <p className="text-xs text-[var(--muted-foreground)]">
+                            {slot.label}{slot.overrideVal ? <span className="ml-1 font-bold text-[var(--accent)]">· edited</span> : null}
+                          </p>
+                          <p className="text-sm font-medium">{name}{category}</p>
+                          {age && (
+                            <p className={`mt-0.5 text-xs ${overdue ? 'text-[var(--danger-text)]' : 'text-[var(--muted-foreground)]'}`}>
+                              {age} old{overdue ? ' · overdue for replacement' : ''}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })}
+                    {equipmentSlots.every((slot) => !(slot.notUsed || slot.effective)) && (
+                      <p className="text-sm text-[var(--muted-foreground)]">No equipment recorded for this night. Use Edit to set it.</p>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
