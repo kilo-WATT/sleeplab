@@ -1,15 +1,40 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, CartesianGrid, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
 import type { OverviewDailyStat, SummaryStats, TrendAISummaryResponse } from '../api/client'
 import { api } from '../api/client'
 import GlossaryText from '../components/GlossaryText'
 import InfoPopover from '../components/InfoPopover'
+import Sparkline from '../components/Sparkline'
 import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
 import { leakToLpm } from '../lib/units'
+
+/** Coarse clinical status used for badges and insight chips across the page. */
+type StatusTone = 'good' | 'watch' | 'alert' | 'neutral'
+
+/** Soft badge styling per status tone. All tokens adapt to light/dark mode. */
+const STATUS_BADGE: Record<StatusTone, string> = {
+  good: 'bg-[var(--green-100)] text-[var(--green-700)]',
+  watch: 'bg-[var(--yellow-100)] text-[var(--yellow-700)]',
+  alert: 'bg-[var(--orange-100)] text-[var(--orange-700)]',
+  neutral: 'bg-[var(--surface-muted)] text-[var(--muted-foreground)]',
+}
+
+/** Accent color for sparklines / dots per status tone. */
+const STATUS_ACCENT: Record<StatusTone, string> = {
+  good: 'var(--green-500)',
+  watch: 'var(--yellow-500)',
+  alert: 'var(--orange-500)',
+  neutral: 'var(--muted-foreground)',
+}
+
+/** Threshold below which residual leak is generally treated as acceptable (ResMed-style). */
+const LEAK_OK_LPM = 24
+/** Nights at the end of the range that get visually distinguished as "recent". */
+const RECENT_NIGHTS = 7
 
 const TREND_FLAG_COLORS = {
   good: {
@@ -85,7 +110,7 @@ interface TrendMetric {
     sourceUrl: string
   }
   domain?: [number | 'auto', number | 'auto']
-  referenceLines?: Array<{ value: number; label: string; color: string }>
+  referenceLines?: Array<{ value: number; label: string; color: string; note?: string }>
   precision?: number
   secondaryKey?: MetricKey
   secondaryLabel?: string
@@ -110,8 +135,8 @@ const TREND_METRICS: TrendMetric[] = [
       sourceUrl: 'https://my.clevelandclinic.org/health/articles/apnea-hypopnea-index-ahi',
     },
     referenceLines: [
-      { value: 5, label: '5', color: '#6AA136' },
-      { value: 15, label: '15', color: '#E9784B' },
+      { value: 5, label: '5', color: '#6AA136', note: 'controlled' },
+      { value: 15, label: '15', color: '#E9784B', note: 'moderate' },
     ],
     precision: 1,
   },
@@ -428,16 +453,75 @@ function getMetric(key: MetricKey) {
   return TREND_METRICS.find((metric) => metric.key === key) ?? TREND_METRICS[0]
 }
 
+/** Mean of the non-null numbers in a list, or null when there are none. */
+function meanOf(values: Array<number | null | undefined>): number | null {
+  const present = values.filter((value): value is number => value != null)
+  if (present.length === 0) return null
+  return present.reduce((sum, value) => sum + value, 0) / present.length
+}
+
+/** Ordered (oldest → newest) non-null values of one metric across nights, for sparklines. */
+function seriesOf(nights: OverviewDailyStat[], key: MetricKey): number[] {
+  return nights.map((night) => metricNumber(night[key])).filter((value): value is number => value != null)
+}
+
+/** An at-a-glance status chip derived from the loaded data. */
+export interface InsightChip {
+  label: string
+  tone: StatusTone
+}
+
+/**
+ * Derive a short, factual set of status chips from the loaded nights. These summarize
+ * the current picture (AHI control, central events, leak, oximetry availability) without
+ * overclaiming when a signal is missing.
+ */
+export function deriveInsightChips(nights: OverviewDailyStat[], avgAhi: number | null): InsightChip[] {
+  const chips: InsightChip[] = []
+
+  if (avgAhi != null) {
+    if (avgAhi < 5) chips.push({ label: 'AHI controlled', tone: 'good' })
+    else if (avgAhi < 15) chips.push({ label: 'AHI mildly elevated', tone: 'watch' })
+    else chips.push({ label: 'AHI elevated', tone: 'alert' })
+  }
+
+  const avgCentral = meanOf(nights.map((night) => night.central_apnea_index))
+  if (avgCentral != null && avgCentral >= 5) {
+    chips.push({ label: 'Central apnea elevated', tone: 'alert' })
+  }
+
+  const avgLeak = meanOf(nights.map((night) => night.avg_leak))
+  const hasLargeLeak = nights.some((night) => (night.large_leak_minutes ?? 0) > 0)
+  if (avgLeak != null && avgLeak >= LEAK_OK_LPM) {
+    chips.push({ label: 'Leaks high', tone: 'alert' })
+  } else if (hasLargeLeak) {
+    chips.push({ label: 'Leaks intermittent', tone: 'watch' })
+  } else if (avgLeak != null) {
+    chips.push({ label: 'Leaks controlled', tone: 'good' })
+  }
+
+  const hasSpo2 = nights.some((night) => night.avg_spo2 != null || night.min_spo2 != null)
+  if (!hasSpo2) {
+    chips.push({ label: 'SpO₂ unavailable', tone: 'neutral' })
+  } else {
+    const minSpo2 = meanOf(nights.map((night) => night.min_spo2))
+    if (minSpo2 != null && minSpo2 < 88) chips.push({ label: 'SpO₂ dips low', tone: 'watch' })
+  }
+
+  return chips.slice(0, 4)
+}
+
 /**
  * React component or element to render the trend a i card.
  *
  * @returns The rendered React element.
  */
-function TrendAICard() {
+function TrendAICard({ chips }: { chips: InsightChip[] }) {
   const [data, setData] = useState<TrendAISummaryResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null)
   const [refreshState, setRefreshState] = useState({ token: 0, force: false })
+  const [showFull, setShowFull] = useState(false)
 
   useEffect(() => {
     api.getImportSettings()
@@ -465,6 +549,12 @@ function TrendAICard() {
   const flag = (data?.flag ?? 'watch') as keyof typeof TREND_FLAG_COLORS
   const colors = TREND_FLAG_COLORS[flag] ?? TREND_FLAG_COLORS.watch
   const directionLabel = data?.trend_direction ? TREND_DIRECTION_LABEL[data.trend_direction] ?? data.trend_direction : null
+  const hasDetail = Boolean(
+    (data?.high_confidence_observations?.length ?? data?.anomalies?.length ?? 0) > 0 ||
+    (data?.possible_patterns?.length ?? 0) > 0 ||
+    (data?.things_to_review?.length ?? 0) > 0 ||
+    (data?.missing_or_uncertain?.length ?? 0) > 0,
+  )
 
   return (
     <Card className="overflow-hidden border-[var(--border)] bg-[radial-gradient(circle_at_top_left,_rgba(82,81,167,0.10),_transparent_28%),radial-gradient(circle_at_90%_18%,_rgba(106,161,54,0.10),_transparent_20%),var(--surface-strong)]">
@@ -510,48 +600,93 @@ function TrendAICard() {
                 <GlossaryText text={data.therapy_quality} />
               </p>
             )}
-            {(data.high_confidence_observations ?? data.anomalies) && (
-              <ul className={`mt-4 space-y-2 border-l-2 pl-3 ${colors.border}`}>
-                {(data.high_confidence_observations ?? data.anomalies ?? []).map((item) => (
-                  <li key={item} className="text-sm leading-6 text-[var(--muted-foreground)]">
-                    <GlossaryText text={item} />
-                  </li>
+            {chips.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {chips.map((chip) => (
+                  <span
+                    key={chip.label}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${STATUS_BADGE[chip.tone]}`}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: STATUS_ACCENT[chip.tone] }} />
+                    {chip.label}
+                  </span>
                 ))}
-              </ul>
-            )}
-            {data.possible_patterns && data.possible_patterns.length > 0 && (
-              <ul className={`mt-4 space-y-2 border-l-2 pl-3 ${colors.border}`}>
-                {data.possible_patterns.map((item) => (
-                  <li key={item} className="text-sm leading-6 text-[var(--muted-foreground)]">
-                    <GlossaryText text={item} />
-                  </li>
-                ))}
-              </ul>
-            )}
-            {data.things_to_review && data.things_to_review.length > 0 && (
-              <div className="mt-5">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Review</p>
-                <ul className="mt-2 space-y-2">
-                  {data.things_to_review.map((item) => (
-                    <li key={item} className="flex items-start gap-2 text-sm leading-6 text-[var(--foreground)]">
-                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-                      <GlossaryText text={item} />
-                    </li>
-                  ))}
-                </ul>
               </div>
             )}
-            {data.missing_or_uncertain && data.missing_or_uncertain.length > 0 && (
-              <div className="mt-5 border-l-2 border-[var(--border)] pl-3">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Uncertain</p>
-                <ul className="mt-2 space-y-1.5 text-sm leading-6 text-[var(--muted-foreground)]">
-                  {data.missing_or_uncertain.map((item) => (
-                    <li key={item}>
-                      <GlossaryText text={item} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {hasDetail && (
+              <>
+                {!showFull && (
+                  <button
+                    type="button"
+                    className="mt-4 text-sm font-bold text-[var(--accent)] hover:text-[var(--accent-hover)]"
+                    onClick={() => setShowFull(true)}
+                    aria-expanded={false}
+                  >
+                    Read full analysis
+                  </button>
+                )}
+                {showFull && (
+                  <div className="mt-4 space-y-5">
+                    {(data.high_confidence_observations ?? data.anomalies) && (
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">What we see</p>
+                        <ul className={`mt-2 space-y-2 border-l-2 pl-3 ${colors.border}`}>
+                          {(data.high_confidence_observations ?? data.anomalies ?? []).map((item) => (
+                            <li key={item} className="text-sm leading-6 text-[var(--muted-foreground)]">
+                              <GlossaryText text={item} />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {data.possible_patterns && data.possible_patterns.length > 0 && (
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">What changed recently</p>
+                        <ul className={`mt-2 space-y-2 border-l-2 pl-3 ${colors.border}`}>
+                          {data.possible_patterns.map((item) => (
+                            <li key={item} className="text-sm leading-6 text-[var(--muted-foreground)]">
+                              <GlossaryText text={item} />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {data.things_to_review && data.things_to_review.length > 0 && (
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Things to review</p>
+                        <ul className="mt-2 space-y-2">
+                          {data.things_to_review.map((item) => (
+                            <li key={item} className="flex items-start gap-2 text-sm leading-6 text-[var(--foreground)]">
+                              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+                              <GlossaryText text={item} />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {data.missing_or_uncertain && data.missing_or_uncertain.length > 0 && (
+                      <div className="border-l-2 border-[var(--border)] pl-3">
+                        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Uncertain / missing data</p>
+                        <ul className="mt-2 space-y-1.5 text-sm leading-6 text-[var(--muted-foreground)]">
+                          {data.missing_or_uncertain.map((item) => (
+                            <li key={item}>
+                              <GlossaryText text={item} />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="text-sm font-bold text-[var(--accent)] hover:text-[var(--accent-hover)]"
+                      onClick={() => setShowFull(false)}
+                      aria-expanded
+                    >
+                      Show less
+                    </button>
+                  </div>
+                )}
+              </>
             )}
             <p className="mt-5 text-xs text-[var(--muted-foreground)]">
               AI-generated. Not medical advice. Discuss any concerns with your doctor or sleep specialist.
@@ -573,6 +708,108 @@ function ahiTone(ahi: number | null) {
   if (ahi < 5) return 'text-[var(--green-700)]'
   if (ahi < 15) return 'text-[var(--yellow-700)]'
   return 'text-[var(--orange-700)]'
+}
+
+/**
+ * A single clinical status card: big value, status badge, helper text, and an
+ * optional sparkline of recent history. Used for the top-of-page hero metrics.
+ */
+function HeroMetricCard({
+  label,
+  value,
+  unit,
+  helper,
+  badge,
+  tone,
+  series,
+}: {
+  label: string
+  value: string
+  unit?: string
+  helper: string
+  badge: string
+  tone: StatusTone
+  series: number[]
+}) {
+  return (
+    <Card className="bg-[var(--surface-strong)]">
+      <CardContent className="!p-5 sm:!p-6">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-sm font-bold text-[var(--foreground)]">{label}</p>
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${STATUS_BADGE[tone]}`}>{badge}</span>
+        </div>
+        <div className="mt-3 flex items-end justify-between gap-3">
+          <p className="text-3xl font-semibold leading-none text-[var(--foreground)] sm:text-4xl">
+            {value}
+            {unit ? <span className="ml-1 text-base font-bold text-[var(--muted-foreground)]">{unit}</span> : null}
+          </p>
+          {series.length >= 2 ? (
+            <Sparkline values={series} color={STATUS_ACCENT[tone]} className="h-8 w-24 shrink-0" />
+          ) : null}
+        </div>
+        <p className="mt-3 text-xs leading-5 text-[var(--muted-foreground)]">{helper}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * The four top-of-page clinical status cards: AHI, compliance, leak, and pressure.
+ * Values come from the summary where available and are otherwise derived from the
+ * loaded nights (leak is normalized to L/min upstream).
+ */
+function HeroMetricCards({ summary, nights }: { summary: SummaryStats; nights: OverviewDailyStat[] }) {
+  const avgLeak = meanOf(nights.map((night) => night.avg_leak))
+
+  const ahiCardTone: StatusTone = summary.avg_ahi == null ? 'neutral' : summary.avg_ahi < 5 ? 'good' : summary.avg_ahi < 15 ? 'watch' : 'alert'
+  const ahiBadge = summary.avg_ahi == null ? 'No data' : summary.avg_ahi < 5 ? 'Controlled' : summary.avg_ahi < 15 ? 'Watch' : 'Elevated'
+
+  const complianceTone: StatusTone = summary.compliance_pct >= 70 ? 'good' : 'watch'
+  const complianceBadge = summary.compliance_pct >= 90 ? 'Excellent' : summary.compliance_pct >= 70 ? 'Good' : 'Below target'
+
+  const leakTone: StatusTone = avgLeak == null ? 'neutral' : avgLeak < LEAK_OK_LPM ? 'good' : 'alert'
+  const leakBadge = avgLeak == null ? 'No data' : avgLeak < LEAK_OK_LPM ? 'Good' : 'High'
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <HeroMetricCard
+        label="Average AHI"
+        value={summary.avg_ahi?.toFixed(1) ?? '—'}
+        unit={summary.avg_ahi == null ? undefined : '/hr'}
+        helper="Below 5 is generally considered controlled."
+        badge={ahiBadge}
+        tone={ahiCardTone}
+        series={seriesOf(nights, 'ahi')}
+      />
+      <HeroMetricCard
+        label="Usage / Compliance"
+        value={`${summary.compliance_pct}`}
+        unit="%"
+        helper="Share of nights meeting the usual 4-hour adherence mark."
+        badge={complianceBadge}
+        tone={complianceTone}
+        series={seriesOf(nights, 'usage_hours')}
+      />
+      <HeroMetricCard
+        label="Average Leak"
+        value={avgLeak?.toFixed(1) ?? '—'}
+        unit={avgLeak == null ? undefined : 'L/min'}
+        helper="Large leaks can reduce therapy accuracy and event detection."
+        badge={leakBadge}
+        tone={leakTone}
+        series={seriesOf(nights, 'avg_leak')}
+      />
+      <HeroMetricCard
+        label="Average Pressure"
+        value={summary.avg_pressure?.toFixed(1) ?? '—'}
+        unit={summary.avg_pressure == null ? undefined : 'cmH₂O'}
+        helper="Typical delivered pressure across recent nights."
+        badge="Stable"
+        tone="neutral"
+        series={seriesOf(nights, 'avg_pressure')}
+      />
+    </div>
+  )
 }
 
 /**
@@ -775,6 +1012,9 @@ function OverviewChart({
     primary: night[metric.key],
     secondary: metric.secondaryKey ? night[metric.secondaryKey] : null,
   }))
+  const recentStart = data.length > RECENT_NIGHTS ? data[data.length - RECENT_NIGHTS].date : null
+  const lastDate = data.length > 0 ? data[data.length - 1].date : null
+  const hasLegend = (metric.referenceLines?.length ?? 0) > 0 || recentStart != null
 
   return (
     <Card id="long-range-overview">
@@ -782,7 +1022,7 @@ function OverviewChart({
         <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
-              <p className="text-sm font-bold text-[var(--foreground)]">{metric.label}</p>
+              <p className="text-base font-bold text-[var(--foreground)]">{metric.label}</p>
               <InfoPopover title={`${metric.label} guidance`}>
                 <div className="space-y-2">
                   <p>{metric.guidance.range}</p>
@@ -803,6 +1043,22 @@ function OverviewChart({
           </div>
           <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--accent)]">{metric.unit || 'Index'}</p>
         </div>
+        {hasLegend && (
+          <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-[var(--muted-foreground)]">
+            {metric.referenceLines?.map((line) => (
+              <span key={line.value} className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-0 w-4 border-t-2 border-dashed" style={{ borderColor: line.color }} />
+                {metric.shortLabel} {line.value}{line.note ? ` · ${line.note}` : ''}
+              </span>
+            ))}
+            {recentStart && (
+              <span className="inline-flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-sm bg-[var(--accent-soft)]" />
+                Recent {RECENT_NIGHTS} nights
+              </span>
+            )}
+          </div>
+        )}
         <MetricSummaryCards nights={nights} metric={metric} />
         <ResponsiveContainer width="100%" height={320}>
           <ComposedChart
@@ -843,6 +1099,9 @@ function OverviewChart({
                 return [formattedValue, label]
               }}
             />
+            {recentStart && lastDate ? (
+              <ReferenceArea x1={recentStart} x2={lastDate} fill="var(--accent-soft)" fillOpacity={1} stroke="none" />
+            ) : null}
             {metric.referenceLines?.map((line) => (
               <ReferenceLine
                 key={line.value}
@@ -883,52 +1142,143 @@ function OverviewChart({
   )
 }
 
+/** A short, factual flag describing something notable about a single night. */
+export interface NightNote {
+  label: string
+  tone: StatusTone
+}
+
+/** Derive note badges for one night without overclaiming on missing signals. */
+export function deriveNightNotes(night: OverviewDailyStat): NightNote[] {
+  const notes: NightNote[] = []
+  const leak = night.avg_leak
+  const ahi = night.ahi
+  const cai = night.central_apnea_index
+
+  if (night.usage_hours < 4) notes.push({ label: 'Short session', tone: 'watch' })
+  if (leak != null && leak >= LEAK_OK_LPM) notes.push({ label: 'High leak', tone: 'alert' })
+  if (cai != null && ahi != null && ahi > 0 && cai / ahi >= 0.5 && cai >= 2) {
+    notes.push({ label: 'More CA', tone: 'watch' })
+  }
+  if (leak != null && leak < 5) notes.push({ label: 'Low leak', tone: 'good' })
+  return notes
+}
+
 /**
  * React component or element to render the recent overview table.
  *
  * @returns The rendered React element.
  */
-function RecentOverviewTable({ nights, metric }: { nights: OverviewDailyStat[]; metric: TrendMetric }) {
+function RecentOverviewTable({ nights }: { nights: OverviewDailyStat[] }) {
+  const navigate = useNavigate()
   const recent = nights.slice(-10).reverse()
+  const leakMetric = getMetric('avg_leak')
 
   return (
     <Card id="overview-table">
       <CardContent className="px-0 pb-2 pt-5 sm:pt-6">
         <div className="px-5 sm:px-6">
           <p className="text-sm font-bold text-[var(--foreground)]">Recent nights</p>
-          <p className="mt-1 text-sm text-[var(--muted-foreground)]">Latest values for the selected trend.</p>
+          <p className="mt-1 text-sm text-[var(--muted-foreground)]">Most recent nights with key event and therapy values. Select a row to open the night.</p>
         </div>
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[560px] border-collapse text-sm">
+          <table className="w-full min-w-[680px] border-collapse text-sm">
             <thead>
               <tr className="border-y border-[var(--border)] bg-[var(--surface-soft)] text-left text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
                 <th className="px-5 py-3 sm:px-6">Date</th>
-                <th className="px-5 py-3 sm:px-6">{metric.shortLabel}</th>
                 <th className="px-5 py-3 sm:px-6">AHI</th>
+                <th className="px-5 py-3 sm:px-6">CAI</th>
+                <th className="px-5 py-3 sm:px-6">OAI</th>
                 <th className="px-5 py-3 sm:px-6">Usage</th>
                 <th className="px-5 py-3 sm:px-6">Leak</th>
+                <th className="px-5 py-3 sm:px-6">Notes</th>
               </tr>
             </thead>
             <tbody>
-              {recent.map((night) => (
-                <tr key={night.folder_date} className="border-b border-[var(--border)] last:border-b-0">
-                  <td className="px-5 py-3 font-bold text-[var(--foreground)] sm:px-6">{night.folder_date}</td>
-                  <td className="px-5 py-3 text-[var(--foreground)] sm:px-6">
-                    {formatMetricValue(night[metric.key], metric)}
-                    {metric.secondaryKey ? (
-                      <span className="ml-2 text-[var(--muted-foreground)]">
-                        to {formatMetricValue(night[metric.secondaryKey], metric)}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{formatMetricValue(night.ahi, getMetric('ahi'))}</td>
-                  <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{night.usage_hours.toFixed(2)} hours</td>
-                  <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{formatMetricValue(night.avg_leak, getMetric('avg_leak'))}</td>
-                </tr>
-              ))}
+              {recent.map((night) => {
+                const notes = deriveNightNotes(night)
+                return (
+                  <tr
+                    key={night.folder_date}
+                    className="cursor-pointer border-b border-[var(--border)] transition-colors last:border-b-0 hover:bg-[var(--surface-soft)] focus-visible:bg-[var(--surface-soft)] focus-visible:outline-none"
+                    tabIndex={0}
+                    role="link"
+                    aria-label={`Open night ${night.folder_date}`}
+                    onClick={() => navigate(`/sessions/${night.session_id}`)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        navigate(`/sessions/${night.session_id}`)
+                      }
+                    }}
+                  >
+                    <td className="px-5 py-3 font-bold text-[var(--foreground)] sm:px-6">{night.folder_date}</td>
+                    <td className={`px-5 py-3 font-bold sm:px-6 ${ahiTone(night.ahi)}`}>{night.ahi == null ? '—' : night.ahi.toFixed(1)}</td>
+                    <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{night.central_apnea_index == null ? '—' : night.central_apnea_index.toFixed(1)}</td>
+                    <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{night.obstructive_apnea_index == null ? '—' : night.obstructive_apnea_index.toFixed(1)}</td>
+                    <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{night.usage_hours.toFixed(2)} h</td>
+                    <td className="px-5 py-3 text-[var(--muted-foreground)] sm:px-6">{formatMetricValue(night.avg_leak, leakMetric)}</td>
+                    <td className="px-5 py-3 sm:px-6">
+                      {notes.length === 0 ? (
+                        <span className="text-[var(--muted-foreground)]">—</span>
+                      ) : (
+                        <span className="flex flex-wrap gap-1.5">
+                          {notes.map((note) => (
+                            <span key={note.label} className={`rounded-full px-2 py-0.5 text-xs font-bold ${STATUS_BADGE[note.tone]}`}>
+                              {note.label}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * React component or element to render the respiratory event breakdown as ranked bars,
+ * each showing the count and its percentage share of all detected events.
+ */
+function EventBreakdown({ breakdown }: { breakdown: Array<[string, number]> }) {
+  const total = breakdown.reduce((sum, [, count]) => sum + count, 0)
+  const max = breakdown.reduce((best, [, count]) => Math.max(best, count), 0)
+
+  return (
+    <Card id="event-breakdown">
+      <CardContent className="!p-6 sm:!p-8">
+        <p className="text-sm font-bold text-[var(--foreground)]">Respiratory event breakdown</p>
+        <p className="mt-1 text-sm text-[var(--muted-foreground)]">Counts of the breathing-event types detected across your imported nights.</p>
+        {breakdown.length === 0 ? (
+          <p className="mt-4 text-sm text-[var(--muted-foreground)]">No respiratory events were detected in the imported nights.</p>
+        ) : (
+          <ul className="mt-5 space-y-4">
+            {breakdown.map(([eventType, count]) => {
+              const pct = total > 0 ? (count / total) * 100 : 0
+              const width = max > 0 ? (count / max) * 100 : 0
+              return (
+                <li key={eventType}>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="text-sm font-bold text-[var(--foreground)]">{humanizeEventType(eventType)}</p>
+                    <p className="text-sm text-[var(--muted-foreground)]">
+                      <span className="font-bold text-[var(--foreground)]">{count.toLocaleString()}</span>
+                      <span className="ml-2">{pct.toFixed(1)}%</span>
+                    </p>
+                  </div>
+                  <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-soft)]">
+                    <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${width}%` }} />
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </CardContent>
     </Card>
   )
@@ -944,6 +1294,7 @@ export default function TrendsPage() {
   const [overview, setOverview] = useState<OverviewDailyStat[]>([])
   const [rangeDays, setRangeDays] = useState(180)
   const [metricKey, setMetricKey] = useState<MetricKey>('ahi')
+  const [showAllMetrics, setShowAllMetrics] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const metric = getMetric(metricKey)
@@ -987,33 +1338,33 @@ export default function TrendsPage() {
   const sortedBreakdown = Object.entries(summary.event_breakdown)
     .sort((left, right) => right[1] - left[1])
 
+  const chips = deriveInsightChips(overview, summary.avg_ahi)
+  const rangeLabel = RANGE_OPTIONS.find((option) => option.days === rangeDays)?.label ?? `${rangeDays}D`
+  const firstNight = overview[0]?.folder_date ?? null
+  const lastNight = overview[overview.length - 1]?.folder_date ?? null
+
   return (
     <div className="space-y-6">
-      <TrendAICard />
+      <header className="flex flex-col gap-3">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-[var(--foreground)] sm:text-3xl">Trends</h1>
+          <p className="mt-1 text-sm text-[var(--muted-foreground)] sm:text-base">
+            Long-range view of your PAP therapy over the last {rangeDays} days.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs font-bold text-[var(--muted-foreground)]">
+          <span className="rounded-full bg-[var(--surface-soft)] px-3 py-1">{overview.length} nights selected</span>
+          {firstNight && lastNight && (
+            <span className="rounded-full bg-[var(--surface-soft)] px-3 py-1">{firstNight} → {lastNight}</span>
+          )}
+          <span className="rounded-full bg-[var(--surface-soft)] px-3 py-1">{summary.nights_with_data} nights with data</span>
+          <span className="rounded-full bg-[var(--surface-soft)] px-3 py-1">Range: {rangeLabel}</span>
+        </div>
+      </header>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card id="ahi-summary" className="bg-[radial-gradient(circle_at_top_left,_rgba(82,81,167,0.08),_transparent_32%),var(--surface-strong)]">
-          <CardContent className="!p-6 sm:!p-8">
-            <p className="text-sm font-bold text-[var(--foreground)]">Average AHI</p>
-            <p className={`mt-2 text-4xl font-semibold ${ahiTone(summary.avg_ahi)}`}>{summary.avg_ahi?.toFixed(1) ?? '—'}</p>
-            <p className="mt-1 text-sm text-[var(--muted-foreground)]">Average breathing events per hour.</p>
-          </CardContent>
-        </Card>
-        <Card id="usage-trend" className="bg-[radial-gradient(circle_at_top_left,_rgba(106,161,54,0.08),_transparent_32%),var(--surface-strong)]">
-          <CardContent className="!p-6 sm:!p-8">
-            <p className="text-sm font-bold text-[var(--foreground)]">Compliance</p>
-            <p className="mt-2 text-4xl font-semibold text-[var(--foreground)]">{summary.compliance_pct}%</p>
-            <p className="mt-1 text-sm text-[var(--muted-foreground)]">How consistently therapy was used.</p>
-          </CardContent>
-        </Card>
-        <Card id="pressure-trend" className="bg-[radial-gradient(circle_at_top_left,_rgba(233,120,75,0.08),_transparent_32%),var(--surface-strong)]">
-          <CardContent className="!p-6 sm:!p-8">
-            <p className="text-sm font-bold text-[var(--foreground)]">Average Pressure</p>
-            <p className="mt-2 text-4xl font-semibold text-[var(--foreground)]">{summary.avg_pressure?.toFixed(1) ?? '—'}</p>
-            <p className="mt-1 text-sm text-[var(--muted-foreground)]">Typical treatment pressure across recent nights.</p>
-          </CardContent>
-        </Card>
-      </div>
+      <TrendAICard chips={chips} />
+
+      <HeroMetricCards summary={summary} nights={overview} />
 
       <Card>
         <CardContent className="px-4 pb-5 pt-5 sm:px-6 sm:pt-6">
@@ -1023,7 +1374,7 @@ export default function TrendsPage() {
               <p className="mt-1 text-sm text-[var(--muted-foreground)]">Pick a range and metric to scan nightly therapy patterns over time.</p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-              <div className="grid grid-cols-4 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1">
+              <div className="grid grid-cols-4 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1" role="group" aria-label="Date range">
                 {RANGE_OPTIONS.map((option) => (
                   <button
                     key={option.days}
@@ -1047,46 +1398,61 @@ export default function TrendsPage() {
                 className="h-11 min-w-56 rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-4 text-sm font-bold text-[var(--foreground)] outline-none focus:border-[var(--accent-border)]"
                 value={metricKey}
                 onChange={(event) => setMetricKey(event.target.value as MetricKey)}
-                aria-label="Jump to any trend metric"
-                title="Jump to any metric"
+                aria-label="Trend metric"
+                title="Select a trend metric"
               >
-                <option value={metricKey}>Jump to metric...</option>
-                {TREND_METRICS.map((option) => (
-                  <option key={option.key} value={option.key}>{option.label}</option>
+                {TREND_METRIC_GROUPS.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.keys.map((key) => {
+                      const option = getMetric(key)
+                      return <option key={option.key} value={option.key}>{option.label}</option>
+                    })}
+                  </optgroup>
                 ))}
               </select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-11"
+                onClick={() => setShowAllMetrics((open) => !open)}
+                aria-expanded={showAllMetrics}
+              >
+                {showAllMetrics ? 'Hide metrics' : 'More metrics'}
+              </Button>
             </div>
           </div>
-          <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_1fr] xl:grid-cols-[1.1fr_1fr_0.75fr]">
-            {TREND_METRIC_GROUPS.map((group) => (
-              <div key={group.label} className="min-w-0">
-                <p className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{group.label}</p>
-                <div className="flex flex-wrap gap-2">
-                  {group.keys.map((key) => {
-                    const option = getMetric(key)
-                    return (
-                      <Button
-                        key={option.key}
-                        variant={metricKey === option.key ? 'default' : 'outline'}
-                        size="sm"
-                        className="h-8 px-3 text-xs sm:h-9 sm:text-sm"
-                        onClick={() => setMetricKey(option.key)}
-                      >
-                        {option.shortLabel}
-                      </Button>
-                    )
-                  })}
+          {showAllMetrics && (
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_1fr] xl:grid-cols-[1.1fr_1fr_0.75fr]">
+              {TREND_METRIC_GROUPS.map((group) => (
+                <div key={group.label} className="min-w-0">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{group.label}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {group.keys.map((key) => {
+                      const option = getMetric(key)
+                      return (
+                        <Button
+                          key={option.key}
+                          variant={metricKey === option.key ? 'default' : 'outline'}
+                          size="sm"
+                          className="h-8 px-3 text-xs sm:h-9 sm:text-sm"
+                          onClick={() => setMetricKey(option.key)}
+                        >
+                          {option.shortLabel}
+                        </Button>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {overview.length > 0 ? (
         <>
           <OverviewChart nights={overview} metric={metric} />
-          <RecentOverviewTable nights={overview} metric={metric} />
+          <RecentOverviewTable nights={overview} />
         </>
       ) : (
         <Card>
@@ -1096,20 +1462,7 @@ export default function TrendsPage() {
         </Card>
       )}
 
-      <Card id="event-breakdown">
-        <CardContent className="!p-6 sm:!p-8">
-          <p className="text-sm font-bold text-[var(--foreground)]">Respiratory event breakdown</p>
-          <p className="mt-1 text-sm text-[var(--muted-foreground)]">A simple count of the breathing-event types found across your imported nights.</p>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {sortedBreakdown.map(([eventType, count]) => (
-              <div key={eventType} className="rounded-[18px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-4">
-                <p className="text-sm font-bold text-[var(--foreground)]">{humanizeEventType(eventType)}</p>
-                <p className="mt-2 text-3xl font-semibold text-[var(--foreground)]">{count}</p>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      <EventBreakdown breakdown={sortedBreakdown} />
     </div>
   )
 }
