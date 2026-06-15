@@ -72,6 +72,7 @@ const meta = {
       api.saveImportSettings = async (payload) => ({ ...mockSettings, ...payload } as ImportSettings)
       api.triggerSleepHQImport = async () => ({ status: 'ok', message: 'Import started successfully.' })
       api.deleteAllSessions = async () => {}
+      api.deleteAllData = async () => {}
 
       return (
         <div className="p-4 bg-[var(--background)] min-h-screen">

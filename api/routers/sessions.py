@@ -1742,14 +1742,39 @@ def _score_vs_30d_avg(user_id: str, folder_date: date, current_score: int, db: S
 
 @router.delete("/all", status_code=204)
 def delete_all_sessions(
+    reset: bool = Query(
+        False,
+        description=(
+            "When true, also clear the durable import history and detected machines "
+            "so the same card can be re-imported from scratch."
+        ),
+    ),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Delete all session data for the current user."""
-    db.execute(
-        text("DELETE FROM sessions WHERE user_id = CAST(:uid AS uuid)"),
-        {"uid": current_user["id"]},
-    )
+    """Delete the current user's imported nights, optionally as a full reset.
+
+    Two scopes:
+
+    * default (``reset=False``) — delete only the per-night ``sessions``. This
+      clears the dashboard (``nightly_therapy_aggregates`` is a view over
+      ``sessions``/``session_blocks``, so it empties automatically) while keeping
+      the import history and detected machines.
+    * ``reset=True`` — also delete ``import_runs`` and ``cpap_machines`` for a
+      clean slate (the machine list and import history reset).
+
+    Either scope allows re-importing the same card: ``reusable_import_run`` keys
+    its "already imported" decision on whether the run's sessions still exist, so
+    deleting the sessions is enough to make a re-import run fresh.
+
+    Every foreign key into these tables is ``ON DELETE CASCADE`` or ``SET NULL``,
+    so the deletes cannot raise on ordering.
+    """
+    uid = {"uid": current_user["id"]}
+    db.execute(text("DELETE FROM sessions WHERE user_id = CAST(:uid AS uuid)"), uid)
+    if reset:
+        db.execute(text("DELETE FROM import_runs WHERE user_id = CAST(:uid AS uuid)"), uid)
+        db.execute(text("DELETE FROM cpap_machines WHERE user_id = CAST(:uid AS uuid)"), uid)
     db.commit()
 
 

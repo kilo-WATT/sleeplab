@@ -30,21 +30,33 @@ def reusable_import_run(
     user_id: str,
     plan: ImportPlan,
 ) -> str | None:
-    """Return a successful run for this exact card and capability revision."""
+    """Return a successful run for this exact card *whose data still exists*.
+
+    The fingerprint match alone is not enough: if the user deleted their session
+    data, the historical ``import_runs`` row survives but its sessions are gone, so
+    treating it as reusable would wrongly reject a fresh re-import ("already fully
+    imported") even though there is nothing in the database. The ``EXISTS`` guard
+    keys the decision on actual persisted data — a deleted import always re-imports.
+    """
 
     device = plan.inspection["devices"][0]
     return db.execute(
         text("""
-            SELECT id::text
-            FROM import_runs
-            WHERE user_id = CAST(:user_id AS uuid)
-              AND adapter_id = :adapter_id
-              AND adapter_version IS NOT DISTINCT FROM :adapter_version
-              AND source_fingerprint = :source_fingerprint
-              AND import_fingerprint = :import_fingerprint
-              AND status = 'success'
-              AND imported_session_count > 0
-            ORDER BY completed_at DESC NULLS LAST, created_at DESC
+            SELECT ir.id::text
+            FROM import_runs ir
+            WHERE ir.user_id = CAST(:user_id AS uuid)
+              AND ir.adapter_id = :adapter_id
+              AND ir.adapter_version IS NOT DISTINCT FROM :adapter_version
+              AND ir.source_fingerprint = :source_fingerprint
+              AND ir.import_fingerprint = :import_fingerprint
+              AND ir.status = 'success'
+              AND ir.imported_session_count > 0
+              AND EXISTS (
+                  SELECT 1 FROM sessions s
+                  WHERE s.import_run_id = ir.id
+                    AND s.user_id = ir.user_id
+              )
+            ORDER BY ir.completed_at DESC NULLS LAST, ir.created_at DESC
             LIMIT 1
         """),
         {

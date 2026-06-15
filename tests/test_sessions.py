@@ -53,6 +53,7 @@ def _seed_session(
     start_datetime: datetime | None = None,
     machine_id: str | None = None,
     provenance_status: str = "legacy_backfilled",
+    import_run_id: str | None = None,
 ):
     if folder_date is None:
         folder_date = date.today()
@@ -68,13 +69,13 @@ def _seed_session(
                 duration_seconds, device_serial, has_spo2, machine_tz, user_id,
                 note, tags, total_ahi_events, avg_pressure, p95_pressure, avg_leak, leak_unit,
                 therapy_mode, mask_type, avg_spo2, min_spo2, machine_id,
-                provenance_status{manufacturer_column}
+                import_run_id, provenance_status{manufacturer_column}
             ) VALUES (
                 CAST(:sid AS uuid), :sid, :fd, :start, :start,
                 :duration_seconds, :device_serial, :has_spo2, :machine_tz, CAST(:uid AS uuid),
                 :note, CAST(:tags AS text[]), :total_ahi_events, :avg_pressure, :p95_pressure, :avg_leak, :leak_unit,
                 :therapy_mode, :mask_type, :avg_spo2, :min_spo2, CAST(:machine_id AS uuid),
-                :provenance_status{manufacturer_value}
+                CAST(:import_run_id AS uuid), :provenance_status{manufacturer_value}
             )
         """),
         {
@@ -99,6 +100,7 @@ def _seed_session(
             "avg_spo2": avg_spo2,
             "min_spo2": min_spo2,
             "machine_id": machine_id,
+            "import_run_id": import_run_id,
             "provenance_status": provenance_status,
         },
     )
@@ -817,6 +819,43 @@ class TestSessionTagInsights:
         assert travel["delta_ahi"] == -5.0
 
 
+def _seed_import_run(
+    db,
+    user_id: str,
+    *,
+    source_fingerprint: str = "fp-123",
+    import_fingerprint: str = "imp-123",
+) -> tuple[str, str]:
+    """Insert a successful machine + import run, mirroring a completed import.
+
+    Returns ``(machine_id, run_id)``. The run is the gate ``reusable_import_run``
+    keys off when deciding whether a card is already imported.
+    """
+    machine_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    db.execute(
+        text("""
+            INSERT INTO cpap_machines (id, user_id, adapter_id, identity_key)
+            VALUES (CAST(:mid AS uuid), CAST(:uid AS uuid), 'resmed-native-v2', :ik)
+        """),
+        {"mid": machine_id, "uid": user_id, "ik": f"key-{machine_id}"},
+    )
+    db.execute(
+        text("""
+            INSERT INTO import_runs (
+                id, user_id, machine_id, adapter_id, source_type,
+                source_fingerprint, import_fingerprint, status, imported_session_count
+            ) VALUES (
+                CAST(:rid AS uuid), CAST(:uid AS uuid), CAST(:mid AS uuid),
+                'resmed-native-v2', 'uploaded_root', :sfp, :ifp, 'success', 5
+            )
+        """),
+        {"rid": run_id, "uid": user_id, "mid": machine_id, "sfp": source_fingerprint, "ifp": import_fingerprint},
+    )
+    db.commit()
+    return machine_id, run_id
+
+
 class TestSessionEquipmentOverride:
     """Per-night equipment override (specific item / 'not used' / clear)."""
 
@@ -889,3 +928,128 @@ class TestSessionEquipmentOverride:
             json={"equipment_type": "cushion", "value": "none"},
         )
         assert resp.status_code == 401
+
+
+class TestReusableImportRun:
+    """The 'already imported' gate must reflect data that still exists."""
+
+    def _plan(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            plan_version="plan-v1",
+            source_manifest=SimpleNamespace(fingerprint="fp-reuse"),
+            inspection={
+                "devices": [{"adapter_id": "resmed-native-v2", "adapter_version": None}]
+            },
+        )
+
+    def test_not_reusable_when_runs_sessions_were_deleted(self, db, test_user):
+        """A successful run whose sessions are gone must not block re-import."""
+        from api.import_runs import import_fingerprint, reusable_import_run
+
+        plan = self._plan()
+        _seed_import_run(
+            db,
+            test_user["id"],
+            source_fingerprint="fp-reuse",
+            import_fingerprint=import_fingerprint(plan),
+        )
+
+        # Run exists and reports imported sessions, but none are persisted.
+        assert reusable_import_run(db, user_id=test_user["id"], plan=plan) is None
+
+    def test_reusable_when_sessions_still_exist(self, db, test_user):
+        """An identical card whose data is present is still recognized as imported."""
+        from api.import_runs import import_fingerprint, reusable_import_run
+
+        plan = self._plan()
+        machine_id, run_id = _seed_import_run(
+            db,
+            test_user["id"],
+            source_fingerprint="fp-reuse",
+            import_fingerprint=import_fingerprint(plan),
+        )
+        _seed_session(db, test_user["id"], machine_id=machine_id, import_run_id=run_id)
+
+        assert reusable_import_run(db, user_id=test_user["id"], plan=plan) == run_id
+
+
+class TestDeleteAllSessions:
+    """Test suite for the delete-all-sessions endpoint (both scopes)."""
+
+    def _counts(self, db, user_id: str) -> dict[str, int]:
+        def count(table: str) -> int:
+            return db.execute(
+                text(f"SELECT COUNT(*) FROM {table} WHERE user_id = CAST(:uid AS uuid)"),
+                {"uid": user_id},
+            ).scalar()
+
+        return {
+            "sessions": count("sessions"),
+            "import_runs": count("import_runs"),
+            "cpap_machines": count("cpap_machines"),
+        }
+
+    def test_requires_auth(self, client: TestClient):
+        assert client.delete("/sessions/all").status_code == 401
+
+    def test_default_deletes_sessions_but_keeps_import_history(
+        self, client: TestClient, auth_headers, test_user, db
+    ):
+        """The lighter scope clears nights only, leaving runs and machines."""
+        machine_id, _ = _seed_import_run(db, test_user["id"])
+        _seed_session(db, test_user["id"], machine_id=machine_id)
+
+        resp = client.delete("/sessions/all", headers=auth_headers)
+        assert resp.status_code == 204
+
+        assert self._counts(db, test_user["id"]) == {
+            "sessions": 0,
+            "import_runs": 1,
+            "cpap_machines": 1,
+        }
+
+    def test_reset_clears_import_history_so_reimport_is_not_blocked(
+        self, client: TestClient, auth_headers, test_user, db
+    ):
+        """The full reset must also clear the import history.
+
+        Otherwise ``reusable_import_run`` still finds the prior successful run and
+        re-import is rejected as "already imported" even though the data is gone.
+        """
+        machine_id, _ = _seed_import_run(db, test_user["id"])
+        _seed_session(db, test_user["id"], machine_id=machine_id)
+
+        before = self._counts(db, test_user["id"])
+        assert before["sessions"] >= 1
+        assert before["import_runs"] == 1
+        assert before["cpap_machines"] == 1
+
+        resp = client.delete("/sessions/all?reset=true", headers=auth_headers)
+        assert resp.status_code == 204
+
+        after = self._counts(db, test_user["id"])
+        assert after == {"sessions": 0, "import_runs": 0, "cpap_machines": 0}
+
+    def test_reset_only_affects_the_current_user(
+        self, client: TestClient, auth_headers, test_user, db
+    ):
+        """Another user's import history must survive the reset."""
+        other_id = str(uuid.uuid4())
+        db.execute(
+            text("""
+                INSERT INTO users (id, email, first_name, last_name, password_hash, created_at)
+                VALUES (CAST(:id AS uuid), :email, 'Other', 'User', 'x', NOW())
+            """),
+            {"id": other_id, "email": f"other-{other_id[:8]}@example.com"},
+        )
+        _seed_import_run(db, other_id)
+        _seed_import_run(db, test_user["id"])
+
+        resp = client.delete("/sessions/all?reset=true", headers=auth_headers)
+        assert resp.status_code == 204
+
+        assert self._counts(db, test_user["id"])["import_runs"] == 0
+        assert self._counts(db, other_id)["import_runs"] == 1
+        assert self._counts(db, other_id)["import_runs"] == 1

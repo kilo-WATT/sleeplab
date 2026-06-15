@@ -29,25 +29,35 @@ export default function SettingsPage() {
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false)
 
-  // Danger zone
+  // Danger zone — two scopes: 'sessions' (nights only) and 'all' (full reset).
   const [isDeleting, setIsDeleting] = useState(false)
-  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleteScope, setDeleteScope] = useState<'sessions' | 'all' | null>(null)
   const [deleteMessage, setDeleteMessage] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  async function handleDeleteAllSessions() {
-    if (!deleteConfirm) {
-      setDeleteConfirm(true)
+  function requestDelete(scope: 'sessions' | 'all') {
+    setDeleteScope(scope)
+    setDeleteMessage(null)
+    setDeleteError(null)
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteScope) {
       return
     }
     setIsDeleting(true)
     setDeleteError(null)
     try {
-      await api.deleteAllSessions()
-      setDeleteMessage('All session data deleted.')
-      setDeleteConfirm(false)
+      if (deleteScope === 'all') {
+        await api.deleteAllData()
+        setDeleteMessage('All data deleted. You can re-import from scratch.')
+      } else {
+        await api.deleteAllSessions()
+        setDeleteMessage('All session data deleted.')
+      }
+      setDeleteScope(null)
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'Could not delete sessions')
+      setDeleteError(err instanceof Error ? err.message : 'Could not delete data')
     } finally {
       setIsDeleting(false)
     }
@@ -770,25 +780,44 @@ export default function SettingsPage() {
       <Card className="border-[var(--danger-text)] bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
         <CardHeader>
           <CardTitle className="text-2xl text-[var(--danger-text)]">Danger Zone</CardTitle>
-          <CardDescription>Permanently delete all imported session data. Your account will remain intact.</CardDescription>
+          <CardDescription>Permanently delete your imported data. Your account will remain intact.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {deleteMessage ? <p className="text-sm font-medium text-[var(--olive-deep)]">{deleteMessage}</p> : null}
           {deleteError ? <p className="text-sm text-[var(--danger-text)]">{deleteError}</p> : null}
-          {deleteConfirm ? (
+          {deleteScope ? (
             <div className="space-y-3">
-              <p className="text-sm text-[var(--danger-text)] font-medium">Are you sure? This cannot be undone.</p>
+              <p className="text-sm font-medium text-[var(--danger-text)]">
+                {deleteScope === 'all'
+                  ? 'Delete all your data? This removes your nights, import history, and detected machines so you can re-import from scratch. This cannot be undone.'
+                  : 'Delete all session data? This removes your imported nights but keeps your detected machine and import history. This cannot be undone.'}
+              </p>
               <div className="flex gap-3">
-                <Button variant="outline" onClick={() => setDeleteConfirm(false)}>Cancel</Button>
-                <Button onClick={handleDeleteAllSessions} disabled={isDeleting} className="bg-[var(--danger-text)] text-white hover:opacity-90">
-                  {isDeleting ? 'Deleting...' : 'Yes, delete everything'}
+                <Button variant="outline" onClick={() => setDeleteScope(null)}>Cancel</Button>
+                <Button onClick={handleConfirmDelete} disabled={isDeleting} className="bg-[var(--danger-text)] text-white hover:opacity-90">
+                  {isDeleting ? 'Deleting...' : deleteScope === 'all' ? 'Yes, delete everything' : 'Yes, delete sessions'}
                 </Button>
               </div>
             </div>
           ) : (
-            <Button onClick={handleDeleteAllSessions} variant="outline" className="border-[var(--danger-text)] text-[var(--danger-text)] hover:bg-[var(--danger-soft)]">
-              Delete all session data
-            </Button>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Button onClick={() => requestDelete('sessions')} variant="outline" className="border-[var(--danger-text)] text-[var(--danger-text)] hover:bg-[var(--danger-soft)]">
+                  Delete all sessions
+                </Button>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  Removes your imported nights and dashboard data, but keeps your detected machine and import history. You can re-import any card afterward.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Button onClick={() => requestDelete('all')} variant="outline" className="border-[var(--danger-text)] text-[var(--danger-text)] hover:bg-[var(--danger-soft)]">
+                  Delete all my data
+                </Button>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  Also clears your import history and detected machines for a clean slate — use this if you want to re-import the same card from scratch.
+                </p>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
