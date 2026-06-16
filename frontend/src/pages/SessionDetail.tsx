@@ -99,6 +99,20 @@ function EquipmentBadge({ kind }: { kind: keyof typeof EQUIPMENT_BADGE }) {
   )
 }
 
+/** Age + override badges shared by the primary and secondary equipment rows. */
+function EquipmentStatusBadges({ item, overrideVal }: { item: Equipment | null; overrideVal: string | undefined }) {
+  if (!item) return null
+  const status = equipmentAgeStatus(item)
+  const isOverride = Boolean(overrideVal && overrideVal !== 'none')
+  if (!status && !isOverride) return null
+  return (
+    <>
+      {status && <EquipmentBadge kind={status} />}
+      {isOverride && <EquipmentBadge kind="override" />}
+    </>
+  )
+}
+
 /**
  * React component or element to render the e v e n t_ c o d e s.
  *
@@ -484,6 +498,12 @@ export default function SessionDetail() {
   const leakEquipmentNote = highLeak && (cushionStatus === 'overdue' || cushionStatus === 'due-soon')
     ? `Mask cushion is ${cushionStatus === 'overdue' ? 'overdue for replacement' : 'due soon'}. If leaks are rising, replacing it may help.`
     : null
+
+  // Mask is the primary row; everything else lays out in a compact grid so the
+  // wide card fills its width instead of stretching one item per full-width row.
+  const visibleEquipmentSlots = equipmentSlots.filter((slot) => slot.notUsed || slot.effective)
+  const maskSlot = visibleEquipmentSlots.find((slot) => slot.key === 'cushion') ?? null
+  const secondaryEquipmentSlots = visibleEquipmentSlots.filter((slot) => slot.key !== 'cushion')
 
   async function handleEquipmentOverride(equipmentType: string, value: string | null) {
     if (!session) return
@@ -965,51 +985,58 @@ export default function SessionDetail() {
                       )
                     })}
                   </div>
-                ) : equipmentSlots.every((slot) => !(slot.notUsed || slot.effective)) ? (
+                ) : !maskSlot && secondaryEquipmentSlots.length === 0 ? (
                   <p className="text-sm text-[var(--muted-foreground)]">No equipment recorded for this night. Use Edit to set it.</p>
                 ) : (
-                  <div className="space-y-2">
-                    <div className="divide-y divide-[var(--border)]">
-                      {equipmentSlots.filter((slot) => slot.notUsed || slot.effective).map((slot) => {
-                        const primary = slot.key === 'cushion'
-                        const rowLabel = primary ? 'Mask' : slot.label
-                        const item = slot.effective
-                        const isOverride = Boolean(slot.overrideVal && slot.overrideVal !== 'none')
-                        const status = item ? equipmentAgeStatus(item) : null
-                        const age = item?.days_in_use != null ? `${item.days_in_use}d old` : null
-                        return (
-                          <div key={slot.key} className="flex flex-col gap-0.5 py-2 first:pt-0 last:pb-0 sm:flex-row sm:items-baseline sm:gap-3">
-                            <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:w-24">
-                              {rowLabel}
-                            </span>
-                            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-                              {slot.notUsed ? (
-                                <>
-                                  <span className="text-sm text-[var(--muted-foreground)] line-through">Not used this night</span>
-                                  <EquipmentBadge kind="not-used" />
-                                </>
-                              ) : primary ? (
-                                <>
-                                  <span className="truncate text-sm font-semibold text-[var(--foreground)]">{equipmentName(item!, rowLabel)}</span>
-                                  <span className="text-xs text-[var(--muted-foreground)]">
-                                    {[item!.mask_category, age].filter(Boolean).join(' · ')}
-                                  </span>
-                                  {status && <EquipmentBadge kind={status} />}
-                                  {isOverride && <EquipmentBadge kind="override" />}
-                                </>
-                              ) : (
-                                <>
-                                  <span className="truncate text-sm text-[var(--foreground)]">{age ?? equipmentName(item!, rowLabel)}</span>
-                                  {status === 'overdue' && <EquipmentBadge kind="overdue" />}
-                                  {status === 'due-soon' && <EquipmentBadge kind="due-soon" />}
-                                  {isOverride && <EquipmentBadge kind="override" />}
-                                </>
-                              )}
+                  <div className="space-y-3">
+                    {maskSlot && (
+                      <div className="flex flex-col gap-x-2 gap-y-1 sm:flex-row sm:flex-wrap sm:items-baseline">
+                        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:w-24 sm:shrink-0">
+                          Mask
+                        </span>
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          {maskSlot.notUsed ? (
+                            <>
+                              <span className="text-sm text-[var(--muted-foreground)] line-through">Not used this night</span>
+                              <EquipmentBadge kind="not-used" />
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-sm font-semibold text-[var(--foreground)]">{equipmentName(maskSlot.effective!, 'Mask')}</span>
+                              <span className="text-xs text-[var(--muted-foreground)]">
+                                {[maskSlot.effective!.mask_category, maskSlot.effective!.days_in_use != null ? `${maskSlot.effective!.days_in_use}d old` : null].filter(Boolean).join(' · ')}
+                              </span>
+                              <EquipmentStatusBadges item={maskSlot.effective} overrideVal={maskSlot.overrideVal} />
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {secondaryEquipmentSlots.length > 0 && (
+                      <div className={`grid grid-cols-1 gap-x-8 gap-y-2 sm:grid-cols-2 xl:grid-cols-3 ${maskSlot ? 'border-t border-[var(--border)] pt-3' : ''}`}>
+                        {secondaryEquipmentSlots.map((slot) => {
+                          const item = slot.effective
+                          const age = item?.days_in_use != null ? `${item.days_in_use}d old` : null
+                          return (
+                            <div key={slot.key} className="flex items-baseline gap-2 text-sm">
+                              <span className="w-20 shrink-0 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
+                                {slot.label}
+                              </span>
+                              <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                                {slot.notUsed ? (
+                                  <span className="text-[var(--muted-foreground)] line-through">Not used</span>
+                                ) : (
+                                  <span className="truncate text-[var(--foreground)]">{age ?? equipmentName(item!, slot.label)}</span>
+                                )}
+                                {slot.notUsed ? <EquipmentBadge kind="not-used" /> : <EquipmentStatusBadges item={item} overrideVal={slot.overrideVal} />}
+                              </div>
                             </div>
-                          </div>
-                        )
-                      })}
-                    </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
                     {leakEquipmentNote && (
                       <p className="rounded-[10px] bg-[var(--warning-soft)] px-3 py-2 text-xs text-[var(--warning-text)]">
                         {leakEquipmentNote}
