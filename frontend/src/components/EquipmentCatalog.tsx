@@ -437,16 +437,20 @@ export default function EquipmentCatalog() {
         </p>
       </div>
 
-      {/* Summary cards — identical label / value / secondary structure keeps the
-          internal rhythm consistent; mt-auto bottom-aligns the secondary line so
-          the cards stay evenly balanced without spacer rows or fixed heights. */}
+      {/* Summary cards — label pinned to the top, value+secondary grouped as one
+          unit pinned to the bottom (justify-between). Every card has the same two
+          zones with aligned baselines, so the rhythm stays even regardless of the
+          value's width (the date reads at the same height as the counts). No spacer
+          rows, fixed heights, or per-card margin hacks. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {summary.map(card => (
           <Card key={card.label} className="bg-[var(--surface-strong)]">
-            <CardContent className="flex h-full flex-col p-4">
+            <CardContent className="flex h-full flex-col justify-between gap-3 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)]">{card.label}</p>
-              <p className={`mt-1 text-xl font-extrabold leading-tight sm:text-2xl ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
-              <p className="mt-auto pt-1 text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
+              <div className="space-y-0.5">
+                <p className={`text-xl font-extrabold leading-tight ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
+                <p className="text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
+              </div>
             </CardContent>
           </Card>
         ))}
