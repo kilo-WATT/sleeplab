@@ -71,6 +71,20 @@ describe('EquipmentCatalog', () => {
     expect(screen.getByText(/Add headgear/)).toBeInTheDocument()
   })
 
+  it('gives every summary card a real secondary line', async () => {
+    render(<EquipmentCatalog />)
+    await screen.findByText('AirFit P10')
+
+    // Renamed, clearer label for the most-recent-activity card.
+    expect(screen.getByText('Last equipment log')).toBeInTheDocument()
+
+    // All four cards carry an accurate secondary line (no top-heavy blanks).
+    expect(screen.getByText('1 in use')).toBeInTheDocument()
+    expect(screen.getByText('upcoming replacement')).toBeInTheDocument()
+    expect(screen.getByText('needs replacing now')).toBeInTheDocument()
+    expect(screen.getByText('latest activity')).toBeInTheDocument()
+  })
+
   it('logs a replacement that preserves the model and starts today', async () => {
     apiMock.createEquipment.mockResolvedValue(equipment({ id: 'new-mask', model: 'AirFit P10', is_default: false }))
     apiMock.setDefaultEquipment.mockResolvedValue(equipment({ id: 'new-mask', is_default: true }))

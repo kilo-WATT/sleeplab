@@ -397,19 +397,35 @@ export default function EquipmentCatalog() {
     null,
   )
 
-  const summary: { label: string; value: string; sub?: string; tone?: string }[] = [
-    { label: 'Tracked items', value: String(items.length), sub: inUseCount ? `${inUseCount} in use` : undefined },
+  // Every card uses the same label / value / secondary structure so their
+  // internal rhythm matches — no optional lines that leave cards top-heavy.
+  const summary: { label: string; value: string; secondary: string; tone?: string }[] = [
+    {
+      label: 'Tracked items',
+      value: String(items.length),
+      secondary: inUseCount > 0 ? `${inUseCount} in use` : 'none in use',
+    },
     {
       label: 'Due soon',
       value: String(dueSoonCount),
+      secondary: dueSoonCount === 0
+        ? 'none upcoming'
+        : `upcoming replacement${dueSoonCount === 1 ? '' : 's'}`,
       tone: dueSoonCount ? 'text-[var(--warning-text)]' : undefined,
     },
     {
       label: 'Overdue',
       value: String(overdueCount),
+      secondary: overdueCount === 0
+        ? 'nothing overdue'
+        : `need${overdueCount === 1 ? 's' : ''} replacing now`,
       tone: overdueCount ? 'text-[var(--danger-text)]' : undefined,
     },
-    { label: 'Last logged', value: lastLogged ? formatDate(lastLogged) : '—' },
+    {
+      label: 'Last equipment log',
+      value: lastLogged ? formatDate(lastLogged) : '—',
+      secondary: lastLogged ? 'latest activity' : 'no activity yet',
+    },
   ]
 
   return (
@@ -421,14 +437,16 @@ export default function EquipmentCatalog() {
         </p>
       </div>
 
-      {/* Summary cards */}
+      {/* Summary cards — identical label / value / secondary structure keeps the
+          internal rhythm consistent; mt-auto bottom-aligns the secondary line so
+          the cards stay evenly balanced without spacer rows or fixed heights. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {summary.map(card => (
           <Card key={card.label} className="bg-[var(--surface-strong)]">
-            <CardContent className="p-4">
+            <CardContent className="flex h-full flex-col p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)]">{card.label}</p>
-              <p className={`mt-1 text-2xl font-extrabold ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
-              {card.sub && <p className="text-xs text-[var(--muted-foreground)]">{card.sub}</p>}
+              <p className={`mt-1 text-xl font-extrabold leading-tight sm:text-2xl ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
+              <p className="mt-auto pt-1 text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
             </CardContent>
           </Card>
         ))}
