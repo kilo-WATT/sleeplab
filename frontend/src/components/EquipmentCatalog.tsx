@@ -22,6 +22,44 @@ const EQUIPMENT_TYPE_ICONS: Record<EquipmentType, ComponentType<SVGProps<SVGSVGE
   filter: FilterIcon,
 }
 
+// Small line icons for the summary cards, matching the 20x20 stroke convention.
+function LayersIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden={true} {...props}>
+      <path d="M10 3 3.5 6.2 10 9.4l6.5-3.2L10 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M3.5 10 10 13.2 16.5 10M3.5 13.8 10 17l6.5-3.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function ClockIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden={true} {...props}>
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M10 6v4l2.6 1.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function AlertTriangleIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden={true} {...props}>
+      <path d="M10 3.4 17.2 16H2.8L10 3.4Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M10 8.4v3M10 13.6h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function HistoryIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden={true} {...props}>
+      <path d="M3.8 6.4A7 7 0 1 1 3 10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.2 3.6v3h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 7v3.2l2.2 1.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 /** Display labels for each tracked equipment type. */
 const TYPE_LABELS: Record<EquipmentType, string> = {
   cushion: 'Cushion / Pillow',
@@ -397,13 +435,22 @@ export default function EquipmentCatalog() {
     null,
   )
 
-  // Every card uses the same label / value / secondary structure so their
-  // internal rhythm matches — no optional lines that leave cards top-heavy.
-  const summary: { label: string; value: string; secondary: string; tone?: string }[] = [
+  // Every card uses the same icon / label / value / secondary structure. The
+  // leading icon gives each card visual mass so a lone count digit doesn't float,
+  // and the date value sits a size smaller so it doesn't tower over the counts.
+  const summary: {
+    label: string
+    value: string
+    secondary: string
+    icon: ComponentType<SVGProps<SVGSVGElement>>
+    tone?: string
+    valueClass?: string
+  }[] = [
     {
       label: 'Tracked items',
       value: String(items.length),
       secondary: inUseCount > 0 ? `${inUseCount} in use` : 'none in use',
+      icon: LayersIcon,
     },
     {
       label: 'Due soon',
@@ -411,6 +458,7 @@ export default function EquipmentCatalog() {
       secondary: dueSoonCount === 0
         ? 'none upcoming'
         : `upcoming replacement${dueSoonCount === 1 ? '' : 's'}`,
+      icon: ClockIcon,
       tone: dueSoonCount ? 'text-[var(--warning-text)]' : undefined,
     },
     {
@@ -419,12 +467,15 @@ export default function EquipmentCatalog() {
       secondary: overdueCount === 0
         ? 'nothing overdue'
         : `need${overdueCount === 1 ? 's' : ''} replacing now`,
+      icon: AlertTriangleIcon,
       tone: overdueCount ? 'text-[var(--danger-text)]' : undefined,
     },
     {
       label: 'Last equipment log',
       value: lastLogged ? formatDate(lastLogged) : '—',
       secondary: lastLogged ? 'latest activity' : 'no activity yet',
+      icon: HistoryIcon,
+      valueClass: 'text-base sm:text-lg',
     },
   ]
 
@@ -437,20 +488,20 @@ export default function EquipmentCatalog() {
         </p>
       </div>
 
-      {/* Summary cards — label pinned to the top, value+secondary grouped as one
-          unit pinned to the bottom (justify-between). Every card has the same two
-          zones with aligned baselines, so the rhythm stays even regardless of the
-          value's width (the date reads at the same height as the counts). No spacer
-          rows, fixed heights, or per-card margin hacks. */}
+      {/* Summary cards — a leading status icon + label, then value, then secondary,
+          grouped tightly at the top. The icon gives every card consistent visual
+          mass so single-digit counts don't look lost, and the date value renders a
+          size smaller so it doesn't dominate the row. No spacers or fixed heights. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {summary.map(card => (
           <Card key={card.label} className="bg-[var(--surface-strong)]">
-            <CardContent className="flex h-full flex-col justify-between gap-3 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)]">{card.label}</p>
-              <div className="space-y-0.5">
-                <p className={`text-xl font-extrabold leading-tight ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
-                <p className="text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-1.5">
+                <card.icon className={`h-4 w-4 shrink-0 ${card.tone ?? 'text-[var(--muted-foreground)]'}`} />
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)]">{card.label}</p>
               </div>
+              <p className={`mt-2 font-extrabold leading-tight ${card.valueClass ?? 'text-2xl'} ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
+              <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
             </CardContent>
           </Card>
         ))}
