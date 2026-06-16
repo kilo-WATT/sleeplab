@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type ComponentType, type FormEvent, type SVGProps } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
@@ -7,6 +7,7 @@ import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, 
 import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
 import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
+import { FilterIcon, HeadgearIcon, MachineIcon, MaskIcon, TubingIcon, WaterChamberIcon } from '../components/icons/EquipmentIcons'
 import EventTimeline from '../components/EventTimeline'
 import MetricsChart from '../components/MetricsChartSplit'
 import { computeMetricsDomain, metricsToPoints } from '../components/metricsChartDomain'
@@ -60,6 +61,15 @@ const EQUIPMENT_SLOTS: { key: keyof InferredEquipment; label: string }[] = [
   { key: 'humidifier_chamber', label: 'Humidifier' },
   { key: 'filter', label: 'Filter' },
 ]
+
+/** Generic local glyph per equipment type — no manufacturer/stock photos. */
+const EQUIPMENT_SLOT_ICONS: Record<keyof InferredEquipment, ComponentType<SVGProps<SVGSVGElement>>> = {
+  cushion: MaskIcon,
+  headgear: HeadgearIcon,
+  tubing: TubingIcon,
+  humidifier_chamber: WaterChamberIcon,
+  filter: FilterIcon,
+}
 
 /** Human label for an equipment item, falling back to its slot label. */
 function equipmentName(item: Equipment, fallback: string): string {
@@ -835,7 +845,10 @@ export default function SessionDetail() {
           {therapyContext && (
             <Card data-testid="therapy-machine" className="order-1">
               <CardContent className={secondaryStatContentClass}>
-                <p className="mb-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Therapy and machine</p>
+                <p className="mb-1 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                  <MachineIcon className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
+                  Therapy and machine
+                </p>
                 <p className="mb-3 text-xs text-[var(--muted-foreground)]">
                   {[therapyContext.machine.manufacturer, therapyContext.machine.family, therapyContext.machine.model].filter(Boolean).join(' ') || 'Machine details unavailable'}
                   {` · ${therapyContext.machine.validation_status}`}
@@ -920,7 +933,10 @@ export default function SessionDetail() {
           {!therapyContext && (
             <Card data-testid="therapy-machine" className="order-1">
               <CardContent className={secondaryStatContentClass}>
-                <p className="mb-1 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Therapy and machine</p>
+                <p className="mb-1 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                  <MachineIcon className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
+                  Therapy and machine
+                </p>
                 {hasDeviceSettings ? (
                   <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
                     {session.therapy_mode && (
@@ -990,25 +1006,28 @@ export default function SessionDetail() {
                 ) : (
                   <div className="space-y-3">
                     {maskSlot && (
-                      <div className="flex flex-col gap-x-2 gap-y-1 sm:flex-row sm:flex-wrap sm:items-baseline">
-                        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)] sm:w-24 sm:shrink-0">
-                          Mask
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] bg-[var(--surface-soft)] text-[var(--accent)]">
+                          <MaskIcon className="h-5 w-5" />
                         </span>
-                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                          {maskSlot.notUsed ? (
-                            <>
-                              <span className="text-sm text-[var(--muted-foreground)] line-through">Not used this night</span>
-                              <EquipmentBadge kind="not-used" />
-                            </>
-                          ) : (
-                            <>
-                              <span className="text-sm font-semibold text-[var(--foreground)]">{equipmentName(maskSlot.effective!, 'Mask')}</span>
-                              <span className="text-xs text-[var(--muted-foreground)]">
-                                {[maskSlot.effective!.mask_category, maskSlot.effective!.days_in_use != null ? `${maskSlot.effective!.days_in_use}d old` : null].filter(Boolean).join(' · ')}
-                              </span>
-                              <EquipmentStatusBadges item={maskSlot.effective} overrideVal={maskSlot.overrideVal} />
-                            </>
-                          )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">Mask</p>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            {maskSlot.notUsed ? (
+                              <>
+                                <span className="text-sm text-[var(--muted-foreground)] line-through">Not used this night</span>
+                                <EquipmentBadge kind="not-used" />
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-sm font-semibold text-[var(--foreground)]">{equipmentName(maskSlot.effective!, 'Mask')}</span>
+                                <span className="text-xs text-[var(--muted-foreground)]">
+                                  {[maskSlot.effective!.mask_category, maskSlot.effective!.days_in_use != null ? `${maskSlot.effective!.days_in_use}d old` : null].filter(Boolean).join(' · ')}
+                                </span>
+                                <EquipmentStatusBadges item={maskSlot.effective} overrideVal={maskSlot.overrideVal} />
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1018,12 +1037,16 @@ export default function SessionDetail() {
                         {secondaryEquipmentSlots.map((slot) => {
                           const item = slot.effective
                           const age = item?.days_in_use != null ? `${item.days_in_use}d old` : null
+                          const Glyph = EQUIPMENT_SLOT_ICONS[slot.key]
                           return (
-                            <div key={slot.key} className="flex items-baseline gap-2 text-sm">
-                              <span className="w-20 shrink-0 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
+                            <div key={slot.key} className="flex items-center gap-2.5 text-sm">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[var(--surface-soft)] text-[var(--muted-foreground)]">
+                                <Glyph className="h-4 w-4" />
+                              </span>
+                              <span className="w-20 shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
                                 {slot.label}
                               </span>
-                              <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
                                 {slot.notUsed ? (
                                   <span className="text-[var(--muted-foreground)] line-through">Not used</span>
                                 ) : (
