@@ -67,7 +67,8 @@ describe('EquipmentCatalog', () => {
     for (const label of ['Cushion / Pillow', 'Headgear', 'Tubing', 'Water Chamber', 'Filter']) {
       expect(screen.getByText(label)).toBeInTheDocument()
     }
-    expect(screen.getByText(/None tracked yet — add headgear/)).toBeInTheDocument()
+    // Empty categories offer a clear, working "Add <type>" affordance.
+    expect(screen.getByText(/Add headgear/)).toBeInTheDocument()
   })
 
   it('logs a replacement that preserves the model and starts today', async () => {

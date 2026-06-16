@@ -496,35 +496,49 @@ export default function EquipmentCatalog() {
                 : `${dueSoonCount} due soon`}
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {attention.map(({ item, status }) => (
-              <div
-                key={item.id}
-                className="flex flex-col gap-3 rounded-[14px] bg-[var(--surface-soft)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[var(--surface-strong)] text-[var(--accent)]">
-                    <TypeIcon type={item.equipment_type} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-[var(--foreground)]">
-                      {equipmentLabel(item)}
-                      {item.mask_category ? <span className="font-medium text-[var(--muted-foreground)]"> · {item.mask_category}</span> : null}
-                    </p>
-                    <p className="text-xs text-[var(--muted-foreground)]">
-                      <span className={`font-bold ${status.kind === 'overdue' ? 'text-[var(--danger-text)]' : 'text-[var(--warning-text)]'}`}>
-                        {status.label}
-                      </span>
-                      {item.days_in_use != null && ` · ${item.days_in_use}d in use`}
-                      {item.replacement_days != null && ` · replace every ${item.replacement_days}d`}
-                    </p>
+          <CardContent className="space-y-1.5">
+            {attention.map(({ item, status }) => {
+              // The active hero item already carries the primary "Log replacement"
+              // action above; here it reads as a lighter, secondary reminder so the
+              // page doesn't double up the same prominent call to action.
+              const isActive = activeMask?.id === item.id
+              return (
+                <div
+                  key={item.id}
+                  className={`flex flex-col gap-2 rounded-[12px] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 ${
+                    isActive ? 'bg-transparent' : 'bg-[var(--surface-soft)]'
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-muted)] text-[var(--muted-foreground)]">
+                      <TypeIcon type={item.equipment_type} className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                        {equipmentLabel(item)}
+                        {item.mask_category ? <span className="font-medium text-[var(--muted-foreground)]"> · {item.mask_category}</span> : null}
+                      </p>
+                      <p className="text-xs text-[var(--muted-foreground)]">
+                        <span className={`font-bold ${status.kind === 'overdue' ? 'text-[var(--danger-text)]' : 'text-[var(--warning-text)]'}`}>
+                          {status.label}
+                        </span>
+                        {item.days_in_use != null && ` · ${item.days_in_use}d in use`}
+                        {item.replacement_days != null && ` · replace every ${item.replacement_days}d`}
+                        {isActive && ' · also in Current setup'}
+                      </p>
+                    </div>
                   </div>
+                  <Button
+                    variant={isActive ? 'ghost' : 'outline'}
+                    size="sm"
+                    onClick={() => openReplacement(item)}
+                    className="shrink-0 self-start sm:self-auto"
+                  >
+                    Log replacement
+                  </Button>
                 </div>
-                <Button size="sm" onClick={() => openReplacement(item)} className="shrink-0">
-                  Log replacement
-                </Button>
-              </div>
-            ))}
+              )
+            })}
           </CardContent>
         </Card>
       )}
@@ -532,8 +546,17 @@ export default function EquipmentCatalog() {
       {/* Equipment by category */}
       <Card className="bg-[var(--surface-strong)]">
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Your equipment</CardTitle>
-          <CardDescription>Everything you track, grouped by category.</CardDescription>
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <CardTitle className="text-base">Your equipment</CardTitle>
+              <CardDescription>Everything you track, grouped by category.</CardDescription>
+            </div>
+            <Button size="sm" onClick={() => openAdd('cushion')} className="shrink-0 gap-1.5">
+              <span aria-hidden="true" className="text-base leading-none">＋</span>
+              <span className="hidden sm:inline">Add equipment</span>
+              <span className="sm:hidden">Add</span>
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-5">
           {TYPE_ORDER.map(type => (
@@ -551,21 +574,22 @@ export default function EquipmentCatalog() {
                 <button
                   type="button"
                   onClick={() => openAdd(type)}
-                  className="w-full rounded-[14px] border border-dashed border-[var(--border)] px-4 py-3 text-left text-xs text-[var(--muted-foreground)] transition hover:border-[var(--accent-border)] hover:text-[var(--accent)]"
+                  className="flex w-full items-center gap-2 rounded-[14px] border border-dashed border-[var(--border)] px-4 py-3 text-left text-xs font-medium text-[var(--muted-foreground)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
                 >
-                  None tracked yet — add {TYPE_LABELS[type].toLowerCase()}
+                  <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-current text-sm font-bold leading-none">＋</span>
+                  <span>Add {TYPE_LABELS[type].toLowerCase()}</span>
                 </button>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   {grouped[type].map(item => {
                     const status = statusInfo(item)
                     const label = equipmentLabel(item)
                     const categoryTag = item.mask_category ? ` · ${item.mask_category}` : ''
                     return (
-                      <div key={item.id} className="rounded-[14px] bg-[var(--surface-soft)] px-4 py-3">
+                      <div key={item.id} className="rounded-[14px] bg-[var(--surface-soft)] px-4 py-3.5">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-[var(--foreground)]">
+                            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-[var(--foreground)]">
                               <span className="truncate">{label}{categoryTag}</span>
                               {item.is_default && (
                                 <span className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--accent)]">
@@ -576,13 +600,13 @@ export default function EquipmentCatalog() {
                                 {status.short}
                               </span>
                             </p>
-                            <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                               Started {formatDate(item.start_date)}
                               {item.days_in_use != null && ` · ${item.days_in_use}d in use`}
                               {status.kind !== 'none' && <> · {status.label}</>}
                             </p>
                           </div>
-                          <div className="flex shrink-0 gap-2">
+                          <div className="flex shrink-0 gap-1">
                             <Button variant="outline" size="sm" onClick={() => openReplacement(item)}>Replace</Button>
                             <Button variant="ghost" size="sm" onClick={() => openEdit(item)}>Edit</Button>
                             <Button
@@ -596,7 +620,7 @@ export default function EquipmentCatalog() {
                           </div>
                         </div>
                         {status.fraction != null && (
-                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-muted)]">
+                          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-[var(--surface-muted)]">
                             <div
                               className={`h-full rounded-full ${status.barClass}`}
                               style={{ width: `${Math.round(status.fraction * 100)}%` }}
@@ -747,7 +771,7 @@ export default function EquipmentCatalog() {
           <p className="text-xs text-[var(--muted-foreground)]">
             Track masks, cushions, headgear, tubing, water chambers, and filters.
           </p>
-          <Button onClick={() => openAdd('cushion')} className="gap-1.5">
+          <Button variant="outline" onClick={() => openAdd('cushion')} className="gap-1.5">
             <span aria-hidden="true" className="text-base leading-none">＋</span> Add equipment
           </Button>
         </div>
@@ -766,21 +790,24 @@ function ActiveMaskHero({
   status: StatusInfo
   onLogReplacement: () => void
 }) {
+  const pct = status.fraction != null ? Math.round(status.fraction * 100) : null
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex min-w-0 gap-4">
-        <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[16px] bg-[var(--accent-soft)] text-[var(--accent)]">
-          <TypeIcon type={item.equipment_type} className="h-7 w-7" />
+        <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[18px] bg-[var(--accent-soft)] text-[var(--accent)]">
+          <TypeIcon type={item.equipment_type} className="h-8 w-8" />
         </span>
-        <div className="min-w-0 space-y-2">
-          <div>
-            <p className="flex flex-wrap items-center gap-2 text-lg font-extrabold text-[var(--foreground)]">
-              <span className="truncate">{equipmentLabel(item)}</span>
-              <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] ${status.pillClass}`}>
+        <div className="min-w-0 space-y-3">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <p className="min-w-0 truncate text-xl font-extrabold leading-tight text-[var(--foreground)] sm:text-2xl">
+                {equipmentLabel(item)}
+              </p>
+              <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-[0.08em] ${status.pillClass}`}>
                 {status.short}
               </span>
-            </p>
-            <p className="text-xs text-[var(--muted-foreground)]">
+            </div>
+            <p className="text-xs font-medium text-[var(--muted-foreground)]">
               {TYPE_LABELS[item.equipment_type]}
               {item.mask_category ? ` · ${item.mask_category}` : ''}
             </p>
@@ -794,20 +821,25 @@ function ActiveMaskHero({
               <span>Replace every <span className="font-semibold text-[var(--foreground)]">{item.replacement_days}d</span></span>
             )}
           </div>
-          <div className="space-y-1">
-            {status.fraction != null && (
-              <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-[var(--surface-muted)]">
+          {status.fraction != null ? (
+            <div className="max-w-sm space-y-1.5">
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-muted)]">
                 <div
                   className={`h-full rounded-full ${status.barClass}`}
-                  style={{ width: `${Math.round(status.fraction * 100)}%` }}
+                  style={{ width: `${pct}%` }}
                 />
               </div>
-            )}
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="font-semibold text-[var(--foreground)]">{status.label}</span>
+                {pct != null && <span className="text-[var(--muted-foreground)]">{pct}% of interval</span>}
+              </div>
+            </div>
+          ) : (
             <p className="text-xs font-semibold text-[var(--foreground)]">{status.label}</p>
-          </div>
+          )}
         </div>
       </div>
-      <Button onClick={onLogReplacement} className="shrink-0">Log replacement</Button>
+      <Button onClick={onLogReplacement} className="w-full shrink-0 sm:w-auto">Log replacement</Button>
     </div>
   )
 }
