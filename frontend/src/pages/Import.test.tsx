@@ -1,10 +1,31 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { ImportRunSummary } from '../api/client'
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { shouldDismissImportRunOnNavigation, shouldPollImportRuns } from '../components/importProgress'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
-import { ImportProgressCard, LoaderInspectionPanel } from './Import'
+import ImportPage, { ImportProgressCard, LoaderInspectionPanel } from './Import'
+
+const { mockGetImportRuns, mockGetImportSettings, mockDiscardSourceUpload } = vi.hoisted(() => ({
+  mockGetImportRuns: vi.fn(),
+  mockGetImportSettings: vi.fn(),
+  mockDiscardSourceUpload: vi.fn(),
+}))
+
+vi.mock('../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/client')>()
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      getImportRuns: mockGetImportRuns,
+      getImportSettings: mockGetImportSettings,
+      discardSourceUpload: mockDiscardSourceUpload,
+    },
+  }
+})
 
 function file(name: string) {
   return new File(['data'], name, { type: 'application/octet-stream' })
@@ -261,5 +282,114 @@ describe('ImportProgressCard', () => {
     expect(shouldDismissImportRunOnNavigation(importRun('success'), '/import', '/dashboard')).toBe(true)
     expect(shouldDismissImportRunOnNavigation(importRun('running'), '/import', '/dashboard')).toBe(false)
     expect(shouldDismissImportRunOnNavigation(importRun('success'), '/dashboard', '/dashboard')).toBe(false)
+  })
+})
+
+function historyRun(): ImportRunSummary {
+  return {
+    ...importRun('success'),
+    id: 'run-history',
+    status: 'partial',
+    completed_at: '2026-06-15T08:30:00Z',
+    imported_session_count: 4,
+    summary_only_day_count: 3,
+    warnings: [
+      {
+        code: 'summary_only',
+        severity: 'info',
+        message: 'STR history day without detailed DATALOG data; imported as summary-only, not deleted.',
+        relative_path: null,
+        affects: [],
+      },
+      {
+        code: 'clock_drift',
+        severity: 'warning',
+        message: 'Device clock drift detected during import.',
+        relative_path: null,
+        affects: [],
+      },
+    ],
+    errors: [{ code: 'event_parse', message: 'Failed to parse one event file.' }],
+  }
+}
+
+async function renderImportCenter(runs: ImportRunSummary[] = []) {
+  mockGetImportRuns.mockResolvedValue(runs)
+  mockGetImportSettings.mockResolvedValue({
+    local_datalog_path: null,
+    last_local_import_at: null,
+    last_local_import_status: null,
+    sleephq_enabled: false,
+  })
+  mockDiscardSourceUpload.mockResolvedValue({ status: 'ok' })
+  const utils = render(
+    <MemoryRouter>
+      <ImportPage />
+    </MemoryRouter>,
+  )
+  await screen.findByText('CPAP SD card')
+  return utils
+}
+
+describe('Import center', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders the three import source cards', async () => {
+    await renderImportCenter()
+
+    expect(screen.getByText('CPAP SD card')).toBeInTheDocument()
+    expect(screen.getByText('O2 Ring')).toBeInTheDocument()
+    expect(screen.getByText('SleepHQ')).toBeInTheDocument()
+    expect(screen.getByText('Import sources')).toBeInTheDocument()
+  })
+
+  it('shows CPAP import controls by default', async () => {
+    await renderImportCenter()
+
+    expect(screen.getByText('CPAP SD card import')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect card' })).toBeInTheDocument()
+  })
+
+  it('reveals O2 import controls when the O2 Ring source is selected', async () => {
+    await renderImportCenter()
+
+    fireEvent.click(screen.getByText('O2 Ring'))
+
+    expect(screen.getByText('O2 Ring import')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Import O2 data' })).toBeInTheDocument()
+    expect(screen.queryByText('CPAP SD card import')).not.toBeInTheDocument()
+  })
+
+  it('reveals SleepHQ import controls when the SleepHQ source is selected', async () => {
+    await renderImportCenter()
+
+    fireEvent.click(screen.getByText('SleepHQ'))
+
+    expect(screen.getByText('SleepHQ import')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Import now' }).length).toBeGreaterThan(0)
+  })
+
+  it('renders import history as compact rows collapsed by default', async () => {
+    const { container } = await renderImportCenter([historyRun()])
+
+    const details = container.querySelector('details')
+    expect(details).not.toBeNull()
+    expect(details).not.toHaveAttribute('open')
+  })
+
+  it('keeps parser diagnostics collapsed and replaces summary-only noise with a calm badge', async () => {
+    const { container } = await renderImportCenter([historyRun()])
+
+    // The repeated raw DATALOG warning never renders; it is summarized by a calm badge instead.
+    expect(screen.queryByText(/without detailed DATALOG data/i)).not.toBeInTheDocument()
+    expect(screen.getByText('3 summary-only')).toBeInTheDocument()
+
+    // Full technical diagnostics live inside the collapsed disclosure, available on expand.
+    const details = container.querySelector('details')!
+    expect(within(details).getByText('Failed to parse one event file.')).toBeInTheDocument()
+    expect(within(details).getByText('Summary-only days detected')).toBeInTheDocument()
+    expect(within(details).getByText('Device clock drift detected during import.')).toBeInTheDocument()
   })
 })

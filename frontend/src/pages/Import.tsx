@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 
 import { api } from '../api/client'
 import type { ImportPlanResponse, ImportRunSummary, OximeterImportResponse } from '../api/client'
-import { CheckCircleIcon } from '../components/icons/ChevronIcons'
+import {
+  ActivityIcon,
+  CheckCircleIcon,
+  EquipmentIcon,
+  SparklesIcon,
+} from '../components/icons/ChevronIcons'
 import { ImportProgressPanel } from '../components/ImportProgressPanel'
 import { IMPORT_STAGE_LABELS, shouldPollImportRuns } from '../components/importProgress'
 import OximeterImportSummary from '../components/OximeterImportSummary'
@@ -26,6 +31,11 @@ type SelectedImportFile = {
 type UploadPhase = 'idle' | 'uploading' | 'complete'
 
 /**
+ * Identifies which import source workflow is currently active.
+ */
+type ImportSource = 'cpap' | 'o2' | 'sleephq'
+
+/**
  * React component or element to render the import.
  *
  * @returns The rendered React element.
@@ -45,7 +55,11 @@ export default function Import() {
   const [sourceImportMessage, setSourceImportMessage] = useState<string | null>(null)
   const [progressNow, setProgressNow] = useState(0)
 
+  // Which import source the workflow area is showing.
+  const [selectedSource, setSelectedSource] = useState<ImportSource>('cpap')
+
   // SleepHQ import state
+  const [sleepHqEnabled, setSleepHqEnabled] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -75,6 +89,7 @@ export default function Import() {
         setLocalPath(s.local_datalog_path)
         setLocalLastAt(s.last_local_import_at)
         setLocalLastStatus(s.last_local_import_status)
+        setSleepHqEnabled(Boolean(s.sleephq_enabled))
       })
       .catch(() => {})
   }, [])
@@ -305,238 +320,387 @@ export default function Import() {
     }
   }
 
+  const latestRun = importRuns[0] ?? null
+  const showActiveProgress = Boolean(
+    latestRun && (latestRun.status === 'running' || latestRun.status === 'pending' || sourceImportMessage),
+  )
+  const lastCpapImportAt = importRuns.find((run) => run.completed_at)?.completed_at ?? latestRun?.started_at ?? null
+  const cpapStatus = lastCpapImportAt ? `Last import: ${formatImportDate(lastCpapImportAt)}` : 'No imports yet'
+  const o2Status = oximeterResult
+    ? `Imported ${oximeterResult.imported} recording${oximeterResult.imported === 1 ? '' : 's'}`
+    : 'No imports yet'
+  const sleepHqStatus = sleepHqEnabled ? 'Ready to pull recent sessions' : 'Not configured'
+
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.6),_transparent_38%),var(--surface-strong)]">
-        <CardHeader>
-          <CardTitle className="text-2xl">Import Sleep Data</CardTitle>
-          <CardDescription>
-            Insert your CPAP SD card and select the{' '}
-            <span className="font-bold text-[var(--foreground)]">SD card or root folder</span>. SleepLab will inspect
-            its structure, identify the machine, and show what data the loader can read before importing anything.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {supportsDirectorySelection() ? null : (
-            <div className="mb-5 rounded-[16px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-4 py-3 text-sm text-[var(--orange-700)]">
-              <span className="font-bold">Browser not supported.</span> Folder import requires either the Chromium
-              directory picker or a browser that supports directory uploads.
-            </div>
-          )}
-          <form className="space-y-5" onSubmit={handleSubmit}>
-            <input
-              ref={directoryInputRef}
-              hidden
-              multiple
-              type="file"
-              onChange={handleDirectoryInputChange}
-              {...DIRECTORY_INPUT_ATTRIBUTES}
-            />
-            <div className="space-y-3">
-              <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
-                <p className="text-sm text-[var(--foreground)]">{folderLabel}</p>
-                <Button
-                  className="mt-4"
-                  type="button"
-                  variant="outline"
-                  onClick={handleSelectFolder}
-                  disabled={isSubmitting}
-                >
-                  Select SD card / root folder
-                </Button>
-              </div>
-            </div>
-            {uploadPhase === 'uploading' ? (
-              <div className="space-y-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--surface-soft)] p-4">
-                <div className="flex items-center justify-between gap-4 text-sm">
-                  <p className="font-bold text-[var(--foreground)]">Preparing source inspection</p>
-                  <p className="font-bold text-[var(--accent)]">{uploadPercent}%</p>
-                </div>
-                <div
-                  aria-label="Upload progress"
-                  aria-valuemax={totalFiles}
-                  aria-valuemin={0}
-                  aria-valuenow={uploadedFiles}
-                  className="h-3 overflow-hidden rounded-full bg-[var(--border)]"
-                  role="progressbar"
-                >
-                  <div
-                    className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-300 ease-out"
-                    style={{ width: `${uploadPercent}%` }}
-                  />
-                </div>
-                <p className="text-sm font-medium text-[var(--muted-foreground)]">
-                  Uploaded {uploadedFiles} of {totalFiles} files
-                </p>
-              </div>
-            ) : null}
-            {uploadPhase === 'complete' ? (
-              <div className="flex items-start gap-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 text-[var(--accent)]">
-                <div className="space-y-1">
-                  <p className="text-sm font-bold">Source inspected</p>
-                  <p className="text-sm font-medium text-[var(--muted-foreground)]">
-                    Detection is complete. Review the loader result below before importing.
-                  </p>
-                </div>
-              </div>
-            ) : null}
-            {error ? <p className="text-sm text-[var(--danger-text)]">{error}</p> : null}
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Inspecting...' : 'Inspect SD card'}
-            </Button>
-          </form>
-          {importPlan ? (
-            <>
-              <LoaderInspectionPanel
-                plan={importPlan}
-                canImport={Boolean(canImportDetectedSource)}
-                isImporting={isSubmitting}
-                importStarted={sourceImportMessage !== null}
-                onImport={handleDetectedImport}
-              />
-              {sourceImportMessage ? (
-                <div className="mt-4 rounded-[16px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] px-4 py-3 text-sm font-medium text-[var(--olive-deep)]">
-                  {sourceImportMessage}
-                </div>
-              ) : null}
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
-      {importRuns[0] && (importRuns[0].status === 'running' || sourceImportMessage) ? (
-        <ImportProgressCard run={importRuns[0]} now={progressNow} />
-      ) : null}
-      <ImportHistory runs={importRuns} />
-      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
-        <CardHeader>
-          <CardTitle className="text-2xl">Import O2 Ring Data</CardTitle>
-          <CardDescription>
-            Upload ViHealth or O2 Insight Pro binary files from Wellue/Viatom oximeters. SleepLab will match each
-            recording to an existing CPAP session by time.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-5" onSubmit={handleOximeterImport}>
-            <input ref={oximeterInputRef} hidden multiple type="file" onChange={handleOximeterInputChange} />
-            <div className="rounded-[24px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
-              <p className="text-sm text-[var(--foreground)]">{oximeterLabel}</p>
-              {oximeterFiles.length > 0 ? (
-                <div className="mt-3 max-h-24 overflow-auto rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
-                  {oximeterFiles.map((file) => (
-                    <p
-                      key={`${file.name}-${file.size}`}
-                      className="truncate text-xs font-medium text-[var(--muted-foreground)]"
-                    >
-                      {file.name}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-              <Button
-                className="mt-4"
-                type="button"
-                variant="outline"
-                onClick={() => oximeterInputRef.current?.click()}
-                disabled={isOximeterImporting}
-              >
-                Select O2 files
-              </Button>
-            </div>
-            <label className="flex items-start gap-3 rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-sm">
-              <input
-                className="mt-1 h-4 w-4"
-                type="checkbox"
-                checked={oximeterOverwrite}
-                onChange={(event) => setOximeterOverwrite(event.target.checked)}
-              />
-              <span>
-                <span className="block font-bold text-[var(--foreground)]">Replace existing SpO2 data</span>
-                <span className="text-[var(--muted-foreground)]">
-                  Leave this off to skip sessions that already have oximeter data.
-                </span>
-              </span>
-            </label>
-            {oximeterResult ? <OximeterImportSummary result={oximeterResult} /> : null}
-            {oximeterError ? <p className="text-sm text-[var(--danger-text)]">{oximeterError}</p> : null}
-            <Button type="submit" disabled={isOximeterImporting}>
-              {isOximeterImporting ? 'Importing...' : 'Import O2 data'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-      <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
-        <CardHeader>
-          <CardTitle className="text-2xl">Import from SleepHQ</CardTitle>
-          <CardDescription>
-            Run a one-time import of recent CPAP sessions from your SleepHQ account. Configure your credentials in{' '}
-            <Link className="font-medium text-[var(--foreground)] underline underline-offset-2" to="/settings">
-              Settings
-            </Link>{' '}
-            first, then re-run this whenever you want to pull in newer sessions.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {syncMessage ? (
-            <div className="flex items-start gap-3 rounded-[20px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] p-4 text-[var(--olive-deep)]">
-              <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0" />
-              <p className="text-sm font-medium">{syncMessage}</p>
-            </div>
-          ) : null}
-          {syncError ? <p className="text-sm text-[var(--danger-text)]">{syncError}</p> : null}
-          <Button onClick={handleSleepHQSync} disabled={isSyncing}>
-            {isSyncing ? 'Importing...' : 'Import now'}
-          </Button>
-        </CardContent>
-      </Card>
-      {localPath ? (
-        <Card className="bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.45),_transparent_38%),var(--surface-strong)]">
+    <div className="mx-auto max-w-4xl space-y-8">
+      <div className="space-y-1">
+        <h1 className="text-2xl font-extrabold tracking-tight text-[var(--foreground)]">Import Data</h1>
+        <p className="text-sm text-[var(--muted-foreground)]">
+          Bring CPAP, oximeter, and SleepHQ data into SleepLab. Pick a source to start, then review recent activity below.
+        </p>
+      </div>
+
+      <section className="space-y-3">
+        <SectionLabel>Import sources</SectionLabel>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <SourceTile
+            active={selectedSource === 'cpap'}
+            icon={<EquipmentIcon className="h-5 w-5" />}
+            title="CPAP SD card"
+            description="Import detailed therapy data from your CPAP machine."
+            status={cpapStatus}
+            actionLabel="Select folder"
+            onSelect={() => setSelectedSource('cpap')}
+            onAction={() => {
+              setSelectedSource('cpap')
+              void handleSelectFolder()
+            }}
+          />
+          <SourceTile
+            active={selectedSource === 'o2'}
+            icon={<ActivityIcon className="h-5 w-5" />}
+            title="O2 Ring"
+            description="Upload Wellue / ViHealth O2 files."
+            status={o2Status}
+            actionLabel="Select O2 files"
+            onSelect={() => setSelectedSource('o2')}
+            onAction={() => {
+              setSelectedSource('o2')
+              oximeterInputRef.current?.click()
+            }}
+          />
+          <SourceTile
+            active={selectedSource === 'sleephq'}
+            icon={<SparklesIcon className="h-5 w-5" />}
+            title="SleepHQ"
+            description="Pull recent sessions from SleepHQ."
+            status={sleepHqStatus}
+            statusTone={sleepHqEnabled ? 'default' : 'muted'}
+            actionLabel="Import now"
+            onSelect={() => setSelectedSource('sleephq')}
+            onAction={() => {
+              setSelectedSource('sleephq')
+              void handleSleepHQSync()
+            }}
+          />
+        </div>
+      </section>
+
+      <input
+        ref={directoryInputRef}
+        hidden
+        multiple
+        type="file"
+        onChange={handleDirectoryInputChange}
+        {...DIRECTORY_INPUT_ATTRIBUTES}
+      />
+      <input ref={oximeterInputRef} hidden multiple type="file" onChange={handleOximeterInputChange} />
+
+      {selectedSource === 'cpap' ? (
+        <Card>
           <CardHeader>
-            <CardTitle className="text-2xl">Local Server Import</CardTitle>
+            <CardTitle className="text-lg">CPAP SD card import</CardTitle>
             <CardDescription>
-              Trigger an import from the server path configured in{' '}
-              <Link className="font-medium text-[var(--foreground)] underline underline-offset-2" to="/settings">
-                Settings
-              </Link>
-              .
+              Select the <span className="font-bold text-[var(--foreground)]">SD card or root folder</span>. SleepLab
+              inspects its structure, identifies the machine, and shows what the loader can read before importing.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-lg border border-[var(--border)] px-4 py-3 text-sm space-y-1">
-              <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                Server path
-              </p>
-              <p className="font-mono text-[var(--foreground)]">{localPath}</p>
-            </div>
-            {localLastAt && (
-              <div className="rounded-lg border border-[var(--border)] px-4 py-3 text-sm space-y-1">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
-                  Last import
-                </p>
-                <p className="text-[var(--foreground)]">{new Date(localLastAt).toLocaleString()}</p>
-                {localLastStatus && (
-                  <p
-                    className={
-                      localLastStatus.startsWith('ok') ? 'text-[var(--olive-deep)]' : 'text-[var(--danger-text)]'
-                    }
-                  >
-                    {localLastStatus}
-                  </p>
-                )}
+          <CardContent>
+            {supportsDirectorySelection() ? null : (
+              <div className="mb-5 rounded-[16px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-4 py-3 text-sm text-[var(--orange-700)]">
+                <span className="font-bold">Browser not supported.</span> Folder import requires either the Chromium
+                directory picker or a browser that supports directory uploads.
               </div>
             )}
-            {localMessage ? (
-              <div className="flex items-start gap-3 rounded-[20px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] p-4 text-[var(--olive-deep)]">
-                <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0" />
-                <p className="text-sm font-medium">{localMessage}</p>
+            <form className="space-y-5" onSubmit={handleSubmit}>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3">
+                <p className="min-w-0 truncate text-sm text-[var(--foreground)]">{folderLabel}</p>
+                <Button type="button" size="sm" variant="outline" onClick={handleSelectFolder} disabled={isSubmitting}>
+                  Select folder
+                </Button>
               </div>
+              {uploadPhase === 'uploading' ? (
+                <div className="space-y-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--surface-soft)] p-4">
+                  <div className="flex items-center justify-between gap-4 text-sm">
+                    <p className="font-bold text-[var(--foreground)]">Preparing source inspection</p>
+                    <p className="font-bold text-[var(--accent)]">{uploadPercent}%</p>
+                  </div>
+                  <div
+                    aria-label="Upload progress"
+                    aria-valuemax={totalFiles}
+                    aria-valuemin={0}
+                    aria-valuenow={uploadedFiles}
+                    className="h-3 overflow-hidden rounded-full bg-[var(--border)]"
+                    role="progressbar"
+                  >
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-300 ease-out"
+                      style={{ width: `${uploadPercent}%` }}
+                    />
+                  </div>
+                  <p className="text-sm font-medium text-[var(--muted-foreground)]">
+                    Uploaded {uploadedFiles} of {totalFiles} files
+                  </p>
+                </div>
+              ) : null}
+              {uploadPhase === 'complete' ? (
+                <div className="flex items-start gap-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 text-[var(--accent)]">
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold">Source inspected</p>
+                    <p className="text-sm font-medium text-[var(--muted-foreground)]">
+                      Detection is complete. Review the loader result below before importing.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+              {error ? <p className="text-sm text-[var(--danger-text)]">{error}</p> : null}
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Inspecting...' : 'Inspect card'}
+              </Button>
+            </form>
+            {importPlan ? (
+              <>
+                <LoaderInspectionPanel
+                  plan={importPlan}
+                  canImport={Boolean(canImportDetectedSource)}
+                  isImporting={isSubmitting}
+                  importStarted={sourceImportMessage !== null}
+                  onImport={handleDetectedImport}
+                />
+                {sourceImportMessage ? (
+                  <div className="mt-4 rounded-[16px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] px-4 py-3 text-sm font-medium text-[var(--olive-deep)]">
+                    {sourceImportMessage}
+                  </div>
+                ) : null}
+              </>
             ) : null}
-            {localError ? <p className="text-sm text-[var(--danger-text)]">{localError}</p> : null}
-            <Button onClick={handleLocalImport} disabled={isLocalImporting}>
-              {isLocalImporting ? 'Importing...' : 'Import now'}
-            </Button>
           </CardContent>
         </Card>
       ) : null}
+
+      {selectedSource === 'o2' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">O2 Ring import</CardTitle>
+            <CardDescription>
+              Upload ViHealth or O2 Insight Pro binary files from Wellue/Viatom oximeters. SleepLab matches each
+              recording to an existing CPAP session by time.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-5" onSubmit={handleOximeterImport}>
+              <div className="rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="min-w-0 truncate text-sm text-[var(--foreground)]">{oximeterLabel}</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => oximeterInputRef.current?.click()}
+                    disabled={isOximeterImporting}
+                  >
+                    Select O2 files
+                  </Button>
+                </div>
+                {oximeterFiles.length > 0 ? (
+                  <div className="mt-3 max-h-24 overflow-auto rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
+                    {oximeterFiles.map((file) => (
+                      <p
+                        key={`${file.name}-${file.size}`}
+                        className="truncate text-xs font-medium text-[var(--muted-foreground)]"
+                      >
+                        {file.name}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <label className="flex items-start gap-3 rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-sm">
+                <input
+                  className="mt-1 h-4 w-4"
+                  type="checkbox"
+                  checked={oximeterOverwrite}
+                  onChange={(event) => setOximeterOverwrite(event.target.checked)}
+                />
+                <span>
+                  <span className="block font-bold text-[var(--foreground)]">Replace existing SpO2 data</span>
+                  <span className="text-[var(--muted-foreground)]">
+                    Leave this off to skip sessions that already have oximeter data.
+                  </span>
+                </span>
+              </label>
+              {oximeterResult ? <OximeterImportSummary result={oximeterResult} /> : null}
+              {oximeterError ? <p className="text-sm text-[var(--danger-text)]">{oximeterError}</p> : null}
+              <Button type="submit" disabled={isOximeterImporting}>
+                {isOximeterImporting ? 'Importing...' : 'Import O2 data'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {selectedSource === 'sleephq' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">SleepHQ import</CardTitle>
+            <CardDescription>
+              Run a one-time import of recent CPAP sessions from your SleepHQ account. Configure your credentials in{' '}
+              <Link className="font-medium text-[var(--foreground)] underline underline-offset-2" to="/settings">
+                Settings
+              </Link>{' '}
+              first, then re-run this whenever you want to pull in newer sessions.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {syncMessage ? (
+              <div className="flex items-start gap-3 rounded-[20px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] p-4 text-[var(--olive-deep)]">
+                <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0" />
+                <p className="text-sm font-medium">{syncMessage}</p>
+              </div>
+            ) : null}
+            {syncError ? <p className="text-sm text-[var(--danger-text)]">{syncError}</p> : null}
+            <Button onClick={handleSleepHQSync} disabled={isSyncing}>
+              {isSyncing ? 'Importing...' : 'Import now'}
+            </Button>
+            {localPath ? (
+              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+                <div>
+                  <p className="text-sm font-bold text-[var(--foreground)]">Local server import</p>
+                  <p className="text-sm text-[var(--muted-foreground)]">
+                    Trigger an import from the server path configured in{' '}
+                    <Link className="font-medium text-[var(--foreground)] underline underline-offset-2" to="/settings">
+                      Settings
+                    </Link>
+                    .
+                  </p>
+                </div>
+                <div className="rounded-[16px] border border-[var(--border)] px-4 py-3 text-sm space-y-1">
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+                    Server path
+                  </p>
+                  <p className="break-all font-mono text-[var(--foreground)]">{localPath}</p>
+                  {localLastAt ? (
+                    <p className="text-[var(--muted-foreground)]">
+                      Last import {new Date(localLastAt).toLocaleString()}
+                      {localLastStatus ? (
+                        <span
+                          className={
+                            localLastStatus.startsWith('ok')
+                              ? ' text-[var(--olive-deep)]'
+                              : ' text-[var(--danger-text)]'
+                          }
+                        >
+                          {' · '}
+                          {localLastStatus}
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
+                </div>
+                {localMessage ? (
+                  <div className="flex items-start gap-3 rounded-[16px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] p-3 text-[var(--olive-deep)]">
+                    <CheckCircleIcon className="mt-0.5 h-5 w-5 shrink-0" />
+                    <p className="text-sm font-medium">{localMessage}</p>
+                  </div>
+                ) : null}
+                {localError ? <p className="text-sm text-[var(--danger-text)]">{localError}</p> : null}
+                <Button variant="outline" onClick={handleLocalImport} disabled={isLocalImporting}>
+                  {isLocalImporting ? 'Importing...' : 'Import from server path'}
+                </Button>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <section className="space-y-3">
+        <SectionLabel>Recent import status</SectionLabel>
+        {showActiveProgress && latestRun ? (
+          <ImportProgressCard run={latestRun} now={progressNow} />
+        ) : latestRun ? (
+          <ImportProgressPanel run={latestRun} compact />
+        ) : (
+          <div className="rounded-[18px] border border-dashed border-[var(--border)] bg-[var(--surface-soft)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+            No imports yet. Start one from a source above and progress will appear here.
+          </div>
+        )}
+      </section>
+
+      <ImportHistory runs={importRuns} />
+    </div>
+  )
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <h2 className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--muted-foreground)]">{children}</h2>
+  )
+}
+
+function SourceTile({
+  active,
+  icon,
+  title,
+  description,
+  status,
+  statusTone = 'default',
+  actionLabel,
+  onSelect,
+  onAction,
+}: {
+  active: boolean
+  icon: ReactNode
+  title: string
+  description: string
+  status: string
+  statusTone?: 'default' | 'muted'
+  actionLabel: string
+  onSelect: () => void
+  onAction: () => void
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
+      className={`flex h-full cursor-pointer flex-col gap-3 rounded-[20px] border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-border)] ${
+        active
+          ? 'border-[var(--accent-border)] bg-[var(--accent-soft)]'
+          : 'border-[var(--border)] bg-[var(--surface-soft)] hover:border-[var(--accent-border)]'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span className={`flex h-8 w-8 items-center justify-center rounded-full ${active ? 'bg-[var(--accent)] text-[var(--accent-foreground)]' : 'bg-[var(--surface-strong)] text-[var(--accent)]'}`}>
+          {icon}
+        </span>
+        <p className="font-bold text-[var(--foreground)]">{title}</p>
+      </div>
+      <p className="text-sm text-[var(--muted-foreground)]">{description}</p>
+      <p
+        className={`text-xs font-bold ${statusTone === 'muted' ? 'text-[var(--orange-700)]' : 'text-[var(--foreground)]'}`}
+      >
+        {status}
+      </p>
+      <div className="mt-auto pt-1">
+        <Button
+          type="button"
+          size="sm"
+          variant={active ? 'default' : 'outline'}
+          onClick={(event) => {
+            event.stopPropagation()
+            onAction()
+          }}
+        >
+          {actionLabel}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -545,87 +709,193 @@ export function ImportProgressCard({ run, now }: { run: ImportRunSummary; now?: 
   return <ImportProgressPanel run={run} now={now} />
 }
 
+const HISTORY_PAGE_SIZE = 5
+
 function ImportHistory({ runs }: { runs: ImportRunSummary[] }) {
+  const [showAll, setShowAll] = useState(false)
+  const visibleRuns = showAll ? runs : runs.slice(0, HISTORY_PAGE_SIZE)
+  const hiddenCount = runs.length - visibleRuns.length
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-2xl">Import history</CardTitle>
+        <CardTitle className="text-lg">Import history</CardTitle>
         <CardDescription>
-          Durable diagnostics for reviewed CPAP card imports. Detection-only devices do not appear here because no
-          import was executed.
+          Reviewed CPAP card imports, newest first. Open a row for full diagnostics. Detection-only cards are not listed
+          because no import ran.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-2">
         {runs.length === 0 ? (
           <p className="text-sm text-[var(--muted-foreground)]">No 2.0 import runs have been recorded yet.</p>
         ) : (
-          runs.map((run) => <ImportRunCard key={run.id} run={run} />)
+          <>
+            <div className="hidden grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-3 pb-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)] sm:grid">
+              <span>Status</span>
+              <span>Device · date</span>
+              <span className="text-right">Sessions</span>
+              <span className="text-right">Detail</span>
+              <span className="text-right">Notes</span>
+            </div>
+            {visibleRuns.map((run) => (
+              <ImportRunRow key={run.id} run={run} />
+            ))}
+            {runs.length > HISTORY_PAGE_SIZE ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="mt-1"
+                onClick={() => setShowAll((value) => !value)}
+              >
+                {showAll ? 'Show fewer' : `View older imports (${hiddenCount})`}
+              </Button>
+            ) : null}
+          </>
         )}
       </CardContent>
     </Card>
   )
 }
 
-function ImportRunCard({ run }: { run: ImportRunSummary }) {
-  const machineName = [
-    run.machine_manufacturer || run.detected_manufacturer,
-    run.machine_model || run.machine_family || run.detected_family,
-  ]
-    .filter(Boolean)
-    .join(' ')
-  const diagnostics = [...run.warnings.map((warning) => warning.message), ...run.errors.map((error) => error.message)]
+const SUMMARY_ONLY_PATTERN = /summary-only|datalog data/i
+
+function statusBadgeClass(status: ImportRunSummary['status']) {
+  if (status === 'success' || status === 'partial') {
+    return 'border-[rgba(106,161,54,0.3)] bg-[rgba(106,161,54,0.12)] text-[var(--olive-deep)]'
+  }
+  if (status === 'failed' || status === 'cancelled') {
+    return 'border-[rgba(176,58,46,0.3)] bg-[rgba(176,58,46,0.1)] text-[var(--danger-text)]'
+  }
+  return 'border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]'
+}
+
+function ImportRunRow({ run }: { run: ImportRunSummary }) {
+  const machineName =
+    [
+      run.machine_manufacturer || run.detected_manufacturer,
+      run.machine_model || run.machine_family || run.detected_family,
+    ]
+      .filter(Boolean)
+      .join(' ') || 'Unresolved CPAP machine'
+  const summaryOnlyCount = run.summary_only_day_count ?? 0
+  // The repeated "STR history day without detailed DATALOG data" warnings are represented by the
+  // calm Summary-only badge/count instead of being dumped loudly on every row.
+  const warningMessages = run.warnings
+    .map((warning) => warning.message)
+    .filter((message) => !SUMMARY_ONLY_PATTERN.test(message))
+  const errorMessages = run.errors.map((error) => error.message)
+  const warningCount = warningMessages.length
+  const errorCount = errorMessages.length
   const stage = run.current_stage
     ? IMPORT_STAGE_LABELS[run.current_stage] ?? run.current_stage.replaceAll('_', ' ')
     : null
 
   return (
-    <div className="space-y-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-bold text-[var(--foreground)]">{machineName || 'Unresolved CPAP machine'}</p>
-          <p className="text-xs text-[var(--muted-foreground)]">
-            {run.adapter_id} | {run.source_file_count} source files
-          </p>
-        </div>
-        <span className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-1 text-xs font-bold text-[var(--foreground)]">
+    <details className="group rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] open:bg-[var(--surface-strong)]">
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-3 sm:grid sm:grid-cols-[auto_1fr_auto_auto_auto] [&::-webkit-details-marker]:hidden">
+        <span
+          className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadgeClass(run.status)}`}
+        >
           {run.status}
         </span>
-      </div>
-      {stage || run.current_message ? (
-        <div className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2 text-sm">
-          {stage ? <p className="font-bold text-[var(--foreground)]">{stage}</p> : null}
-          {run.current_message ? <p className="mt-0.5 text-[var(--muted-foreground)]">{run.current_message}</p> : null}
-        </div>
-      ) : null}
-      <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
-        <InspectionValue label="Validation" value={run.validation_status} />
-        <InspectionValue label="Sessions" value={String(run.imported_session_count)} />
-        <InspectionValue label="Blocks" value={String(run.imported_block_count)} />
-        <InspectionValue label="Events" value={String(run.imported_event_count)} />
-        <InspectionValue label="Settings" value={String(run.imported_settings_count ?? 0)} />
-        <InspectionValue label="Summary-only" value={String(run.summary_only_day_count ?? 0)} />
-      </dl>
-      {run.capability_status && Object.keys(run.capability_status).length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(run.capability_status).map(([name, status]) => (
-            <span
-              key={name}
-              className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs"
-            >
-              {name.replaceAll('_', ' ')}: {String(status)}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-bold text-[var(--foreground)]">{machineName}</span>
+          <span className="block truncate text-xs text-[var(--muted-foreground)]">
+            {formatImportDateTime(run.completed_at ?? run.started_at)}
+          </span>
+        </span>
+        <span className="hidden text-right text-sm text-[var(--foreground)] sm:block">
+          {run.imported_session_count}
+        </span>
+        <span className="hidden text-right text-xs font-medium capitalize text-[var(--muted-foreground)] sm:block">
+          {run.validation_status}
+        </span>
+        <span className="ml-auto flex items-center gap-1.5 sm:ml-0 sm:justify-end">
+          {summaryOnlyCount > 0 ? (
+            <span className="rounded-full border border-[rgba(233,120,75,0.3)] bg-[rgba(233,120,75,0.1)] px-2 py-0.5 text-[11px] font-bold text-[var(--orange-700)]">
+              {summaryOnlyCount} summary-only
             </span>
-          ))}
-        </div>
-      ) : null}
-      <p className="truncate font-mono text-xs text-[var(--muted-foreground)]" title={run.source_fingerprint}>
-        {run.source_fingerprint}
-      </p>
-      {diagnostics.map((message, index) => (
-        <p key={`${message}-${index}`} className="text-sm text-[var(--orange-700)]">
-          {message}
+          ) : null}
+          {errorCount > 0 ? (
+            <span className="rounded-full border border-[rgba(176,58,46,0.3)] bg-[rgba(176,58,46,0.1)] px-2 py-0.5 text-[11px] font-bold text-[var(--danger-text)]">
+              {errorCount} error{errorCount === 1 ? '' : 's'}
+            </span>
+          ) : null}
+          <span className="text-xs font-bold text-[var(--accent)] group-open:hidden">View details</span>
+          <span className="hidden text-xs font-bold text-[var(--accent)] group-open:inline">Hide</span>
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-[var(--border)] px-3 py-3 text-sm">
+        <p className="text-xs text-[var(--muted-foreground)]">
+          {run.adapter_id} · {run.source_file_count} source files
         </p>
-      ))}
-    </div>
+        {stage || run.current_message ? (
+          <div className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2">
+            {stage ? <p className="font-bold text-[var(--foreground)]">{stage}</p> : null}
+            {run.current_message ? (
+              <p className="mt-0.5 text-[var(--muted-foreground)]">{run.current_message}</p>
+            ) : null}
+          </div>
+        ) : null}
+        <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <InspectionValue label="Validation" value={run.validation_status} />
+          <InspectionValue label="Sessions" value={String(run.imported_session_count)} />
+          <InspectionValue label="Blocks" value={String(run.imported_block_count)} />
+          <InspectionValue label="Events" value={String(run.imported_event_count)} />
+          <InspectionValue label="Settings" value={String(run.imported_settings_count ?? 0)} />
+          <InspectionValue label="Summary-only" value={String(summaryOnlyCount)} />
+        </dl>
+        {summaryOnlyCount > 0 ? (
+          <div className="rounded-[14px] border border-[rgba(233,120,75,0.28)] bg-[rgba(233,120,75,0.08)] px-3 py-2 text-[var(--orange-700)]">
+            <p className="font-bold">Summary-only days detected</p>
+            <p className="mt-0.5 text-[var(--muted-foreground)]">
+              Some STR history days had no matching detailed DATALOG data. SleepLab kept them as summary-only nights
+              instead of deleting them.
+            </p>
+          </div>
+        ) : null}
+        {run.capability_status && Object.keys(run.capability_status).length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(run.capability_status).map(([name, status]) => (
+              <span
+                key={name}
+                className="rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-2.5 py-1 text-xs"
+              >
+                {name.replaceAll('_', ' ')}: {String(status)}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+            Source fingerprint
+          </p>
+          <p className="mt-1 truncate font-mono text-xs text-[var(--muted-foreground)]" title={run.source_fingerprint}>
+            {run.source_fingerprint}
+          </p>
+        </div>
+        {errorCount > 0 || warningCount > 0 ? (
+          <div className="space-y-1">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+              Parser diagnostics
+            </p>
+            {errorMessages.map((message, index) => (
+              <p key={`error-${message}-${index}`} className="text-[var(--danger-text)]">
+                {message}
+              </p>
+            ))}
+            {warningMessages.map((message, index) => (
+              <p key={`warning-${message}-${index}`} className="text-[var(--orange-700)]">
+                {message}
+              </p>
+            ))}
+          </div>
+        ) : summaryOnlyCount === 0 ? (
+          <p className="text-xs text-[var(--muted-foreground)]">No warnings or errors recorded.</p>
+        ) : null}
+      </div>
+    </details>
   )
 }
 
@@ -891,6 +1161,26 @@ function maskSerial(serial: string | null) {
   }
   const visible = serial.slice(-4)
   return `${'*'.repeat(Math.max(4, serial.length - visible.length))}${visible}`
+}
+
+function formatImportDate(iso: string | null) {
+  if (!iso) return 'Unknown date'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'Unknown date'
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function formatImportDateTime(iso: string | null) {
+  if (!iso) return 'Date unavailable'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'Date unavailable'
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
 }
 
 function formatBytes(bytes: number) {
