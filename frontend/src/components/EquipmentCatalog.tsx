@@ -427,6 +427,19 @@ export default function EquipmentCatalog() {
       return ra - rb
     })
 
+  // The active mask already shows its own due/overdue state + Log replacement in
+  // Current setup, so keep it out of "Needs attention" — that section only appears
+  // for due/overdue items not already represented there (e.g. spare or other gear).
+  const attentionItems = attention.filter(({ item }) => item.id !== activeMask?.id)
+  const attentionOverdue = attentionItems.filter(({ status }) => status.kind === 'overdue').length
+  const attentionDueSoon = attentionItems.filter(({ status }) => status.kind === 'due-soon').length
+
+  // Current non-mask gear: the chosen default, else most recent per type — the same
+  // inference used for the active mask, surfaced as calm supporting-gear chips.
+  const currentSupporting = (['headgear', 'tubing', 'humidifier_chamber', 'filter'] as EquipmentType[])
+    .map(t => grouped[t].find(i => i.is_default) ?? grouped[t][0] ?? null)
+    .filter((i): i is Equipment => i != null)
+
   const dueSoonCount = withStatus.filter(({ status }) => status.kind === 'due-soon').length
   const overdueCount = withStatus.filter(({ status }) => status.kind === 'overdue').length
   const inUseCount = items.filter(i => i.is_default).length
@@ -532,6 +545,25 @@ export default function EquipmentCatalog() {
             </div>
           )}
 
+          {/* Supporting gear — current item per non-mask type, shown as calm chips
+              (status/actions live on the mask hero and Needs attention, not here). */}
+          {currentSupporting.length > 0 && (
+            <div className="border-t border-[var(--border)] pt-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">Supporting gear</p>
+              <div className="flex flex-wrap gap-2">
+                {currentSupporting.map(item => (
+                  <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-1.5">
+                    <TypeIcon type={item.equipment_type} className="h-4 w-4 text-[var(--muted-foreground)]" />
+                    <span className="text-xs font-semibold text-[var(--foreground)]">{TYPE_LABELS[item.equipment_type]}</span>
+                    {item.days_in_use != null && (
+                      <span className="text-xs text-[var(--muted-foreground)]">· {item.days_in_use}d old</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Change active mask — preserves the original "mask in use" behavior. */}
           {grouped.cushion.length > 0 && (
             <div className="flex flex-col gap-2 border-t border-[var(--border)] pt-3 sm:flex-row sm:items-center sm:justify-between">
@@ -556,60 +588,52 @@ export default function EquipmentCatalog() {
         </CardContent>
       </Card>
 
-      {/* Needs attention */}
-      {attention.length > 0 && (
+      {/* Needs attention — only the due/overdue gear not already actioned on the
+          mask hero above, so the same item isn't repeated in two large sections. */}
+      {attentionItems.length > 0 && (
         <Card className="bg-[var(--surface-strong)]">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Needs attention</CardTitle>
             <CardDescription>
-              {overdueCount > 0
-                ? `${overdueCount} overdue${dueSoonCount > 0 ? ` · ${dueSoonCount} due soon` : ''}`
-                : `${dueSoonCount} due soon`}
+              {attentionOverdue > 0
+                ? `${attentionOverdue} overdue${attentionDueSoon > 0 ? ` · ${attentionDueSoon} due soon` : ''}`
+                : `${attentionDueSoon} due soon`}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-1.5">
-            {attention.map(({ item, status }) => {
-              // The active hero item already carries the primary "Log replacement"
-              // action above; here it reads as a lighter, secondary reminder so the
-              // page doesn't double up the same prominent call to action.
-              const isActive = activeMask?.id === item.id
-              return (
-                <div
-                  key={item.id}
-                  className={`flex flex-col gap-2 rounded-[12px] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 ${
-                    isActive ? 'bg-transparent' : 'bg-[var(--surface-soft)]'
-                  }`}
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-muted)] text-[var(--muted-foreground)]">
-                      <TypeIcon type={item.equipment_type} className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-[var(--foreground)]">
-                        {equipmentLabel(item)}
-                        {item.mask_category ? <span className="font-medium text-[var(--muted-foreground)]"> · {item.mask_category}</span> : null}
-                      </p>
-                      <p className="text-xs text-[var(--muted-foreground)]">
-                        <span className={`font-bold ${status.kind === 'overdue' ? 'text-[var(--danger-text)]' : 'text-[var(--warning-text)]'}`}>
-                          {status.label}
-                        </span>
-                        {item.days_in_use != null && ` · ${item.days_in_use}d in use`}
-                        {item.replacement_days != null && ` · replace every ${item.replacement_days}d`}
-                        {isActive && ' · also in Current setup'}
-                      </p>
-                    </div>
+            {attentionItems.map(({ item, status }) => (
+              <div
+                key={item.id}
+                className="flex flex-col gap-2 rounded-[12px] bg-[var(--surface-soft)] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[var(--surface-muted)] text-[var(--muted-foreground)]">
+                    <TypeIcon type={item.equipment_type} className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                      {equipmentLabel(item)}
+                      {item.mask_category ? <span className="font-medium text-[var(--muted-foreground)]"> · {item.mask_category}</span> : null}
+                    </p>
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      <span className={`font-bold ${status.kind === 'overdue' ? 'text-[var(--danger-text)]' : 'text-[var(--warning-text)]'}`}>
+                        {status.label}
+                      </span>
+                      {item.days_in_use != null && ` · ${item.days_in_use}d in use`}
+                      {item.replacement_days != null && ` · replace every ${item.replacement_days}d`}
+                    </p>
                   </div>
-                  <Button
-                    variant={isActive ? 'ghost' : 'outline'}
-                    size="sm"
-                    onClick={() => openReplacement(item)}
-                    className="shrink-0 self-start sm:self-auto"
-                  >
-                    Log replacement
-                  </Button>
                 </div>
-              )
-            })}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openReplacement(item)}
+                  className="shrink-0 self-start sm:self-auto"
+                >
+                  Log replacement
+                </Button>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}
@@ -677,13 +701,20 @@ export default function EquipmentCatalog() {
                               {status.kind !== 'none' && <> · {status.label}</>}
                             </p>
                           </div>
-                          <div className="flex shrink-0 gap-1">
-                            <Button variant="outline" size="sm" onClick={() => openReplacement(item)}>Replace</Button>
-                            <Button variant="ghost" size="sm" onClick={() => openEdit(item)}>Edit</Button>
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                            <Button variant="outline" size="sm" onClick={() => openReplacement(item)}>Log replacement</Button>
                             <Button
                               variant="ghost"
                               size="sm"
-                              className={deletingId === item.id ? 'text-[var(--danger-text)]' : ''}
+                              className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                              onClick={() => openEdit(item)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={deletingId === item.id ? 'text-[var(--danger-text)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}
                               onClick={() => handleDelete(item.id)}
                             >
                               {deletingId === item.id ? 'Confirm' : 'Remove'}

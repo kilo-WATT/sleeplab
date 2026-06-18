@@ -63,12 +63,33 @@ describe('EquipmentCatalog', () => {
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
     expect(screen.getAllByText(/Overdue by 12 days/).length).toBeGreaterThan(0)
 
-    // All categories render even when empty.
+    // All categories render even when empty (labels may also appear as setup chips).
     for (const label of ['Cushion / Pillow', 'Headgear', 'Tubing', 'Water Chamber', 'Filter']) {
-      expect(screen.getByText(label)).toBeInTheDocument()
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0)
     }
     // Empty categories offer a clear, working "Add <type>" affordance.
     expect(screen.getByText(/Add headgear/)).toBeInTheDocument()
+
+    // Inventory rows keep their actions.
+    expect(screen.getAllByRole('button', { name: 'Log replacement' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: 'Edit' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: 'Remove' }).length).toBeGreaterThan(0)
+  })
+
+  it('does not repeat the active mask in Needs attention when it is the only due item', async () => {
+    apiMock.listEquipment.mockResolvedValue([
+      // Active mask due soon (27d of 30d); everything else on-track.
+      equipment({ id: 'mask', model: 'AirFit P10', mask_category: 'Nasal Pillows', is_default: true, replacement_days: 30, days_in_use: 27 }),
+      equipment({ id: 'tubing', equipment_type: 'tubing', model: 'ClimateLineAir', replacement_days: 90, days_in_use: 10 }),
+    ])
+    render(<EquipmentCatalog />)
+    await screen.findByText('Current setup')
+
+    // The mask's due state + replacement action live in Current setup...
+    expect(screen.getByText('AirFit P10')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Log replacement' }).length).toBeGreaterThan(0)
+    // ...so there is no separate Needs attention card repeating the same item.
+    expect(screen.queryByText('Needs attention')).not.toBeInTheDocument()
   })
 
   it('gives every summary card a real secondary line', async () => {
