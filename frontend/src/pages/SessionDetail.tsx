@@ -1077,24 +1077,21 @@ export default function SessionDetail() {
                     {secondaryEquipmentSlots.length > 0 && (
                       <div className="lg:flex-1">
                         <p className="mb-2 text-xs font-semibold text-[var(--foreground)]">Supporting gear</p>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-col gap-1.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] p-3">
                           {secondaryEquipmentSlots.map((slot) => {
                             const item = slot.effective
                             const age = item?.days_in_use != null ? `${item.days_in_use}d old` : null
-                            const detail = slot.notUsed ? 'not used' : (age ?? equipmentName(item!, slot.label))
+                            const detail = slot.notUsed ? 'Not used' : (age ?? equipmentName(item!, slot.label))
                             const Glyph = EQUIPMENT_SLOT_ICONS[slot.key]
                             return (
-                              <span key={slot.key} className="inline-flex items-center gap-2 rounded-[12px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
-                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-soft)] text-[var(--muted-foreground)]">
-                                  <Glyph className="h-3.5 w-3.5" />
+                              <div key={slot.key} className="flex items-center gap-2.5 rounded-[11px] bg-[var(--surface-strong)] px-3 py-2">
+                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[var(--surface-soft)] text-[var(--muted-foreground)]">
+                                  <Glyph className="h-4 w-4" />
                                 </span>
-                                <span className="text-sm">
-                                  <span className="font-semibold text-[var(--foreground)]">{slot.label}</span>
-                                  <span className="text-[var(--muted-foreground)]"> · </span>
-                                  <span className={`text-xs ${slot.notUsed ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--muted-foreground)]'}`}>{detail}</span>
-                                </span>
+                                <span className="min-w-0 truncate text-sm font-semibold text-[var(--foreground)]">{slot.label}</span>
+                                <span className={`ml-auto shrink-0 text-xs ${slot.notUsed ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--muted-foreground)]'}`}>{detail}</span>
                                 {!slot.notUsed && <EquipmentStatusBadges item={item} overrideVal={slot.overrideVal} />}
-                              </span>
+                              </div>
                             )
                           })}
                         </div>
