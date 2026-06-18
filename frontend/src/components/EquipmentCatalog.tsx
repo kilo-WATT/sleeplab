@@ -486,20 +486,20 @@ export default function EquipmentCatalog() {
         </p>
       </div>
 
-      {/* Summary cards — a leading status icon + label, then value, then secondary,
-          grouped tightly at the top. The icon gives every card consistent visual
-          mass so single-digit counts don't look lost, and the date value renders a
-          size smaller so it doesn't dominate the row. No spacers or fixed heights. */}
+      {/* Summary cards — same height/padding chain and mt-2 rhythm as the nightly
+          metric cards (h-full card, generous equal padding, leading-none value,
+          top-aligned). One uniform value size keeps every card identical, so the
+          counts and the date line up with no dead space. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {summary.map(card => (
-          <Card key={card.label} className="bg-[var(--surface-strong)]">
-            <CardContent className="p-4">
+          <Card key={card.label} className="h-full bg-[var(--surface-strong)]">
+            <CardContent className="h-full px-5 pb-5 pt-5 sm:px-6 sm:pb-6 sm:pt-6">
               <div className="flex items-center gap-1.5">
                 <card.icon className={`h-4 w-4 shrink-0 ${card.tone ?? 'text-[var(--muted-foreground)]'}`} />
-                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)]">{card.label}</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{card.label}</p>
               </div>
-              <p className={`mt-2 text-lg font-extrabold leading-tight sm:text-xl ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
-              <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
+              <p className={`mt-2 text-lg font-extrabold leading-none sm:text-xl ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
+              <p className="mt-2 text-xs leading-4 text-[var(--muted-foreground)]">{card.secondary}</p>
             </CardContent>
           </Card>
         ))}
