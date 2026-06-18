@@ -6,7 +6,7 @@ import { leakToLpm } from '../lib/units'
 import type { SessionDetail as SessionDetailType, EventRecord, MetricsResponse, SpO2Response, InferredEquipment, Equipment, WearableData, SessionTherapyContext, MachineSettingsSnapshot, WaveformSignalResponse } from '../api/client'
 import FullNightFlowChart from '../components/FullNightFlowChart'
 import WearableSleepStageChart from '../components/WearableSleepStageChart'
-import { ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
+import { CheckCircleIcon, ChevronLeftIcon, ChevronRightIcon } from '../components/icons/ChevronIcons'
 import { FilterIcon, HeadgearIcon, MachineIcon, MaskIcon, TubingIcon, WaterChamberIcon } from '../components/icons/EquipmentIcons'
 import EventTimeline from '../components/EventTimeline'
 import MetricsChart from '../components/MetricsChartSplit'
@@ -69,6 +69,23 @@ const EQUIPMENT_SLOT_ICONS: Record<keyof InferredEquipment, ComponentType<SVGPro
   tubing: TubingIcon,
   humidifier_chamber: WaterChamberIcon,
   filter: FilterIcon,
+}
+
+function PencilIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden={true} {...props}>
+      <path d="M13.4 4.4l2.2 2.2M4 16l.9-3.3 8-8 2.4 2.4-8 8L4 16Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function InfoCircleIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden={true} {...props}>
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M10 9v4M10 6.6h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 /** Human label for an equipment item, falling back to its slot label. */
@@ -503,11 +520,12 @@ export default function SessionDetail() {
   // out, surface a gentle replacement nudge. Uses values already on SessionDetail.
   const cushionThisNight = equipmentSlots.find((slot) => slot.key === 'cushion')?.effective ?? null
   const cushionStatus = cushionThisNight ? equipmentAgeStatus(cushionThisNight) : null
-  const p95LeakLpm = leakToLpm(session.p95_leak, session.leak_unit)
-  const highLeak = p95LeakLpm != null && p95LeakLpm > 24
-  const leakEquipmentNote = highLeak && (cushionStatus === 'overdue' || cushionStatus === 'due-soon')
-    ? `Mask cushion is ${cushionStatus === 'overdue' ? 'overdue for replacement' : 'due soon'}. If leaks are rising, replacing it may help.`
-    : null
+  // Context note tied only to the cushion's existing due/overdue status — no invented insight.
+  const equipmentNote = cushionStatus === 'due-soon'
+    ? 'Cushion is due soon — watch leak trend.'
+    : cushionStatus === 'overdue'
+      ? 'Cushion is overdue — watch leak trend.'
+      : null
 
   // Mask is the primary row; everything else lays out in a compact grid so the
   // wide card fills its width instead of stretching one item per full-width row.
@@ -968,10 +986,10 @@ export default function SessionDetail() {
                   <p className="text-xs font-bold uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Equipment this night</p>
                   <button
                     type="button"
-                    className="text-xs font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)]"
+                    className="inline-flex items-center gap-1 text-xs font-bold text-[var(--accent)] transition hover:text-[var(--accent-hover)]"
                     onClick={() => setEquipmentEditing((v) => !v)}
                   >
-                    {equipmentEditing ? 'Done' : 'Edit'}
+                    {equipmentEditing ? 'Done' : (<><span>Edit</span><PencilIcon className="h-3.5 w-3.5" /></>)}
                   </button>
                 </div>
 
@@ -1002,68 +1020,85 @@ export default function SessionDetail() {
                     })}
                   </div>
                 ) : !maskSlot && secondaryEquipmentSlots.length === 0 ? (
-                  <p className="text-sm text-[var(--muted-foreground)]">No equipment recorded for this night. Use Edit to set it.</p>
+                  <div className="rounded-[14px] border border-dashed border-[var(--border)] px-4 py-6 text-center">
+                    <p className="text-sm font-semibold text-[var(--foreground)]">No equipment assigned for this night.</p>
+                    <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">Use Edit to choose what was used.</p>
+                  </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="flex flex-col gap-5 lg:flex-row lg:gap-8">
                     {maskSlot && (
-                      <div className="flex items-center gap-3">
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] bg-[var(--surface-soft)] text-[var(--accent)]">
-                          <MaskIcon className="h-5 w-5" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">Mask</p>
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                            {maskSlot.notUsed ? (
-                              <>
-                                <span className="text-sm text-[var(--muted-foreground)] line-through">Not used this night</span>
-                                <EquipmentBadge kind="not-used" />
-                              </>
-                            ) : (
-                              <>
-                                <span className="text-sm font-semibold text-[var(--foreground)]">{equipmentName(maskSlot.effective!, 'Mask')}</span>
-                                <span className="text-xs text-[var(--muted-foreground)]">
-                                  {[maskSlot.effective!.mask_category, maskSlot.effective!.days_in_use != null ? `${maskSlot.effective!.days_in_use}d old` : null].filter(Boolean).join(' · ')}
+                      <div className="lg:flex-1">
+                        <p className="mb-2 text-xs font-semibold text-[var(--foreground)]">Active mask</p>
+                        <div className="rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] p-4">
+                          {maskSlot.notUsed ? (
+                            <div className="flex items-center gap-3">
+                              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--muted-foreground)]">
+                                <MaskIcon className="h-7 w-7" />
+                              </span>
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold text-[var(--muted-foreground)] line-through">Mask not used this night</p>
+                                <span className="mt-1 inline-block"><EquipmentBadge kind="not-used" /></span>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-start gap-3">
+                                <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[15px] bg-[var(--accent-soft)] text-[var(--accent)]">
+                                  <MaskIcon className="h-8 w-8" />
                                 </span>
-                                <EquipmentStatusBadges item={maskSlot.effective} overrideVal={maskSlot.overrideVal} />
-                              </>
-                            )}
-                          </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <p className="min-w-0 truncate text-base font-extrabold text-[var(--foreground)]">{equipmentName(maskSlot.effective!, 'Mask')}</p>
+                                    <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                                      <EquipmentStatusBadges item={maskSlot.effective} overrideVal={maskSlot.overrideVal} />
+                                    </span>
+                                  </div>
+                                  <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                                    {[maskSlot.effective!.mask_category ? `${maskSlot.effective!.mask_category} cushion` : 'Cushion', maskSlot.effective!.days_in_use != null ? `${maskSlot.effective!.days_in_use}d old` : null].filter(Boolean).join(' · ')}
+                                  </p>
+                                  <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-[var(--success-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--success-text)]">
+                                    <CheckCircleIcon className="h-3.5 w-3.5" />
+                                    Active mask for this session
+                                  </span>
+                                </div>
+                              </div>
+                              {equipmentNote && (
+                                <div className="mt-3 flex items-start gap-2 border-t border-[var(--border)] pt-3 text-xs text-[var(--warning-text)]">
+                                  <InfoCircleIcon className="mt-px h-4 w-4 shrink-0" />
+                                  <span>{equipmentNote}</span>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
                     )}
 
                     {secondaryEquipmentSlots.length > 0 && (
-                      <div className={`grid grid-cols-1 gap-x-8 gap-y-2 sm:grid-cols-2 xl:grid-cols-3 ${maskSlot ? 'border-t border-[var(--border)] pt-3' : ''}`}>
-                        {secondaryEquipmentSlots.map((slot) => {
-                          const item = slot.effective
-                          const age = item?.days_in_use != null ? `${item.days_in_use}d old` : null
-                          const Glyph = EQUIPMENT_SLOT_ICONS[slot.key]
-                          return (
-                            <div key={slot.key} className="flex items-center gap-2.5 text-sm">
-                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[9px] bg-[var(--surface-soft)] text-[var(--muted-foreground)]">
-                                <Glyph className="h-4 w-4" />
+                      <div className="lg:flex-1">
+                        <p className="mb-2 text-xs font-semibold text-[var(--foreground)]">Supporting gear</p>
+                        <div className="flex flex-wrap gap-2">
+                          {secondaryEquipmentSlots.map((slot) => {
+                            const item = slot.effective
+                            const age = item?.days_in_use != null ? `${item.days_in_use}d old` : null
+                            const detail = slot.notUsed ? 'not used' : (age ?? equipmentName(item!, slot.label))
+                            const Glyph = EQUIPMENT_SLOT_ICONS[slot.key]
+                            return (
+                              <span key={slot.key} className="inline-flex items-center gap-2 rounded-[12px] border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2">
+                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-[var(--surface-soft)] text-[var(--muted-foreground)]">
+                                  <Glyph className="h-3.5 w-3.5" />
+                                </span>
+                                <span className="text-sm">
+                                  <span className="font-semibold text-[var(--foreground)]">{slot.label}</span>
+                                  <span className="text-[var(--muted-foreground)]"> · </span>
+                                  <span className={`text-xs ${slot.notUsed ? 'text-[var(--muted-foreground)] line-through' : 'text-[var(--muted-foreground)]'}`}>{detail}</span>
+                                </span>
+                                {!slot.notUsed && <EquipmentStatusBadges item={item} overrideVal={slot.overrideVal} />}
                               </span>
-                              <span className="w-20 shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
-                                {slot.label}
-                              </span>
-                              <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                                {slot.notUsed ? (
-                                  <span className="text-[var(--muted-foreground)] line-through">Not used</span>
-                                ) : (
-                                  <span className="truncate text-[var(--foreground)]">{age ?? equipmentName(item!, slot.label)}</span>
-                                )}
-                                {slot.notUsed ? <EquipmentBadge kind="not-used" /> : <EquipmentStatusBadges item={item} overrideVal={slot.overrideVal} />}
-                              </div>
-                            </div>
-                          )
-                        })}
+                            )
+                          })}
+                        </div>
                       </div>
-                    )}
-
-                    {leakEquipmentNote && (
-                      <p className="rounded-[10px] bg-[var(--warning-soft)] px-3 py-2 text-xs text-[var(--warning-text)]">
-                        {leakEquipmentNote}
-                      </p>
                     )}
                   </div>
                 )}

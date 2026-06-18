@@ -409,7 +409,7 @@ describe('SessionDetail timezone display', () => {
     })
   })
 
-  it('renders a compact equipment-this-night card with status badges and a working Edit toggle', async () => {
+  it('renders a report-style equipment card: mask hero, supporting chips, badge, note, Edit', async () => {
     const cushion = {
       id: 'c1', equipment_type: 'cushion', start_date: '2026-04-08', replacement_days: 60,
       mask_category: 'Nasal', brand: 'ResMed', model: 'AirTouch N30i', notes: null,
@@ -429,11 +429,18 @@ describe('SessionDetail timezone display', () => {
     const heading = await screen.findByText('Equipment this night')
     const cardHeader = heading.parentElement as HTMLElement
 
-    // Primary mask row: full name + category + age + a due-soon badge (54d of 60d).
+    // Mask hero block: section label, name, confirmation pill, due-soon badge (54d of 60d).
+    expect(screen.getByText('Active mask')).toBeInTheDocument()
     expect(screen.getByText('ResMed AirTouch N30i')).toBeInTheDocument()
+    expect(screen.getByText('Active mask for this session')).toBeInTheDocument()
     expect(screen.getByText('Due soon')).toBeInTheDocument()
-    // Secondary row stays compact — just the age, no oversized block.
-    expect(screen.getByText('47d old')).toBeInTheDocument()
+    // Context note derived from the cushion's due-soon status (not invented insight).
+    expect(screen.getByText(/Cushion is due soon/)).toBeInTheDocument()
+
+    // Supporting gear renders as compact chips, not full-width rows.
+    expect(screen.getByText('Supporting gear')).toBeInTheDocument()
+    expect(screen.getByText('Headgear')).toBeInTheDocument()
+    expect(screen.getAllByText('47d old').length).toBeGreaterThan(0)
 
     // Edit still opens the per-night override editor.
     fireEvent.click(within(cardHeader).getByRole('button', { name: 'Edit' }))
