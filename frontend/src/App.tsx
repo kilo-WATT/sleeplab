@@ -285,6 +285,8 @@ function AppLayout() {
   const onCalendar = location.pathname === '/calendar'
   const onTrends = location.pathname === '/trends'
   const onEquipment = location.pathname === '/equipment'
+  // The Import page has its own "Recent import status" panel, so suppress the global banner there.
+  const onImport = location.pathname === '/import'
 
   const routes = (
     <Routes>
@@ -466,10 +468,10 @@ function AppLayout() {
               </nav>
             ) : null}
 
-            {user && !isLoading && importRun ? (
+            {user && !isLoading && !onImport && importRun ? (
               <ImportProgressPanel run={importRun} now={importProgressNow} compact />
             ) : null}
-            {user && !isLoading && isSyncing && !importRun ? (
+            {user && !isLoading && !onImport && isSyncing && !importRun ? (
               <div className="flex items-start gap-3 rounded-[18px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-3 text-[var(--accent)]">
                 <span
                   aria-hidden="true"
@@ -483,7 +485,7 @@ function AppLayout() {
                 </div>
               </div>
             ) : null}
-            {user && !isLoading && importError && !importRun ? (
+            {user && !isLoading && !onImport && importError && !importRun ? (
               <div className="flex items-start gap-3 rounded-[18px] border border-[rgba(176,58,46,0.28)] bg-[rgba(176,58,46,0.08)] px-4 py-3 text-[var(--danger-text)]">
                 <div className="space-y-1">
                   <p className="text-sm font-bold">Import failed</p>
