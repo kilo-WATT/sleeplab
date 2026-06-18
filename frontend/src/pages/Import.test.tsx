@@ -465,6 +465,18 @@ describe('Import center', () => {
     expect(screen.getByRole('button', { name: 'Inspect card' })).toBeInTheDocument()
   })
 
+  it('renders every page zone in the two-column layout', async () => {
+    await renderImportCenter([historyRun()])
+
+    // Top zone: source cards.
+    expect(screen.getByText('Import sources')).toBeInTheDocument()
+    // Left column: selected workflow.
+    expect(screen.getByText('CPAP SD card import')).toBeInTheDocument()
+    // Right column: recent status and compact history.
+    expect(screen.getByText('Recent import status')).toBeInTheDocument()
+    expect(screen.getByText('Import history')).toBeInTheDocument()
+  })
+
   it('reveals O2 import controls when the O2 Ring source is selected', async () => {
     await renderImportCenter()
 

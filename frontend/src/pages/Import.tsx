@@ -336,7 +336,7 @@ export default function Import() {
   const sleepHqStatus = sleepHqEnabled ? 'Ready to pull recent sessions' : 'Not configured'
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-8">
       <div className="space-y-1">
         <h1 className="text-2xl font-extrabold tracking-tight text-[var(--foreground)]">Import Data</h1>
         <p className="text-sm text-[var(--muted-foreground)]">
@@ -400,6 +400,9 @@ export default function Import() {
       />
       <input ref={oximeterInputRef} hidden multiple type="file" onChange={handleOximeterInputChange} />
 
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.9fr)] lg:items-start">
+        {/* Left column: the selected import workflow */}
+        <div className="min-w-0 space-y-6">
       {selectedSource === 'cpap' ? (
         <Card>
           <CardHeader>
@@ -612,21 +615,26 @@ export default function Import() {
           </CardContent>
         </Card>
       ) : null}
+        </div>
 
-      <section className="space-y-3">
-        <SectionLabel>Recent import status</SectionLabel>
-        {showActiveProgress && latestRun ? (
-          <ImportProgressCard run={latestRun} now={progressNow} />
-        ) : latestRun ? (
-          <ImportProgressPanel run={latestRun} compact />
-        ) : (
-          <div className="rounded-[18px] border border-dashed border-[var(--border)] bg-[var(--surface-soft)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
-            No imports yet. Start one from a source above and progress will appear here.
-          </div>
-        )}
-      </section>
+        {/* Right column: recent status and compact history */}
+        <div className="min-w-0 space-y-6 lg:sticky lg:top-4">
+          <section className="space-y-3">
+            <SectionLabel>Recent import status</SectionLabel>
+            {showActiveProgress && latestRun ? (
+              <ImportProgressCard run={latestRun} now={progressNow} />
+            ) : latestRun ? (
+              <ImportProgressPanel run={latestRun} compact />
+            ) : (
+              <div className="rounded-[18px] border border-dashed border-[var(--border)] bg-[var(--surface-soft)] px-4 py-5 text-sm text-[var(--muted-foreground)]">
+                No imports yet. Start one from a source above and progress will appear here.
+              </div>
+            )}
+          </section>
 
-      <ImportHistory runs={importRuns} />
+          <ImportHistory runs={importRuns} />
+        </div>
+      </div>
     </div>
   )
 }
