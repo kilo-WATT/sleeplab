@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
-import type { OverviewDailyStat, SummaryStats, TrendAISummaryResponse } from '../api/client'
+import type { AdherenceResponse, OverviewDailyStat, SummaryStats, TrendAISummaryResponse } from '../api/client'
 import { api } from '../api/client'
 import GlossaryText from '../components/GlossaryText'
 import InfoPopover from '../components/InfoPopover'
@@ -756,6 +756,179 @@ function HeroMetricCards({ summary, nights }: { summary: SummaryStats; nights: O
   )
 }
 
+function AdherenceStatusBadge({ qualifies, overall = false }: { qualifies: boolean; overall?: boolean }) {
+  return (
+    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${STATUS_BADGE[qualifies ? 'good' : 'watch']}`}>
+      {qualifies ? (overall ? 'At benchmark' : 'Qualifies') : (overall ? 'Below benchmark' : 'Does not qualify')}
+    </span>
+  )
+}
+
+function AdherenceStatusCard({
+  label,
+  percentage,
+  detail,
+  qualifies,
+  overall = false,
+}: {
+  label: string
+  percentage: number
+  detail: string
+  qualifies: boolean
+  overall?: boolean
+}) {
+  return (
+    <div className="rounded-[18px] border border-[var(--border)] bg-[var(--surface-soft)] p-4 sm:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-bold text-[var(--foreground)]">{label}</p>
+        <AdherenceStatusBadge qualifies={qualifies} overall={overall} />
+      </div>
+      <p className="mt-3 text-3xl font-semibold text-[var(--foreground)]">{percentage.toFixed(1)}%</p>
+      <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">{detail}</p>
+    </div>
+  )
+}
+
+function AdherenceSection({
+  data,
+  loading,
+  error,
+}: {
+  data: AdherenceResponse | null
+  loading: boolean
+  error: string | null
+}) {
+  if (loading) {
+    return (
+      <Card aria-labelledby="adherence-heading">
+        <CardContent className="px-6 pb-6 pt-7">
+          <h2 id="adherence-heading" className="text-lg font-extrabold text-[var(--foreground)]">Adherence</h2>
+          <p className="mt-3 text-sm text-[var(--muted-foreground)]">Loading adherence analytics...</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (error || !data) {
+    return (
+      <Card aria-labelledby="adherence-heading" className="border-[var(--accent-border)]">
+        <CardContent className="px-6 pb-6 pt-7">
+          <h2 id="adherence-heading" className="text-lg font-extrabold text-[var(--foreground)]">Adherence</h2>
+          <p className="mt-3 text-sm font-semibold text-[var(--danger-text)]">Adherence analytics are temporarily unavailable.</p>
+          <p className="mt-1 text-xs text-[var(--muted-foreground)]">The rest of your trend data is still available. Try refreshing this page.</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const { policy, summary, current_window: currentWindow, best_window: bestWindow, streaks } = data
+  const overallAtBenchmark = summary.compliance_percent >= policy.required_percent
+  const currentDays = data.daily.slice(-policy.window_days)
+  const belowThresholdDays = currentDays.filter((day) => day.status === 'noncompliant').length
+  const missingDays = currentDays.filter((day) => day.status === 'missing').length
+  const policyHours = policy.qualifying_usage_seconds / 3600
+
+  return (
+    <Card aria-labelledby="adherence-heading" className="overflow-hidden">
+      <CardContent className="px-4 pb-5 pt-5 sm:px-6 sm:pb-6 sm:pt-6">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 id="adherence-heading" className="text-lg font-extrabold text-[var(--foreground)]">Adherence</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
+              See how consistently therapy met the fixed usage benchmark across the latest {policy.evaluation_days} calendar days.
+            </p>
+          </div>
+          <span className="w-fit rounded-full bg-[var(--surface-muted)] px-3 py-1.5 text-xs font-bold text-[var(--muted-foreground)]">
+            Policy: {policyHours}h · {policy.required_percent}% · {policy.window_days} days within {policy.evaluation_days}
+          </span>
+        </div>
+
+        {summary.days_with_therapy_data === 0 ? (
+          <div className="mt-5 rounded-[18px] border border-dashed border-[var(--border)] bg-[var(--surface-soft)] px-5 py-6 text-center">
+            <p className="text-sm font-bold text-[var(--foreground)]">No therapy data in this evaluation period</p>
+            <p className="mt-1 text-xs text-[var(--muted-foreground)]">All {summary.total_evaluation_days} calendar days are currently counted as missing.</p>
+          </div>
+        ) : (
+          <>
+            <div className="mt-5 grid gap-3 lg:grid-cols-3">
+              <AdherenceStatusCard
+                label={`${policy.evaluation_days}-day adherence`}
+                percentage={summary.compliance_percent}
+                detail={`${summary.compliant_nights} compliant nights across ${summary.total_evaluation_days} calendar days`}
+                qualifies={overallAtBenchmark}
+                overall
+              />
+              <AdherenceStatusCard
+                label={`Current ${policy.window_days}-day window`}
+                percentage={currentWindow.compliance_percent}
+                detail={`${currentWindow.compliant_nights} of ${currentWindow.total_days} nights met ${policyHours} hours`}
+                qualifies={currentWindow.qualifies}
+              />
+              <AdherenceStatusCard
+                label={`Best ${policy.window_days}-day window`}
+                percentage={bestWindow.compliance_percent}
+                detail={`${bestWindow.compliant_nights} of ${bestWindow.total_days} nights · ${bestWindow.start_date} to ${bestWindow.end_date}`}
+                qualifies={bestWindow.qualifies}
+              />
+            </div>
+
+            <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                ['Compliant nights', summary.compliant_nights],
+                ['Missing nights', summary.missing_nights],
+                ['Current streak', `${streaks.current_compliant_nights} nights`],
+                ['Longest streak', `${streaks.longest_compliant_nights} nights`],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-[16px] bg-[var(--surface-soft)] px-4 py-3">
+                  <dt className="text-xs font-bold text-[var(--muted-foreground)]">{label}</dt>
+                  <dd className="mt-1 text-lg font-extrabold text-[var(--foreground)]">{value}</dd>
+                </div>
+              ))}
+            </dl>
+
+            <div className="mt-5">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-sm font-bold text-[var(--foreground)]">Current window, night by night</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">{belowThresholdDays} below {policyHours}h · {missingDays} missing</p>
+                </div>
+                <div className="flex gap-3 text-xs font-semibold text-[var(--muted-foreground)]">
+                  <span>Green: compliant</span>
+                  <span>Orange: below {policyHours}h</span>
+                  <span>Gray: missing</span>
+                </div>
+              </div>
+              <div
+                className="mt-3 flex gap-1"
+                role="img"
+                aria-label={`Current ${policy.window_days}-day adherence: ${currentWindow.compliant_nights} compliant, ${belowThresholdDays} below threshold, ${missingDays} missing`}
+              >
+                {currentDays.map((day) => (
+                  <span
+                    key={day.report_date}
+                    className={`h-8 min-w-0 flex-1 rounded-sm ${
+                      day.status === 'compliant'
+                        ? 'bg-[var(--green-500)]'
+                        : day.status === 'noncompliant'
+                          ? 'bg-[var(--orange-500)]'
+                          : 'border border-[var(--border)] bg-[var(--surface-muted)]'
+                    }`}
+                    title={`${day.report_date}: ${day.status}${day.usage_seconds == null ? '' : ` (${(day.usage_seconds / 3600).toFixed(1)}h)`}`}
+                  />
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        <p className="mt-5 border-t border-[var(--border)] pt-4 text-xs leading-5 text-[var(--muted-foreground)]">
+          This is adherence analytics, not insurer certification. Coverage rules vary; verify requirements with your plan or clinician.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 /**
  * Helper function for humanize event type.
  */
@@ -1240,6 +1413,9 @@ function EventBreakdown({ breakdown }: { breakdown: Array<[string, number]> }) {
 export default function TrendsPage() {
   const [summary, setSummary] = useState<SummaryStats | null>(null)
   const [overview, setOverview] = useState<OverviewDailyStat[]>([])
+  const [adherence, setAdherence] = useState<AdherenceResponse | null>(null)
+  const [adherenceLoading, setAdherenceLoading] = useState(true)
+  const [adherenceError, setAdherenceError] = useState<string | null>(null)
   const [rangeDays, setRangeDays] = useState(180)
   const [metricKey, setMetricKey] = useState<MetricKey>('ahi')
   const [showAllMetrics, setShowAllMetrics] = useState(false)
@@ -1274,6 +1450,40 @@ export default function TrendsPage() {
     window.addEventListener(IMPORT_COMPLETED_EVENT, handleImportCompleted)
     return () => window.removeEventListener(IMPORT_COMPLETED_EVENT, handleImportCompleted)
   }, [rangeDays])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadAdherence() {
+      setAdherenceLoading(true)
+      try {
+        const data = await api.getAdherence()
+        if (!cancelled) {
+          setAdherence(data)
+          setAdherenceError(null)
+        }
+      } catch {
+        if (!cancelled) {
+          setAdherence(null)
+          setAdherenceError('Could not load adherence analytics')
+        }
+      } finally {
+        if (!cancelled) setAdherenceLoading(false)
+      }
+    }
+
+    void loadAdherence()
+
+    function handleImportCompleted() {
+      void loadAdherence()
+    }
+
+    window.addEventListener(IMPORT_COMPLETED_EVENT, handleImportCompleted)
+    return () => {
+      cancelled = true
+      window.removeEventListener(IMPORT_COMPLETED_EVENT, handleImportCompleted)
+    }
+  }, [])
 
   if (loading) {
     return <div className="rounded-[22px] border border-[var(--border)] bg-[var(--surface-strong)] p-10 text-center text-[var(--muted-foreground)]">Loading trends...</div>
@@ -1313,6 +1523,8 @@ export default function TrendsPage() {
       <TrendAICard chips={chips} />
 
       <HeroMetricCards summary={summary} nights={overview} />
+
+      <AdherenceSection data={adherence} loading={adherenceLoading} error={adherenceError} />
 
       <Card>
         <CardContent className="px-4 pb-5 pt-5 sm:px-6 sm:pt-6">

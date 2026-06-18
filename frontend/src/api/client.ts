@@ -754,6 +754,54 @@ export interface SummaryStats {
   event_breakdown: Record<string, number>
 }
 
+/** Fixed policy applied by the adherence analytics endpoint. */
+export interface AdherencePolicy {
+  qualifying_usage_seconds: number
+  required_percent: number
+  window_days: number
+  evaluation_days: number
+}
+
+/** One machine-local report date in an adherence evaluation period. */
+export interface DailyAdherence {
+  report_date: string
+  usage_seconds: number | null
+  status: 'compliant' | 'noncompliant' | 'missing'
+}
+
+/** A complete rolling adherence window. */
+export interface AdherenceWindow {
+  start_date: string
+  end_date: string
+  compliant_nights: number
+  total_days: number
+  compliance_percent: number
+  qualifies: boolean
+}
+
+/** Full fixed-policy adherence analytics response. */
+export interface AdherenceResponse {
+  policy: AdherencePolicy
+  summary: {
+    start_date: string
+    end_date: string
+    total_evaluation_days: number
+    days_with_therapy_data: number
+    compliant_nights: number
+    missing_nights: number
+    noncompliant_nights_with_data: number
+    compliance_percent: number
+  }
+  current_window: AdherenceWindow
+  best_window: AdherenceWindow
+  streaks: {
+    current_compliant_nights: number
+    longest_compliant_nights: number
+  }
+  daily: DailyAdherence[]
+  rolling_windows: AdherenceWindow[]
+}
+
 /**
  * Helper function for get stored token.
  */
@@ -894,6 +942,8 @@ export const api = {
   getVersion: () => get<VersionResponse>('/version'),
   getSummary: () => get<SummaryStats>('/stats/summary'),
   getOverviewStats: (days = 180) => get<OverviewStats>('/stats/overview', { days }),
+  getAdherence: (endDate?: string) =>
+    get<AdherenceResponse>('/stats/adherence', endDate ? { end_date: endDate } : undefined),
   getAISummary: (days = 30, force = false) => get<AISummaryResponse>('/stats/ai-summary', { days, force }),
   getSessionAISummary: (sessionId: string, force = false) =>
     get<SessionAISummaryResponse>(`/stats/sessions/${sessionId}/ai-summary`, {

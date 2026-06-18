@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react'
 import { api } from '../api/client'
-import type { SummaryStats, OverviewDailyStat, TrendAISummaryResponse, ImportSettings } from '../api/client'
+import type { AdherenceResponse, SummaryStats, OverviewDailyStat, TrendAISummaryResponse, ImportSettings } from '../api/client'
 import TrendsPage from './Trends'
 
 const originalApi = { ...api }
@@ -60,6 +60,51 @@ const mockOverviewStats = {
   nights: generateMockNights(30)
 }
 
+const mockAdherence: AdherenceResponse = {
+  policy: {
+    qualifying_usage_seconds: 14400,
+    required_percent: 70,
+    window_days: 30,
+    evaluation_days: 90,
+  },
+  summary: {
+    start_date: '2023-08-04',
+    end_date: '2023-11-01',
+    total_evaluation_days: 90,
+    days_with_therapy_data: 84,
+    compliant_nights: 72,
+    missing_nights: 6,
+    noncompliant_nights_with_data: 12,
+    compliance_percent: 80,
+  },
+  current_window: {
+    start_date: '2023-10-03',
+    end_date: '2023-11-01',
+    compliant_nights: 25,
+    total_days: 30,
+    compliance_percent: 83.3,
+    qualifies: true,
+  },
+  best_window: {
+    start_date: '2023-09-18',
+    end_date: '2023-10-17',
+    compliant_nights: 28,
+    total_days: 30,
+    compliance_percent: 93.3,
+    qualifies: true,
+  },
+  streaks: {
+    current_compliant_nights: 5,
+    longest_compliant_nights: 14,
+  },
+  daily: Array.from({ length: 30 }, (_, index) => ({
+    report_date: `2023-10-${String(index + 2).padStart(2, '0')}`,
+    usage_seconds: index % 8 === 0 ? null : index % 6 === 0 ? 10800 : 25200,
+    status: index % 8 === 0 ? 'missing' as const : index % 6 === 0 ? 'noncompliant' as const : 'compliant' as const,
+  })),
+  rolling_windows: [],
+}
+
 const mockImportSettings = {
   llm_configured: true,
 } as unknown as ImportSettings
@@ -88,6 +133,7 @@ const mockTrendAISummary: TrendAISummaryResponse = {
 const defaultApiMocks = {
   getSummary: () => Promise.resolve(mockSummary),
   getOverviewStats: () => Promise.resolve(mockOverviewStats),
+  getAdherence: () => Promise.resolve(mockAdherence),
   getImportSettings: () => Promise.resolve(mockImportSettings),
   getTrendAISummary: () => Promise.resolve(mockTrendAISummary),
 }
