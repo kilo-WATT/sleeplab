@@ -76,7 +76,7 @@ describe('EquipmentCatalog', () => {
     await screen.findByText('AirFit P10')
 
     // Renamed, clearer label for the most-recent-activity card.
-    expect(screen.getByText('Last equipment log')).toBeInTheDocument()
+    expect(screen.getByText('Last log')).toBeInTheDocument()
 
     // All four cards carry an accurate secondary line (no top-heavy blanks).
     expect(screen.getByText('1 in use')).toBeInTheDocument()

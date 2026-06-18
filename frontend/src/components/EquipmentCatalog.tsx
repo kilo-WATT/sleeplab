@@ -471,7 +471,7 @@ export default function EquipmentCatalog() {
       tone: overdueCount ? 'text-[var(--danger-text)]' : undefined,
     },
     {
-      label: 'Last equipment log',
+      label: 'Last log',
       value: lastLogged ? formatDate(lastLogged) : '—',
       secondary: lastLogged ? 'latest activity' : 'no activity yet',
       icon: HistoryIcon,
