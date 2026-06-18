@@ -444,7 +444,6 @@ export default function EquipmentCatalog() {
     secondary: string
     icon: ComponentType<SVGProps<SVGSVGElement>>
     tone?: string
-    valueClass?: string
   }[] = [
     {
       label: 'Tracked items',
@@ -475,7 +474,6 @@ export default function EquipmentCatalog() {
       value: lastLogged ? formatDate(lastLogged) : '—',
       secondary: lastLogged ? 'latest activity' : 'no activity yet',
       icon: HistoryIcon,
-      valueClass: 'text-base sm:text-lg',
     },
   ]
 
@@ -500,7 +498,7 @@ export default function EquipmentCatalog() {
                 <card.icon className={`h-4 w-4 shrink-0 ${card.tone ?? 'text-[var(--muted-foreground)]'}`} />
                 <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--muted-foreground)]">{card.label}</p>
               </div>
-              <p className={`mt-2 font-extrabold leading-tight ${card.valueClass ?? 'text-2xl'} ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
+              <p className={`mt-2 text-lg font-extrabold leading-tight sm:text-xl ${card.tone ?? 'text-[var(--foreground)]'}`}>{card.value}</p>
               <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{card.secondary}</p>
             </CardContent>
           </Card>
