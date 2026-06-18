@@ -400,7 +400,7 @@ export default function Import() {
       />
       <input ref={oximeterInputRef} hidden multiple type="file" onChange={handleOximeterInputChange} />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.9fr)] lg:items-start">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,1fr)] lg:items-start">
         {/* Left column: the selected import workflow */}
         <div className="min-w-0 space-y-6">
       {selectedSource === 'cpap' ? (
@@ -744,13 +744,6 @@ function ImportHistory({ runs }: { runs: ImportRunSummary[] }) {
           <p className="text-sm text-[var(--muted-foreground)]">No 2.0 import runs have been recorded yet.</p>
         ) : (
           <>
-            <div className="hidden grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-3 pb-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)] sm:grid">
-              <span>Status</span>
-              <span>Device · date</span>
-              <span className="text-right">Sessions</span>
-              <span className="text-right">Detail</span>
-              <span className="text-right">Notes</span>
-            </div>
             {visibleRuns.map((run) => (
               <ImportRunRow key={run.id} run={run} />
             ))}
@@ -807,40 +800,39 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
 
   return (
     <details className="group rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] open:bg-[var(--surface-strong)]">
-      <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-3 sm:grid sm:grid-cols-[auto_1fr_auto_auto_auto] [&::-webkit-details-marker]:hidden">
-        <span
-          className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadgeClass(run.status)}`}
-        >
-          {run.status}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-bold text-[var(--foreground)]">{machineName}</span>
-          <span className="block truncate text-xs text-[var(--muted-foreground)]">
-            {formatImportDateTime(run.completed_at ?? run.started_at)}
+      <summary className="flex cursor-pointer list-none flex-col gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs font-bold capitalize ${statusBadgeClass(run.status)}`}
+          >
+            {run.status}
           </span>
-        </span>
-        <span className="hidden text-right text-sm text-[var(--foreground)] sm:block">
-          {run.imported_session_count}
-        </span>
-        <span className="hidden text-right text-xs font-medium capitalize text-[var(--muted-foreground)] sm:block">
-          {run.validation_status}
-        </span>
-        <span className="ml-auto flex items-center gap-1.5 sm:ml-0 sm:justify-end">
-          {summaryOnlyCount > 0 ? (
-            <span className="rounded-full border border-[rgba(233,120,75,0.3)] bg-[rgba(233,120,75,0.1)] px-2 py-0.5 text-[11px] font-bold text-[var(--orange-700)]">
-              {summaryOnlyCount} summary-only
-            </span>
-          ) : null}
-          {errorCount > 0 ? (
-            <span className="rounded-full border border-[rgba(176,58,46,0.3)] bg-[rgba(176,58,46,0.1)] px-2 py-0.5 text-[11px] font-bold text-[var(--danger-text)]">
-              {errorCount} error{errorCount === 1 ? '' : 's'}
-            </span>
-          ) : null}
-          <span className="text-xs font-bold text-[var(--accent)] group-open:hidden">View details</span>
-          <span className="hidden text-xs font-bold text-[var(--accent)] group-open:inline">Hide</span>
-        </span>
+          <span className="shrink-0 text-xs font-bold text-[var(--accent)] group-open:hidden">View details</span>
+          <span className="hidden shrink-0 text-xs font-bold text-[var(--accent)] group-open:inline">Hide</span>
+        </div>
+        <div className="min-w-0">
+          <p className="truncate font-bold text-[var(--foreground)]">{machineName}</p>
+          <p className="truncate text-xs text-[var(--muted-foreground)]">
+            {formatImportDate(run.completed_at ?? run.started_at)} · {run.imported_session_count} session
+            {run.imported_session_count === 1 ? '' : 's'} · <span className="capitalize">{run.validation_status}</span>
+          </p>
+        </div>
+        {summaryOnlyCount > 0 || errorCount > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {summaryOnlyCount > 0 ? (
+              <span className="rounded-full border border-[rgba(233,120,75,0.3)] bg-[rgba(233,120,75,0.1)] px-2 py-0.5 text-[11px] font-bold text-[var(--orange-700)]">
+                {summaryOnlyCount} summary-only
+              </span>
+            ) : null}
+            {errorCount > 0 ? (
+              <span className="rounded-full border border-[rgba(176,58,46,0.3)] bg-[rgba(176,58,46,0.1)] px-2 py-0.5 text-[11px] font-bold text-[var(--danger-text)]">
+                {errorCount} error{errorCount === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </summary>
-      <div className="space-y-3 border-t border-[var(--border)] px-3 py-3 text-sm">
+      <div className="space-y-3 border-t border-[var(--border)] px-4 py-3 text-sm">
         <p className="text-xs text-[var(--muted-foreground)]">
           {run.adapter_id} · {run.source_file_count} source files
         </p>
@@ -852,7 +844,7 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
             ) : null}
           </div>
         ) : null}
-        <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <InspectionValue label="Validation" value={run.validation_status} />
           <InspectionValue label="Sessions" value={String(run.imported_session_count)} />
           <InspectionValue label="Blocks" value={String(run.imported_block_count)} />
@@ -1242,19 +1234,6 @@ function formatImportDate(iso: string | null) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return 'Unknown date'
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-function formatImportDateTime(iso: string | null) {
-  if (!iso) return 'Date unavailable'
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return 'Date unavailable'
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
 }
 
 function formatBytes(bytes: number) {
