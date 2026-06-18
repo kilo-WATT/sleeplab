@@ -515,6 +515,66 @@ class SummaryStats(BaseModel):
     event_breakdown: dict
 
 
+class AdherencePolicyResponse(BaseModel):
+    """Fixed adherence policy returned with every analytics response."""
+
+    qualifying_usage_seconds: int
+    required_percent: float
+    window_days: int
+    evaluation_days: int
+
+
+class DailyAdherenceResponse(BaseModel):
+    """Adherence classification for one machine-local report date."""
+
+    report_date: date
+    usage_seconds: int | None
+    status: Literal["compliant", "noncompliant", "missing"]
+
+
+class AdherenceWindowResponse(BaseModel):
+    """Compliance outcome for one complete rolling policy window."""
+
+    start_date: date
+    end_date: date
+    compliant_nights: int
+    total_days: int
+    compliance_percent: float
+    qualifies: bool
+
+
+class AdherenceSummaryResponse(BaseModel):
+    """Summary counts across the full adherence evaluation period."""
+
+    start_date: date
+    end_date: date
+    total_evaluation_days: int
+    days_with_therapy_data: int
+    compliant_nights: int
+    missing_nights: int
+    noncompliant_nights_with_data: int
+    compliance_percent: float
+
+
+class AdherenceStreaksResponse(BaseModel):
+    """Current and longest compliant-night streaks in the evaluation period."""
+
+    current_compliant_nights: int
+    longest_compliant_nights: int
+
+
+class AdherenceResponse(BaseModel):
+    """Complete fixed-policy adherence analytics response."""
+
+    policy: AdherencePolicyResponse
+    summary: AdherenceSummaryResponse
+    current_window: AdherenceWindowResponse
+    best_window: AdherenceWindowResponse
+    streaks: AdherenceStreaksResponse
+    daily: list[DailyAdherenceResponse]
+    rolling_windows: list[AdherenceWindowResponse]
+
+
 class OverviewStats(BaseModel):
     """Pydantic model representing grouped overview daily stats list.
 

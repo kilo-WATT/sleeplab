@@ -1,10 +1,14 @@
+from dataclasses import asdict
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..adherence import AdherencePolicy, NightlyUsage, calculate_adherence, evaluation_start
 from ..auth import get_current_user
 from ..database import get_db
-from ..models import DailyStat, OverviewDailyStat, OverviewStats, SummaryStats
+from ..models import AdherenceResponse, DailyStat, OverviewDailyStat, OverviewStats, SummaryStats
 
 router = APIRouter()
 
@@ -174,6 +178,69 @@ def get_summary(
         ahi_trend=ahi_trend,
         event_breakdown=event_breakdown,
     )
+
+
+@router.get("/adherence", response_model=AdherenceResponse)
+def get_adherence(
+    end_date: date | None = Query(
+        default=None,
+        description="Inclusive machine-local report date ending the fixed 90-day evaluation period.",
+    ),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return fixed-policy adherence analytics from normalized nightly therapy.
+
+    The current policy is four hours on at least 70% of days in a complete
+    30-day window within a 90-day evaluation period. Missing calendar dates
+    count as non-compliant. This endpoint is informational analytics, not an
+    insurer certification; configurable policy and report UI are deferred to a
+    future SleepLab 2.0 alpha.
+    """
+
+    policy = AdherencePolicy()
+    evaluation_end = end_date
+    if evaluation_end is None:
+        evaluation_end = db.execute(
+            text("""
+                SELECT MAX(machine_local_date)
+                FROM nightly_therapy_aggregates
+                WHERE user_id = CAST(:uid AS uuid)
+            """),
+            {"uid": current_user["id"]},
+        ).scalar()
+    if evaluation_end is None:
+        evaluation_end = date.today()
+
+    start_date = evaluation_start(evaluation_end, policy)
+    rows = (
+        db.execute(
+            text("""
+                SELECT
+                    machine_local_date AS report_date,
+                    COALESCE(SUM(usage_seconds), 0)::bigint AS usage_seconds
+                FROM nightly_therapy_aggregates
+                WHERE user_id = CAST(:uid AS uuid)
+                  AND machine_local_date >= :start_date
+                  AND machine_local_date <= :end_date
+                GROUP BY machine_local_date
+                ORDER BY machine_local_date
+            """),
+            {
+                "uid": current_user["id"],
+                "start_date": start_date,
+                "end_date": evaluation_end,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    nightly_usage = [
+        NightlyUsage(report_date=row["report_date"], usage_seconds=int(row["usage_seconds"]))
+        for row in rows
+    ]
+    result = calculate_adherence(nightly_usage, end_date=evaluation_end, policy=policy)
+    return AdherenceResponse.model_validate(asdict(result))
 
 
 @router.get("/overview", response_model=OverviewStats)
