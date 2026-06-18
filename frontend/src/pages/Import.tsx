@@ -182,8 +182,12 @@ export default function Import() {
     setFolderLabel(files.length > 0 ? `${root} (${files.length} files)` : `${root} (no files found)`)
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    void runSourceInspection()
+  }
+
+  async function runSourceInspection() {
     if (!rootName || selectedFiles.length === 0) {
       setError('Select the SD card or extracted archive root first')
       return
@@ -454,9 +458,11 @@ export default function Import() {
                 </div>
               ) : null}
               {error ? <p className="text-sm text-[var(--danger-text)]">{error}</p> : null}
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Inspecting...' : importPlan ? 'Re-inspect card' : 'Inspect card'}
-              </Button>
+              {!importPlan ? (
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? 'Inspecting...' : 'Inspect card'}
+                </Button>
+              ) : null}
             </form>
             {importPlan ? (
               <>
@@ -466,6 +472,8 @@ export default function Import() {
                   isImporting={isSubmitting}
                   importStarted={sourceImportMessage !== null}
                   onImport={handleDetectedImport}
+                  onReinspect={runSourceInspection}
+                  isReinspecting={isSubmitting}
                 />
                 {sourceImportMessage ? (
                   <div className="mt-4 rounded-[16px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] px-4 py-3 text-sm font-medium text-[var(--olive-deep)]">
@@ -962,12 +970,16 @@ export function LoaderInspectionPanel({
   isImporting,
   importStarted,
   onImport,
+  onReinspect,
+  isReinspecting = false,
 }: {
   plan: ImportPlanResponse
   canImport: boolean
   isImporting: boolean
   importStarted: boolean
   onImport: () => void
+  onReinspect?: () => void
+  isReinspecting?: boolean
 }) {
   const [showSerial, setShowSerial] = useState(false)
   const inspection = plan.inspection
@@ -1008,6 +1020,32 @@ export function LoaderInspectionPanel({
           <InspectionValue label="Waveform files" value={String(coverageTotals.waveformFiles)} />
           <InspectionValue label="Import detail level" value={detailLevel} />
         </dl>
+      ) : null}
+      {inspection.matched ? (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={onImport} disabled={!canImport || isImporting}>
+              {isImporting ? 'Starting import...' : importStarted ? 'Import started' : 'Import detected data'}
+            </Button>
+            {onReinspect ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onReinspect}
+                disabled={isReinspecting || isImporting}
+              >
+                {isReinspecting ? 'Re-inspecting...' : 'Re-inspect card'}
+              </Button>
+            ) : null}
+          </div>
+          {!canImport ? (
+            <div className="space-y-1 text-sm text-[var(--muted-foreground)]">
+              {plan.blockers.map((blocker) => (
+                <p key={blocker}>{blocker}</p>
+              ))}
+            </div>
+          ) : null}
+        </div>
       ) : null}
       <details className="group rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)]">
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold text-[var(--foreground)] [&::-webkit-details-marker]:hidden">
@@ -1130,20 +1168,6 @@ export function LoaderInspectionPanel({
           {warning.message}
         </p>
       ))}
-      {inspection.matched ? (
-        <div className="space-y-2">
-          <Button onClick={onImport} disabled={!canImport || isImporting}>
-            {isImporting ? 'Starting import...' : importStarted ? 'Import started' : 'Import detected data'}
-          </Button>
-          {!canImport ? (
-            <div className="space-y-1 text-sm text-[var(--muted-foreground)]">
-              {plan.blockers.map((blocker) => (
-                <p key={blocker}>{blocker}</p>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   )
 }

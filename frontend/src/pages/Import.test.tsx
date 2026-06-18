@@ -195,6 +195,95 @@ describe('LoaderInspectionPanel', () => {
     expect(screen.getByRole('button', { name: 'Import detected data' })).toBeDisabled()
     expect(screen.getAllByText(/does not implement execution yet/i)[0]).toBeInTheDocument()
   })
+
+  it('puts the primary import action above the technical details after inspection', () => {
+    render(
+      <LoaderInspectionPanel
+        plan={{
+          plan_version: '2.0-alpha-1',
+          source_root: 'RESMED-SD',
+          source_manifest: {
+            fingerprint: 'sha256:resmed-only',
+            file_count: 120,
+            total_bytes: 4096,
+            roles: [{ role: 'waveform', file_count: 82, size_bytes: 2048 }],
+          },
+          inspection: {
+            source_root: 'RESMED-SD',
+            matched: true,
+            ambiguous: false,
+            warnings: [],
+            devices: [
+              {
+                adapter_id: 'resmed-cpap-parser-v1',
+                adapter_version: '0.1',
+                device_path: '.',
+                device_key_hint: null,
+                manufacturer_hint: 'ResMed',
+                family_hint: 'AirSense',
+                confidence: 'exact',
+                requires_user_choice: false,
+                competing_adapter_ids: [],
+                evidence: [],
+                identity: {
+                  manufacturer: 'ResMed',
+                  family: 'AirSense',
+                  model: 'AirSense 10 AutoSet',
+                  model_number: '370',
+                  serial_number: null,
+                  firmware_version: '1.0',
+                  data_format_version: null,
+                  confidence: 'exact',
+                },
+                capabilities: {},
+                timezone_basis: 'machine_local',
+                leak_kinds: ['total'],
+                warnings: [],
+              },
+            ],
+          },
+          devices: [
+            {
+              adapter_id: 'resmed-cpap-parser-v1',
+              device_path: '.',
+              execution_status: 'ready',
+              execution_backend: 'python',
+              coverage: {
+                first_date: '2026-01-01',
+                last_date: '2026-02-15',
+                therapy_days: 46,
+                estimated_session_blocks: 46,
+                waveform_files: 82,
+                event_files: 46,
+                oximetry_files: 0,
+                settings_files: 1,
+              },
+              blockers: [],
+              warnings: [],
+            },
+          ],
+          executable: true,
+          blockers: [],
+        }}
+        canImport={true}
+        isImporting={false}
+        importStarted={false}
+        onImport={() => {}}
+        onReinspect={() => {}}
+        isReinspecting={false}
+      />,
+    )
+
+    const importButtons = screen.getAllByRole('button', { name: 'Import detected data' })
+    expect(importButtons).toHaveLength(1)
+    const importButton = importButtons[0]
+    expect(importButton).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Re-inspect card' })).toBeInTheDocument()
+
+    // The primary action must come before the technical details in document order.
+    const technicalDetails = screen.getByText('Technical details')
+    expect(importButton.compareDocumentPosition(technicalDetails) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })
 
 function importRun(status: 'running' | 'success' | 'failed') {
