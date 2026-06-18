@@ -2,11 +2,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ImportRunSummary } from '../api/client'
+import type { ImportPlanResponse, ImportRunSummary } from '../api/client'
 import OximeterImportSummary from '../components/OximeterImportSummary'
 import { shouldDismissImportRunOnNavigation, shouldPollImportRuns } from '../components/importProgress'
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
-import ImportPage, { ImportProgressCard, LoaderInspectionPanel } from './Import'
+import ImportPage, { ImportProgressCard, LoaderInspectionPanel, SourceInspectedCallout } from './Import'
 
 const { mockGetImportRuns, mockGetImportSettings, mockDiscardSourceUpload } = vi.hoisted(() => ({
   mockGetImportRuns: vi.fn(),
@@ -180,10 +180,6 @@ describe('LoaderInspectionPanel', () => {
           executable: false,
           blockers: ['Detection and planning are available, but this adapter does not implement execution yet.'],
         }}
-        canImport={false}
-        isImporting={false}
-        importStarted={false}
-        onImport={() => {}}
       />,
     )
 
@@ -192,14 +188,12 @@ describe('LoaderInspectionPanel', () => {
     expect(screen.getByText('P-Series/P012345/PROP.TXT: file')).toBeInTheDocument()
     expect(screen.getByText('*****PRS1')).toBeInTheDocument()
     expect(screen.queryByText('TEST-PRS1')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Import detected data' })).toBeDisabled()
-    expect(screen.getAllByText(/does not implement execution yet/i)[0]).toBeInTheDocument()
+    // The import action moved out of the loader result into the inspected callout above it.
+    expect(screen.queryByRole('button', { name: 'Import detected data' })).not.toBeInTheDocument()
   })
 
-  it('puts the primary import action above the technical details after inspection', () => {
-    render(
-      <LoaderInspectionPanel
-        plan={{
+  it('puts the primary import action above the loader result after inspection', () => {
+    const plan: ImportPlanResponse = {
           plan_version: '2.0-alpha-1',
           source_root: 'RESMED-SD',
           source_manifest: {
@@ -264,14 +258,19 @@ describe('LoaderInspectionPanel', () => {
           ],
           executable: true,
           blockers: [],
-        }}
-        canImport={true}
-        isImporting={false}
-        importStarted={false}
-        onImport={() => {}}
-        onReinspect={() => {}}
-        isReinspecting={false}
-      />,
+    }
+    render(
+      <div>
+        <SourceInspectedCallout
+          plan={plan}
+          canImport={true}
+          isImporting={false}
+          importStarted={false}
+          onImport={() => {}}
+          onReinspect={() => {}}
+        />
+        <LoaderInspectionPanel plan={plan} />
+      </div>,
     )
 
     const importButtons = screen.getAllByRole('button', { name: 'Import detected data' })
@@ -280,9 +279,32 @@ describe('LoaderInspectionPanel', () => {
     expect(importButton).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Re-inspect card' })).toBeInTheDocument()
 
-    // The primary action must come before the technical details in document order.
+    // The primary action must appear before the loader result and technical details in document order.
+    const loaderResult = screen.getByText('Loader result')
     const technicalDetails = screen.getByText('Technical details')
+    expect(importButton.compareDocumentPosition(loaderResult) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(importButton.compareDocumentPosition(technicalDetails) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('disables import and surfaces blockers when the source is not executable', () => {
+    const plan = {
+      inspection: { matched: true },
+      blockers: ['Detection and planning are available, but this adapter does not implement execution yet.'],
+    } as unknown as ImportPlanResponse
+    render(
+      <SourceInspectedCallout
+        plan={plan}
+        canImport={false}
+        isImporting={false}
+        importStarted={false}
+        onImport={() => {}}
+        onReinspect={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Import detected data' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Re-inspect card' })).toBeInTheDocument()
+    expect(screen.getByText(/does not implement execution yet/i)).toBeInTheDocument()
   })
 })
 

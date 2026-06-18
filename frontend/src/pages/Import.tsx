@@ -447,15 +447,15 @@ export default function Import() {
                   </p>
                 </div>
               ) : null}
-              {uploadPhase === 'complete' ? (
-                <div className="flex items-start gap-3 rounded-[20px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 text-[var(--accent)]">
-                  <div className="space-y-1">
-                    <p className="text-sm font-bold">Source inspected</p>
-                    <p className="text-sm font-medium text-[var(--muted-foreground)]">
-                      Detection is complete. Review the loader result below before importing.
-                    </p>
-                  </div>
-                </div>
+              {uploadPhase === 'complete' && importPlan ? (
+                <SourceInspectedCallout
+                  plan={importPlan}
+                  canImport={Boolean(canImportDetectedSource)}
+                  isImporting={isSubmitting}
+                  importStarted={sourceImportMessage !== null}
+                  onImport={handleDetectedImport}
+                  onReinspect={runSourceInspection}
+                />
               ) : null}
               {error ? <p className="text-sm text-[var(--danger-text)]">{error}</p> : null}
               {!importPlan ? (
@@ -466,15 +466,7 @@ export default function Import() {
             </form>
             {importPlan ? (
               <>
-                <LoaderInspectionPanel
-                  plan={importPlan}
-                  canImport={Boolean(canImportDetectedSource)}
-                  isImporting={isSubmitting}
-                  importStarted={sourceImportMessage !== null}
-                  onImport={handleDetectedImport}
-                  onReinspect={runSourceInspection}
-                  isReinspecting={isSubmitting}
-                />
+                <LoaderInspectionPanel plan={importPlan} />
                 {sourceImportMessage ? (
                   <div className="mt-4 rounded-[16px] border border-[rgba(106,161,54,0.24)] bg-[rgba(106,161,54,0.1)] px-4 py-3 text-sm font-medium text-[var(--olive-deep)]">
                     {sourceImportMessage}
@@ -964,23 +956,54 @@ function getInputRootName(files: File[]) {
   return 'CPAP-SD'
 }
 
-export function LoaderInspectionPanel({
+export function SourceInspectedCallout({
   plan,
   canImport,
   isImporting,
   importStarted,
   onImport,
   onReinspect,
-  isReinspecting = false,
 }: {
   plan: ImportPlanResponse
   canImport: boolean
   isImporting: boolean
   importStarted: boolean
   onImport: () => void
-  onReinspect?: () => void
-  isReinspecting?: boolean
+  onReinspect: () => void
 }) {
+  const matched = plan.inspection.matched
+  return (
+    <div className="rounded-[20px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <p className="text-sm font-bold text-[var(--accent)]">Source inspected</p>
+          <p className="text-sm font-medium text-[var(--muted-foreground)]">
+            Detection is complete. Review the loader result below before importing.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3 sm:flex-shrink-0">
+          {matched ? (
+            <Button onClick={onImport} disabled={!canImport || isImporting}>
+              {isImporting ? 'Starting import...' : importStarted ? 'Import started' : 'Import detected data'}
+            </Button>
+          ) : null}
+          <Button type="button" variant="outline" onClick={onReinspect} disabled={isImporting}>
+            Re-inspect card
+          </Button>
+        </div>
+      </div>
+      {matched && !canImport ? (
+        <div className="mt-3 space-y-1 text-sm text-[var(--muted-foreground)]">
+          {plan.blockers.map((blocker) => (
+            <p key={blocker}>{blocker}</p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function LoaderInspectionPanel({ plan }: { plan: ImportPlanResponse }) {
   const [showSerial, setShowSerial] = useState(false)
   const inspection = plan.inspection
   const detectedMachine =
@@ -1020,32 +1043,6 @@ export function LoaderInspectionPanel({
           <InspectionValue label="Waveform files" value={String(coverageTotals.waveformFiles)} />
           <InspectionValue label="Import detail level" value={detailLevel} />
         </dl>
-      ) : null}
-      {inspection.matched ? (
-        <div className="space-y-2">
-          <div className="flex flex-wrap gap-3">
-            <Button onClick={onImport} disabled={!canImport || isImporting}>
-              {isImporting ? 'Starting import...' : importStarted ? 'Import started' : 'Import detected data'}
-            </Button>
-            {onReinspect ? (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={onReinspect}
-                disabled={isReinspecting || isImporting}
-              >
-                {isReinspecting ? 'Re-inspecting...' : 'Re-inspect card'}
-              </Button>
-            ) : null}
-          </div>
-          {!canImport ? (
-            <div className="space-y-1 text-sm text-[var(--muted-foreground)]">
-              {plan.blockers.map((blocker) => (
-                <p key={blocker}>{blocker}</p>
-              ))}
-            </div>
-          ) : null}
-        </div>
       ) : null}
       <details className="group rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)]">
         <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold text-[var(--foreground)] [&::-webkit-details-marker]:hidden">
