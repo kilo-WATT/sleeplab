@@ -18,8 +18,8 @@ export function ImportProgressPanel({
   const sessionProcessed = Math.min(run.sessions_processed ?? 0, sessionTotal)
   const determinate = active && sessionTotal > 0
   const percentage = determinate ? Math.round((sessionProcessed / sessionTotal) * 100) : null
-  const fileProgress = run.files_total ? `${run.files_processed ?? 0} of ${run.files_total} files` : null
-  const sessionProgress = sessionTotal ? `${sessionProcessed} of ${sessionTotal} sessions` : null
+  const fileProgress = run.files_total ? `${run.files_processed ?? 0} of ${run.files_total}` : null
+  const sessionProgress = sessionTotal ? `${sessionProcessed} of ${sessionTotal}` : null
   const elapsedNow = now ?? new Date(run.completed_at ?? run.started_at ?? 0).getTime()
   const title = failed ? 'Import failed' : active ? 'Synchronizing sleep data' : 'Import complete'
 
@@ -64,9 +64,21 @@ export function ImportProgressPanel({
       ) : null}
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--muted-foreground)]">
         <span>{formatImportElapsed(run.started_at, elapsedNow)}</span>
-        {fileProgress ? <span>{fileProgress}</span> : null}
-        {sessionProgress ? <span>{sessionProgress}</span> : null}
-        {percentage != null ? <span>{percentage}%</span> : null}
+        {fileProgress ? (
+          <span>
+            <span className="font-bold text-[var(--foreground)]">Files</span> {fileProgress}
+          </span>
+        ) : null}
+        {sessionProgress ? (
+          <span>
+            <span className="font-bold text-[var(--foreground)]">Sessions</span> {sessionProgress}
+          </span>
+        ) : null}
+        {percentage != null ? (
+          <span>
+            <span className="font-bold text-[var(--foreground)]">Progress</span> {percentage}%
+          </span>
+        ) : null}
       </div>
       {active && !compact ? (
         <p className="mt-3 text-xs leading-5 text-[var(--muted-foreground)]">

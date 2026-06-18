@@ -187,7 +187,8 @@ describe('LoaderInspectionPanel', () => {
       />,
     )
 
-    expect(screen.getByText('Philips Respironics PRS1')).toBeInTheDocument()
+    // The machine name now appears in both the user-facing summary and the device detail section.
+    expect(screen.getAllByText('Philips Respironics PRS1').length).toBeGreaterThan(0)
     expect(screen.getByText('P-Series/P012345/PROP.TXT: file')).toBeInTheDocument()
     expect(screen.getByText('*****PRS1')).toBeInTheDocument()
     expect(screen.queryByText('TEST-PRS1')).not.toBeInTheDocument()
@@ -249,7 +250,8 @@ describe('ImportProgressCard', () => {
     expect(screen.getByText('Synchronizing sleep data')).toBeInTheDocument()
     expect(screen.getByText('Building waveform chunks')).toBeInTheDocument()
     expect(screen.getByText('Elapsed 1:05')).toBeInTheDocument()
-    expect(screen.getByText('2 of 5 sessions')).toBeInTheDocument()
+    expect(screen.getByText('Sessions')).toBeInTheDocument()
+    expect(screen.getByText('2 of 5')).toBeInTheDocument()
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40')
     expect(screen.getByText('40%')).toBeInTheDocument()
   })

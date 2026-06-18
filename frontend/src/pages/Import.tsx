@@ -349,7 +349,7 @@ export default function Import() {
             title="CPAP SD card"
             description="Import detailed therapy data from your CPAP machine."
             status={cpapStatus}
-            actionLabel="Select folder"
+            actionLabel="Import from SD card"
             onSelect={() => setSelectedSource('cpap')}
             onAction={() => {
               setSelectedSource('cpap')
@@ -362,7 +362,7 @@ export default function Import() {
             title="O2 Ring"
             description="Upload Wellue / ViHealth O2 files."
             status={o2Status}
-            actionLabel="Select O2 files"
+            actionLabel="Import O2 files"
             onSelect={() => setSelectedSource('o2')}
             onAction={() => {
               setSelectedSource('o2')
@@ -455,7 +455,7 @@ export default function Import() {
               ) : null}
               {error ? <p className="text-sm text-[var(--danger-text)]">{error}</p> : null}
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Inspecting...' : 'Inspect card'}
+                {isSubmitting ? 'Inspecting...' : importPlan ? 'Re-inspect card' : 'Inspect card'}
               </Button>
             </form>
             {importPlan ? (
@@ -677,10 +677,16 @@ function SourceTile({
       }`}
     >
       <div className="flex items-center gap-2">
-        <span className={`flex h-8 w-8 items-center justify-center rounded-full ${active ? 'bg-[var(--accent)] text-[var(--accent-foreground)]' : 'bg-[var(--surface-strong)] text-[var(--accent)]'}`}>
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface-strong)] text-[var(--accent)]">
           {icon}
         </span>
         <p className="font-bold text-[var(--foreground)]">{title}</p>
+        {active ? (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[var(--surface-strong)] px-2 py-0.5 text-[11px] font-bold text-[var(--accent)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+            Selected
+          </span>
+        ) : null}
       </div>
       <p className="text-sm text-[var(--muted-foreground)]">{description}</p>
       <p
@@ -692,7 +698,7 @@ function SourceTile({
         <Button
           type="button"
           size="sm"
-          variant={active ? 'default' : 'outline'}
+          variant="outline"
           onClick={(event) => {
             event.stopPropagation()
             onAction()
@@ -965,6 +971,25 @@ export function LoaderInspectionPanel({
 }) {
   const [showSerial, setShowSerial] = useState(false)
   const inspection = plan.inspection
+  const detectedMachine =
+    inspection.devices
+      .map((device) =>
+        [device.identity.manufacturer || device.manufacturer_hint, device.identity.model || device.family_hint]
+          .filter(Boolean)
+          .join(' '),
+      )
+      .filter(Boolean)
+      .join(', ') || 'Machine detected'
+  const coverageTotals = plan.devices.reduce(
+    (acc, device) => {
+      acc.therapyDays += device.coverage.therapy_days
+      acc.sessions += device.coverage.estimated_session_blocks
+      acc.waveformFiles += device.coverage.waveform_files
+      return acc
+    },
+    { therapyDays: 0, sessions: 0, waveformFiles: 0 },
+  )
+  const detailLevel = coverageTotals.waveformFiles > 0 ? 'Detailed (with waveforms)' : 'Summary only'
   return (
     <div className="mt-6 space-y-4 border-t border-[var(--border)] pt-6">
       <div>
@@ -975,32 +1000,52 @@ export function LoaderInspectionPanel({
             : 'Source not recognized'}
         </h3>
       </div>
-      <div className="grid gap-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm sm:grid-cols-3">
-        <InspectionValue label="Files staged" value={String(plan.source_manifest.file_count)} />
-        <InspectionValue label="Source size" value={formatBytes(plan.source_manifest.total_bytes)} />
-        <InspectionValue label="Plan version" value={plan.plan_version} />
-        <div className="sm:col-span-3">
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
-            Source fingerprint
-          </p>
-          <p
-            className="mt-1 truncate font-mono text-xs text-[var(--foreground)]"
-            title={plan.source_manifest.fingerprint}
-          >
-            {plan.source_manifest.fingerprint}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 sm:col-span-3">
-          {plan.source_manifest.roles.map((role) => (
-            <span
-              key={role.role}
-              className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs text-[var(--foreground)]"
+      {inspection.matched ? (
+        <dl className="grid gap-3 rounded-[20px] border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          <InspectionValue label="Detected machine" value={detectedMachine} />
+          <InspectionValue label="Therapy days" value={String(coverageTotals.therapyDays)} />
+          <InspectionValue label="Sessions (est.)" value={String(coverageTotals.sessions)} />
+          <InspectionValue label="Waveform files" value={String(coverageTotals.waveformFiles)} />
+          <InspectionValue label="Import detail level" value={detailLevel} />
+        </dl>
+      ) : null}
+      <details className="group rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)]">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-bold text-[var(--foreground)] [&::-webkit-details-marker]:hidden">
+          <span>Technical details</span>
+          <span className="text-xs font-bold text-[var(--accent)] group-open:hidden">Show</span>
+          <span className="hidden text-xs font-bold text-[var(--accent)] group-open:inline">Hide</span>
+        </summary>
+        <div className="space-y-3 border-t border-[var(--border)] px-4 py-3">
+          <dl className="grid gap-3 text-sm sm:grid-cols-3">
+            <InspectionValue label="Source size" value={formatBytes(plan.source_manifest.total_bytes)} />
+            <InspectionValue label="Plan version" value={plan.plan_version} />
+            <InspectionValue label="Files staged" value={String(plan.source_manifest.file_count)} />
+          </dl>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+              Source fingerprint
+            </p>
+            <p
+              className="mt-1 truncate font-mono text-xs text-[var(--foreground)]"
+              title={plan.source_manifest.fingerprint}
             >
-              {role.role.replaceAll('_', ' ')}: {role.file_count}
-            </span>
-          ))}
+              {plan.source_manifest.fingerprint}
+            </p>
+          </div>
+          {plan.source_manifest.roles.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {plan.source_manifest.roles.map((role) => (
+                <span
+                  key={role.role}
+                  className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 text-xs text-[var(--foreground)]"
+                >
+                  {role.role.replaceAll('_', ' ')}: {role.file_count}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
-      </div>
+      </details>
       {inspection.devices.map((device, index) => {
         const devicePlan = findDevicePlan(plan, device.adapter_id, device.device_path)
         return (
