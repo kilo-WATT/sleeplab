@@ -5,7 +5,7 @@ import type { Equipment, SessionSummary } from '../api/client'
 import { api } from '../api/client'
 import NightCalendar from '../components/NightCalendar'
 import NightDetailPanel from '../components/NightDetailPanel'
-import { CardSection, MICRO_LABEL } from '../components/nightExplorerUi'
+import { CardSection, EYEBROW } from '../components/nightExplorerUi'
 import { Card } from '../components/ui/card'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
 import {
@@ -263,7 +263,7 @@ export default function CalendarPage() {
 function UtilityStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="flex min-w-[8.5rem] flex-1 flex-col gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-3">
-      <p className={MICRO_LABEL}>{label}</p>
+      <p className={EYEBROW}>{label}</p>
       <p className="text-base font-extrabold leading-none text-[var(--foreground)]">{value}</p>
       <p className="text-[10px] leading-none text-[var(--muted-foreground)]">{hint ?? ' '}</p>
     </div>
