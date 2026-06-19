@@ -492,7 +492,7 @@ def test_parser_import_persistence_prefers_chunks_and_api_reads_windows(
 
     event_response = _event_window(client, auth_headers, session_id, event_id)
     assert event_response.status_code == 200
-    assert event_response.json()["waveform"]["flow"][:3] == [0.0, 0.1, 0.2]
+    assert event_response.json()["waveform"]["flow"][:3] == pytest.approx([0.0, 0.1, 0.2])
     assert stored == [
         ("flow_rate", 1, 300, "L/s", ENCODING),
         ("pressure", 1, 300, "cmH2O", ENCODING),
