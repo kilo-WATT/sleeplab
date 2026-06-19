@@ -5,6 +5,7 @@ import type { Equipment, SessionSummary } from '../api/client'
 import { api } from '../api/client'
 import NightCalendar from '../components/NightCalendar'
 import NightDetailPanel from '../components/NightDetailPanel'
+import { CardSection, MICRO_LABEL } from '../components/nightExplorerUi'
 import { Card, CardContent } from '../components/ui/card'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
 import {
@@ -166,17 +167,20 @@ export default function CalendarPage() {
       </div>
 
       {/* Controls: metric toggle + quick filters */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between" data-testid="calendar-controls">
-        <div className="flex w-fit rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1">
+      <div
+        className="flex flex-col gap-x-6 gap-y-3 lg:flex-row lg:items-center lg:justify-between"
+        data-testid="calendar-controls"
+      >
+        <div className="flex w-fit shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] p-1">
           {METRICS.map((item) => (
             <button
               key={item.key}
               type="button"
               aria-pressed={metric === item.key}
               onClick={() => setMetric(item.key)}
-              className={`rounded-full px-3 py-1.5 text-xs font-bold transition ${
+              className={`rounded-full px-3.5 py-1.5 text-xs font-bold leading-none transition ${
                 metric === item.key
-                  ? 'bg-[var(--surface-strong)] text-[var(--accent)]'
+                  ? 'bg-[var(--surface-strong)] text-[var(--accent)] shadow-sm'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
@@ -185,17 +189,17 @@ export default function CalendarPage() {
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter nights">
+        <div className="flex flex-wrap gap-2 lg:justify-end" role="group" aria-label="Filter nights">
           {FILTERS.map((item) => (
             <button
               key={item.key}
               type="button"
               aria-pressed={filter === item.key}
               onClick={() => setFilter(item.key)}
-              className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+              className={`rounded-full border px-3 py-1.5 text-xs font-bold leading-none transition ${
                 filter === item.key
                   ? 'border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                  : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  : 'border-[var(--border)] bg-[var(--surface-soft)] text-[var(--muted-foreground)] hover:border-[var(--accent-border)] hover:text-[var(--foreground)]'
               }`}
             >
               {item.label}
@@ -206,17 +210,15 @@ export default function CalendarPage() {
 
       {/* Calendar (focus) + selected-night inspector */}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,1fr)] lg:items-start">
-        <Card className="order-1">
-          <CardContent className="py-5 sm:py-6">
-            <NightCalendar
-              cells={cells}
-              metric={metric}
-              filter={filter}
-              selectedDate={selectedDate}
-              onSelect={(iso) => setSelectedDate((current) => (current === iso ? null : iso))}
-            />
-          </CardContent>
-        </Card>
+        <CardSection className="order-1">
+          <NightCalendar
+            cells={cells}
+            metric={metric}
+            filter={filter}
+            selectedDate={selectedDate}
+            onSelect={(iso) => setSelectedDate((current) => (current === iso ? null : iso))}
+          />
+        </CardSection>
 
         <div className="order-2 space-y-5 lg:sticky lg:top-4">
           <NightDetailPanel selectedDate={selectedDate} cell={selectedCell} />
@@ -230,27 +232,27 @@ export default function CalendarPage() {
           />
 
           {gaps.length > 0 ? (
-            <Card data-testid="import-gaps">
-              <CardContent className="py-4">
-                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--accent)]">Import gaps</p>
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Stretches with no recorded night.</p>
-                <ul className="mt-3 space-y-1.5">
-                  {gaps.slice(0, 4).map((gap) => (
-                    <li
-                      key={gap.start}
-                      className="flex items-center justify-between gap-3 rounded-[12px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-xs"
-                    >
-                      <span className="text-[var(--foreground)]">
-                        {gap.start === gap.end ? formatShort(gap.start) : `${formatShort(gap.start)} – ${formatShort(gap.end)}`}
-                      </span>
-                      <span className="font-bold text-[var(--muted-foreground)]">
-                        {gap.nights} {gap.nights === 1 ? 'night' : 'nights'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+            <CardSection
+              eyebrow="Import gaps"
+              description="Stretches with no recorded night."
+              testId="import-gaps"
+            >
+              <ul className="space-y-1.5">
+                {gaps.slice(0, 4).map((gap) => (
+                  <li
+                    key={gap.start}
+                    className="flex items-center justify-between gap-3 rounded-[12px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2.5 text-xs"
+                  >
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {gap.start === gap.end ? formatShort(gap.start) : `${formatShort(gap.start)} – ${formatShort(gap.end)}`}
+                    </span>
+                    <span className="font-bold text-[var(--muted-foreground)]">
+                      {gap.nights} {gap.nights === 1 ? 'night' : 'nights'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </CardSection>
           ) : null}
         </div>
       </div>
@@ -260,10 +262,10 @@ export default function CalendarPage() {
 
 function UtilityStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="flex-1 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 min-w-[8rem]">
-      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
-      <p className="mt-0.5 text-sm font-extrabold text-[var(--foreground)]">{value}</p>
-      {hint ? <p className="text-[10px] text-[var(--muted-foreground)]">{hint}</p> : null}
+    <div className="flex min-w-[8.5rem] flex-1 flex-col gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3.5 py-3">
+      <p className={MICRO_LABEL}>{label}</p>
+      <p className="text-base font-extrabold leading-none text-[var(--foreground)]">{value}</p>
+      <p className="text-[10px] leading-none text-[var(--muted-foreground)]">{hint ?? ' '}</p>
     </div>
   )
 }
@@ -282,45 +284,40 @@ function RecentNights({
   filterActive: boolean
 }) {
   return (
-    <Card data-testid="recent-nights">
-      <CardContent className="py-4">
-        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--accent)]">
-          {filterActive ? 'Matching nights' : 'Recent nights'}
-        </p>
-        {nights.length === 0 ? (
-          <p className="mt-2 text-xs text-[var(--muted-foreground)]">No nights match this filter.</p>
-        ) : (
-          <ul className="mt-3 space-y-1.5">
-            {nights.map((cell) => (
-              <li key={cell.date}>
-                <button
-                  type="button"
-                  aria-pressed={selectedDate === cell.date}
-                  onClick={() => onSelect(cell.date)}
-                  className={`flex w-full items-center gap-3 rounded-[12px] border px-3 py-2 text-left transition ${
-                    selectedDate === cell.date
-                      ? 'border-[var(--accent-border)] bg-[var(--accent-soft)]'
-                      : 'border-[var(--border)] bg-[var(--surface-soft)] hover:border-[var(--accent-border)]'
-                  }`}
-                >
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ background: metricColor(cell, metric) }}
-                    aria-hidden="true"
-                  />
-                  <span className="min-w-0 flex-1 text-xs font-bold text-[var(--foreground)]">{formatShort(cell.date)}</span>
-                  <span className="shrink-0 text-[11px] text-[var(--muted-foreground)]">
-                    {cell.ahi == null ? '—' : `AHI ${cell.ahi.toFixed(1)}`} · {cell.hours.toFixed(1)}h
-                  </span>
-                  {cell.needsReview ? (
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--orange-500)]" aria-hidden="true" />
-                  ) : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+    <CardSection eyebrow={filterActive ? 'Matching nights' : 'Recent nights'} testId="recent-nights">
+      {nights.length === 0 ? (
+        <p className="text-xs text-[var(--muted-foreground)]">No nights match this filter.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {nights.map((cell) => (
+            <li key={cell.date}>
+              <button
+                type="button"
+                aria-pressed={selectedDate === cell.date}
+                onClick={() => onSelect(cell.date)}
+                className={`flex w-full items-center gap-3 rounded-[12px] border px-3 py-2.5 text-left transition ${
+                  selectedDate === cell.date
+                    ? 'border-[var(--accent-border)] bg-[var(--accent-soft)]'
+                    : 'border-[var(--border)] bg-[var(--surface-soft)] hover:border-[var(--accent-border)]'
+                }`}
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: metricColor(cell, metric) }}
+                  aria-hidden="true"
+                />
+                <span className="min-w-0 flex-1 text-xs font-bold text-[var(--foreground)]">{formatShort(cell.date)}</span>
+                <span className="shrink-0 text-[11px] leading-none text-[var(--muted-foreground)]">
+                  {cell.ahi == null ? '—' : `AHI ${cell.ahi.toFixed(1)}`} · {cell.hours.toFixed(1)}h
+                </span>
+                {cell.needsReview ? (
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--orange-500)]" aria-hidden="true" />
+                ) : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </CardSection>
   )
 }

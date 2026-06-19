@@ -12,6 +12,7 @@ import {
   metricTileValue,
   toIso,
 } from '../lib/nightExplorer'
+import { EYEBROW } from './nightExplorerUi'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const MONTHS_LONG = [
@@ -21,8 +22,9 @@ const MONTHS_LONG = [
 const DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
 // Diagonal slashes overlaid on a solid color: "used, but not fully recorded".
+// Kept subtle so it reads as a texture cue without overpowering the tile color.
 const SLASH_OVERLAY =
-  'repeating-linear-gradient(45deg, rgba(255,255,255,0.5), rgba(255,255,255,0.5) 2px, transparent 2px, transparent 6px)'
+  'repeating-linear-gradient(45deg, rgba(255,255,255,0.32), rgba(255,255,255,0.32) 1.5px, transparent 1.5px, transparent 6px)'
 // Gray slashes on the card background: past days with no session at all (gaps).
 const EMPTY_HATCH =
   'repeating-linear-gradient(45deg, var(--surface-muted), var(--surface-muted) 4px, transparent 4px, transparent 8px)'
@@ -112,36 +114,39 @@ export default function NightCalendar({ cells, metric, filter, selectedDate, onS
 
   return (
     <div className="space-y-4">
-      <div className="relative flex items-center justify-between gap-2" ref={pickerRef}>
-        <button
-          type="button"
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-soft)] text-lg font-bold text-[var(--accent)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]"
-          onClick={() => shiftMonth(-1)}
-          aria-label="Show previous month"
-        >
-          <span aria-hidden="true">{'<'}</span>
-        </button>
+      <div className="flex min-h-9 items-center justify-between gap-3">
+        <p className={EYEBROW}>Night calendar</p>
 
-        <button
-          type="button"
-          className="min-w-0 rounded-full px-3 py-2 text-center text-base font-extrabold text-[var(--foreground)] transition hover:bg-[var(--surface-soft)] sm:text-lg"
-          onClick={() => setPickerOpen((open) => !open)}
-          aria-expanded={pickerOpen}
-        >
-          {MONTHS_LONG[view.month]} {view.year}
-        </button>
+        <div className="relative flex items-center gap-1" ref={pickerRef}>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-soft)] text-base font-bold text-[var(--accent)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]"
+            onClick={() => shiftMonth(-1)}
+            aria-label="Show previous month"
+          >
+            <span aria-hidden="true">{'<'}</span>
+          </button>
 
-        <button
-          type="button"
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-soft)] text-lg font-bold text-[var(--accent)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]"
-          onClick={() => shiftMonth(1)}
-          aria-label="Show next month"
-        >
-          <span aria-hidden="true">{'>'}</span>
-        </button>
+          <button
+            type="button"
+            className="min-w-0 rounded-full px-3 py-1.5 text-center text-sm font-extrabold leading-none text-[var(--foreground)] transition hover:bg-[var(--surface-soft)]"
+            onClick={() => setPickerOpen((open) => !open)}
+            aria-expanded={pickerOpen}
+          >
+            {MONTHS_LONG[view.month]} {view.year}
+          </button>
 
-        {pickerOpen && (
-          <div className="absolute left-1/2 top-12 z-20 w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-[16px] border border-[var(--border)] bg-[var(--popover-surface)] p-3 shadow-lg">
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-soft)] text-base font-bold text-[var(--accent)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)]"
+            onClick={() => shiftMonth(1)}
+            aria-label="Show next month"
+          >
+            <span aria-hidden="true">{'>'}</span>
+          </button>
+
+          {pickerOpen && (
+            <div className="absolute right-0 top-11 z-20 w-[min(20rem,calc(100vw-2rem))] rounded-[16px] border border-[var(--border)] bg-[var(--popover-surface)] p-3 shadow-lg">
             <div className="mb-3 flex items-center justify-between gap-2">
               <button
                 type="button"
@@ -190,7 +195,8 @@ export default function NightCalendar({ cells, metric, filter, selectedDate, onS
               ))}
             </div>
           </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="rounded-[18px] border border-[var(--border)] bg-[var(--surface-soft)] p-2.5 sm:p-4">
@@ -214,7 +220,7 @@ export default function NightCalendar({ cells, metric, filter, selectedDate, onS
               return (
                 <span
                   key={iso}
-                  className="flex aspect-square min-w-0 items-center justify-center rounded-[10px] text-xs font-bold text-[var(--muted-foreground)] opacity-50 sm:text-sm"
+                  className="flex aspect-square min-w-0 items-start justify-start rounded-[10px] p-1 text-[10px] font-bold leading-none text-[var(--muted-foreground)] opacity-40 sm:text-[11px]"
                   style={{ background: isFuture ? 'var(--surface-muted)' : EMPTY_HATCH }}
                   title={`${iso}\n${isFuture ? 'Upcoming' : 'No session imported'}`}
                   aria-label={`${iso} ${isFuture ? 'upcoming' : 'no session imported'}`}
@@ -236,26 +242,28 @@ export default function NightCalendar({ cells, metric, filter, selectedDate, onS
                 aria-label={`${tooltip(iso, cell).replace(/\n/g, '. ')}${isSelected ? '. Selected' : ''}`}
                 title={tooltip(iso, cell)}
                 onClick={() => onSelect(iso)}
-                className={`relative flex aspect-square min-w-0 flex-col items-center justify-center rounded-[10px] border text-white transition hover:scale-[1.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--foreground)] ${
+                className={`relative flex aspect-square min-w-0 flex-col rounded-[10px] border p-1 text-white transition hover:scale-[1.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--foreground)] ${
                   isSelected ? 'border-white ring-2 ring-[var(--foreground)]' : 'border-transparent'
                 } ${dimmed ? 'opacity-30' : ''}`}
                 style={{ ...cellBackground(cell), cursor: 'pointer' }}
               >
-                <span className="absolute left-1 top-0.5 text-[10px] font-bold leading-none text-white/80 sm:text-[11px]">
+                <span className="text-[10px] font-bold leading-none text-white/85 sm:text-[11px]">
                   {date.getDate()}
                 </span>
-                {value ? (
-                  <span className="mt-1.5 text-[11px] font-extrabold leading-none sm:text-sm">{value}</span>
-                ) : null}
+                <span className="flex flex-1 items-center justify-center">
+                  {value ? (
+                    <span className="text-[12px] font-extrabold leading-none sm:text-sm">{value}</span>
+                  ) : null}
+                </span>
                 {cell.equipmentChanges.length > 0 ? (
                   <span
-                    className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[#5251A7] ring-1 ring-white/70"
+                    className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[#5251A7] ring-1 ring-white/80"
                     aria-hidden="true"
                   />
                 ) : null}
                 {cell.needsReview ? (
                   <span
-                    className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[#1f1f1f]/70 ring-1 ring-white/70"
+                    className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-black/55 ring-1 ring-white/80"
                     aria-hidden="true"
                   />
                 ) : null}
@@ -265,34 +273,35 @@ export default function NightCalendar({ cells, metric, filter, selectedDate, onS
         </div>
       </div>
 
-      {/* Metric severity legend */}
-      <div className="flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-        {metricLegend(metric).map(([color, label]) => (
-          <span
-            key={label}
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-2 py-0.5 text-[10px]"
-          >
-            <span className="inline-block h-2 w-2 rounded-sm" style={{ background: color }} />
-            {label}
-          </span>
-        ))}
-      </div>
+      {/* Legends — quiet, evenly spaced reference for color + markers */}
+      <div className="space-y-2 border-t border-[var(--border)] pt-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {metricLegend(metric).map(([color, label]) => (
+            <span
+              key={label}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface-soft)] px-2 py-1 text-[10px] leading-none text-[var(--muted-foreground)]"
+            >
+              <span className="inline-block h-2 w-2 rounded-sm" style={{ background: color }} />
+              {label}
+            </span>
+          ))}
+        </div>
 
-      {/* Marker legend — calendar-specific context cues */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] text-[var(--muted-foreground)]">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-[#5251A7] ring-1 ring-[var(--border)]" /> Equipment change
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full bg-[#1f1f1f]/70 ring-1 ring-[var(--border)]" /> Needs review
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span
-            className="inline-block h-2.5 w-2.5 rounded-[3px] ring-1 ring-[var(--border)]"
-            style={{ backgroundColor: 'var(--calendar-empty)', backgroundImage: SLASH_OVERLAY }}
-          />
-          Used, not recorded
-        </span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] leading-none text-[var(--muted-foreground)]">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-[#5251A7] ring-1 ring-[var(--border)]" /> Equipment change
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-black/55 ring-1 ring-[var(--border)]" /> Needs review
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-[3px] ring-1 ring-[var(--border)]"
+              style={{ backgroundColor: 'var(--calendar-empty)', backgroundImage: SLASH_OVERLAY }}
+            />
+            Used, not recorded
+          </span>
+        </div>
       </div>
     </div>
   )

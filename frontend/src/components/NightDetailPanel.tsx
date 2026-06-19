@@ -5,6 +5,8 @@ import type { SessionDetail } from '../api/client'
 import { api } from '../api/client'
 import { ahiColor, ahiLabel, type NightCell } from '../lib/nightExplorer'
 import { leakToLpm } from '../lib/units'
+import { CalendarIcon } from './icons/ChevronIcons'
+import { EYEBROW, MICRO_LABEL } from './nightExplorerUi'
 import { Button } from './ui/button'
 import { Card, CardContent } from './ui/card'
 
@@ -26,10 +28,10 @@ function formatLongDate(iso: string): string {
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2.5">
-      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{label}</p>
-      <p className="mt-1 text-lg font-extrabold leading-none text-[var(--foreground)]">{value}</p>
-      {hint ? <p className="mt-1 text-[11px] leading-3 text-[var(--muted-foreground)]">{hint}</p> : null}
+    <div className="flex flex-col gap-1.5 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2.5">
+      <p className={MICRO_LABEL}>{label}</p>
+      <p className="text-lg font-extrabold leading-none text-[var(--foreground)]">{value}</p>
+      <p className="text-[11px] leading-none text-[var(--muted-foreground)]">{hint ?? ' '}</p>
     </div>
   )
 }
@@ -83,11 +85,19 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
   if (!selectedDate || !cell) {
     return (
       <Card className="h-full" data-testid="night-detail-empty">
-        <CardContent className="flex h-full flex-col items-center justify-center gap-2 py-12 text-center">
-          <p className="text-sm font-bold text-[var(--foreground)]">No night selected</p>
-          <p className="max-w-xs text-sm text-[var(--muted-foreground)]">
-            Pick a night on the calendar to inspect its therapy summary before opening the full session.
-          </p>
+        <CardContent className="flex h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+          <span
+            className="flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-soft)] text-[var(--accent)]"
+            aria-hidden="true"
+          >
+            <CalendarIcon className="h-5 w-5" />
+          </span>
+          <div className="space-y-1.5">
+            <p className="text-sm font-extrabold leading-none text-[var(--foreground)]">No night selected</p>
+            <p className="mx-auto max-w-[15rem] text-xs leading-snug text-[var(--muted-foreground)]">
+              Pick a night on the calendar to preview its therapy summary before opening the full session.
+            </p>
+          </div>
         </CardContent>
       </Card>
     )
@@ -119,16 +129,16 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
 
   return (
     <Card className="h-full" data-testid="night-detail">
-      <CardContent className="space-y-4 py-5 sm:py-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--accent)]">Selected night</p>
-            <h3 className="mt-1 text-lg font-extrabold leading-tight text-[var(--foreground)]">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex min-h-7 items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1.5">
+            <p className={EYEBROW}>Selected night</p>
+            <h3 className="text-lg font-extrabold leading-tight text-[var(--foreground)]">
               {formatLongDate(selectedDate)}
             </h3>
           </div>
           <span
-            className="shrink-0 rounded-full px-3 py-1 text-xs font-bold text-white"
+            className="shrink-0 rounded-full px-3 py-1 text-xs font-bold leading-none text-white"
             style={{ background: ahiColor(cell.ahi) }}
             data-testid="night-detail-severity"
           >
@@ -207,9 +217,9 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
         ) : null}
 
         {detail && !noteOpen ? (
-          <div className="rounded-[12px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2" data-testid="night-detail-note">
-            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">Note</p>
-            <p className="mt-1 whitespace-pre-wrap text-sm text-[var(--foreground)]">
+          <div className="rounded-[12px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2.5" data-testid="night-detail-note">
+            <p className={MICRO_LABEL}>Note</p>
+            <p className="mt-1.5 whitespace-pre-wrap text-sm text-[var(--foreground)]">
               {detail.note?.trim() ? detail.note : <span className="text-[var(--muted-foreground)]">No note yet.</span>}
             </p>
           </div>
@@ -217,7 +227,7 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
 
         {detail && noteOpen ? (
           <form className="space-y-2" onSubmit={handleNoteSubmit} data-testid="night-detail-note-form">
-            <label htmlFor="night-note" className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+            <label htmlFor="night-note" className={MICRO_LABEL}>
               Night note
             </label>
             <textarea
