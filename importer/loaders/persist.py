@@ -28,9 +28,10 @@ than silently dropping or inventing data we record the gaps here:
   metadata, not the underlying arrays. To still populate the sample tables
   *without* widening the vendor-neutral model, the execution layer passes the
   raw ``CPAPDirectory`` (``raw_directory=``) from the same parse; this bridge
-  then writes ``session_metrics`` (full-resolution low-rate),
-  ``session_waveform`` (event-windowed high-rate), and ``waveform_chunks``
-  (compressed full-night high-rate signals) from ``CPAPSession.timeseries``.
+  then writes ``session_metrics`` (full-resolution low-rate) and
+  ``waveform_chunks`` (compressed full-night high-rate signals) from
+  ``CPAPSession.timeseries``. ``session_waveform`` is retained only as a
+  legacy fallback when no chunks can be produced for a night.
   Channel *metadata* (``signal_channels``) is persisted from the ImportRun.
 * **Summary statistics** (``avg_pressure``, ``p95_pressure``, ``avg_leak`` and the
   per-channel averages) are computed by the loader from the decoded timeseries
@@ -110,11 +111,13 @@ def persist_import_run(
         raw_directory: Optional raw ``cpap_parser.schema.CPAPDirectory`` from the
             same parse that produced ``run`` (see
             :meth:`ResMedNativeLoader.import_data_with_directory`). When supplied,
-            the per-sample tables ``session_metrics`` (low-rate) and
-            ``session_waveform`` (high-rate, event-windowed) are populated from
+            low-rate ``session_metrics`` and preferred compressed
+            ``waveform_chunks`` are populated from
             ``CPAPSession.timeseries`` — data the vendor-neutral
-            :class:`WaveformSegment` does not carry. When ``None`` those tables
-            are left empty (detection-only/legacy callers).
+            :class:`WaveformSegment` does not carry. Event-window
+            ``session_waveform`` rows are used only if no chunks can be
+            produced. When ``None`` those stores are left empty
+            (detection-only/legacy callers).
 
     Returns:
         A summary dict with counts of what was written, suitable for logging and
@@ -353,7 +356,7 @@ def persist_import_run(
             summary=summary,
         )
 
-        # -- Per-sample tables (session_metrics / session_waveform) -------
+        # -- Per-sample tables (session_metrics / waveform chunks) --------
         # Populated only when the raw CPAPDirectory is available; the decoded
         # sample arrays live on CPAPSession.timeseries, not on the ImportRun.
         if detailed_by_night is not None:
@@ -369,9 +372,6 @@ def persist_import_run(
                 (event.start_time, float(event.duration_seconds or 0.0))
                 for event in session.events
             ]
-            counts["waveform_rows"] += _write_session_waveform(
-                db_conn, str(session_db_id), detailed, machine_tz, night_events
-            )
             if progress_callback:
                 progress_callback(
                     stage="building_waveform_chunks",
@@ -382,14 +382,17 @@ def persist_import_run(
                     sessions_processed=session_index - 1,
                     sessions_total=session_total,
                 )
-            counts["waveform_chunks"] += _write_waveform_chunks(
+            waveform_rows, waveform_chunks = _replace_high_rate_waveforms(
                 db_conn,
                 session_db_id=str(session_db_id),
                 import_run_id=import_run_id,
                 detailed=detailed,
                 machine_tz=machine_tz,
                 parser_version=run.adapter_version,
+                night_events=night_events,
             )
+            counts["waveform_rows"] += waveform_rows
+            counts["waveform_chunks"] += waveform_chunks
 
         if progress_callback:
             progress_callback(
@@ -1065,6 +1068,44 @@ def _write_waveform_chunks(
             page_size=250,
         )
     return len(rows)
+
+
+def _replace_high_rate_waveforms(
+    db_conn: Any,
+    *,
+    session_db_id: str,
+    import_run_id: str,
+    detailed: list,
+    machine_tz: ZoneInfo,
+    parser_version: str | None,
+    night_events: list[tuple[datetime, float]],
+) -> tuple[int, int]:
+    """Prefer validated chunks and retain rows only as an import fallback.
+
+    Chunk encoding and insertion run first. A positive result means at least one
+    parser-provided high-rate signal was encoded and accepted by the database;
+    only then are any legacy rows for the session removed. If the parser exposes
+    no chunkable high-rate data, the event-window row writer preserves the old
+    behavior. The caller owns the transaction, so a chunk failure cannot commit
+    a row deletion independently.
+    """
+    chunk_count = _write_waveform_chunks(
+        db_conn,
+        session_db_id=session_db_id,
+        import_run_id=import_run_id,
+        detailed=detailed,
+        machine_tz=machine_tz,
+        parser_version=parser_version,
+    )
+    if chunk_count:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM session_waveform WHERE session_id = %s", (session_db_id,))
+        return 0, chunk_count
+
+    row_count = _write_session_waveform(
+        db_conn, session_db_id, detailed, machine_tz, night_events
+    )
+    return row_count, 0
 
 
 def _merge_event_windows(

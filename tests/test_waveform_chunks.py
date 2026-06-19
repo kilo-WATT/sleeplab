@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import text
 
-from importer.loaders.persist import _write_waveform_chunks
+from importer.loaders import persist as waveform_persist
+from importer.loaders.persist import _replace_high_rate_waveforms, _write_waveform_chunks
 from importer.waveform_chunks import (
     ENCODING,
     build_chunks,
@@ -136,6 +137,72 @@ def test_waveform_migration_is_repeat_safe_and_constrained():
     assert "UNIQUE (session_id, signal_name, chunk_index)" in sql
     assert "CHECK (sample_rate_hz > 0)" in sql
     assert ENCODING in sql
+
+
+class _RecordingConnection:
+    def __init__(self):
+        self.statements = []
+
+    def cursor(self):
+        connection = self
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def execute(self, statement, params):
+                connection.statements.append((statement, params))
+
+        return _Cursor()
+
+
+def test_parser_persistence_clears_legacy_rows_only_after_chunks_exist(monkeypatch):
+    connection = _RecordingConnection()
+    monkeypatch.setattr(waveform_persist, "_write_waveform_chunks", lambda *args, **kwargs: 2)
+    monkeypatch.setattr(
+        waveform_persist,
+        "_write_session_waveform",
+        lambda *args, **kwargs: pytest.fail("legacy rows must not be written"),
+    )
+
+    counts = _replace_high_rate_waveforms(
+        connection,
+        session_db_id="session-1",
+        import_run_id="run-1",
+        detailed=[],
+        machine_tz=UTC,
+        parser_version="test",
+        night_events=[],
+    )
+
+    assert counts == (0, 2)
+    assert connection.statements == [
+        ("DELETE FROM session_waveform WHERE session_id = %s", ("session-1",))
+    ]
+
+
+def test_parser_persistence_keeps_row_fallback_when_chunks_are_unavailable(monkeypatch):
+    connection = _RecordingConnection()
+    monkeypatch.setattr(waveform_persist, "_write_waveform_chunks", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(
+        waveform_persist, "_write_session_waveform", lambda *args, **kwargs: 37
+    )
+
+    counts = _replace_high_rate_waveforms(
+        connection,
+        session_db_id="session-1",
+        import_run_id="run-1",
+        detailed=[],
+        machine_tz=UTC,
+        parser_version="test",
+        night_events=[],
+    )
+
+    assert counts == (37, 0)
+    assert connection.statements == []
 
 
 def _seed_parser_session(db, user_id: str) -> tuple[str, str]:
@@ -358,10 +425,11 @@ def test_event_inspector_missing_waveform_data_remains_an_empty_response(
     }
 
 
-def test_parser_waveform_persistence_is_idempotent_and_api_reads_windows(
+def test_parser_import_persistence_prefers_chunks_and_api_reads_windows(
     db, test_user, client, auth_headers
 ):
     session_id, run_id = _seed_parser_session(db, test_user["id"])
+    event_id = _seed_event(db, session_id)
     raw_conn = db.connection().connection.driver_connection
     start = datetime(2026, 6, 11, 22, 0)
     detailed = [
@@ -376,21 +444,30 @@ def test_parser_waveform_persistence_is_idempotent_and_api_reads_windows(
         )
     ]
 
-    first_count = _write_waveform_chunks(
-        raw_conn,
-        session_db_id=session_id,
-        import_run_id=run_id,
-        detailed=detailed,
-        machine_tz=UTC,
-        parser_version="0.1",
+    db.execute(
+        text("""
+            INSERT INTO session_waveform (session_id, ts, flow, pressure)
+            VALUES (CAST(:sid AS uuid), :ts, 999, 999)
+        """),
+        {"sid": session_id, "ts": datetime(2026, 6, 11, 22, 0, tzinfo=UTC)},
     )
-    second_count = _write_waveform_chunks(
+    first_rows, first_count = _replace_high_rate_waveforms(
         raw_conn,
         session_db_id=session_id,
         import_run_id=run_id,
         detailed=detailed,
         machine_tz=UTC,
         parser_version="0.1",
+        night_events=[(start + timedelta(seconds=4), 10.0)],
+    )
+    second_rows, second_count = _replace_high_rate_waveforms(
+        raw_conn,
+        session_db_id=session_id,
+        import_run_id=run_id,
+        detailed=detailed,
+        machine_tz=UTC,
+        parser_version="0.1",
+        night_events=[(start + timedelta(seconds=4), 10.0)],
     )
     db.flush()
 
@@ -405,7 +482,17 @@ def test_parser_waveform_persistence_is_idempotent_and_api_reads_windows(
         """),
         {"sid": session_id},
     ).all()
+    legacy_row_count = db.execute(
+        text("SELECT COUNT(*) FROM session_waveform WHERE session_id = CAST(:sid AS uuid)"),
+        {"sid": session_id},
+    ).scalar_one()
+    assert first_rows == second_rows == 0
     assert first_count == second_count == 2
+    assert legacy_row_count == 0
+
+    event_response = _event_window(client, auth_headers, session_id, event_id)
+    assert event_response.status_code == 200
+    assert event_response.json()["waveform"]["flow"][:3] == [0.0, 0.1, 0.2]
     assert stored == [
         ("flow_rate", 1, 300, "L/s", ENCODING),
         ("pressure", 1, 300, "cmH2O", ENCODING),

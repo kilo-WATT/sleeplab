@@ -183,8 +183,8 @@ def run_cpap_parser_import(
             message="Parsing sessions and detailed ResMed signal files.",
         )
         # Parse once; keep the raw CPAPDirectory so the persistence layer can
-        # populate the per-sample tables (session_metrics/session_waveform) that
-        # the vendor-neutral ImportRun deliberately does not carry.
+        # populate low-rate metrics and preferred compressed waveform chunks
+        # that the vendor-neutral ImportRun deliberately does not carry.
         run, directory = loader.import_data_with_directory(
             parse_source, ImportOptions(include_waveforms=include_waveforms)
         )

@@ -6,8 +6,8 @@ The session detail page is the primary read surface after a ResMed
 - authoritative usage, AHI, event counts, pressure, leak, and therapy mode;
 - scored-event timeline and event list;
 - low-rate therapy graphs when `session_metrics` samples exist;
-- focused flow/pressure waveforms around an event when `session_waveform`
-  samples exist; and
+- focused flow/pressure waveforms from preferred `waveform_chunks`, with legacy
+  `session_waveform` fallback when chunk samples do not exist; and
 - explicit coverage states for settings, SpO2/pulse, and full-night flow.
 
 The `SessionDetail.data_availability` API field is the source of truth for the

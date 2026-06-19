@@ -45,17 +45,18 @@ import paths and read by the session/Event-Inspector API.
   `importer/import_sessions.py`) writes **`session_waveform` only**, event-windowed.
   Per Alpha-6 governance this is the **production path and regression oracle**.
 
-- **cpap-parser path** (`importer/loaders/persist.py`) writes **both**:
-  `_write_session_waveform` (event windows, same windowing as the native path)
-  **and** `_write_waveform_chunks` (full-night compressed chunks). This path is
-  **not** the production ResMed route in this milestone.
+- **cpap-parser path** (`importer/loaders/persist.py`) prefers full-night
+  compressed `waveform_chunks`. A successful chunk write suppresses and clears
+  duplicate `session_waveform` rows; event-window rows are written only when no
+  chunks can be produced.
 
 ### Read patterns
 
 - **Event Inspector** (`GET /sessions/{id}/events/...`, `api/routers/sessions.py`)
-  reads `session_waveform` directly: a `(session_id, ts)`-range scan over the
-  event window, downsampled in SQL via `ROW_NUMBER() % :ds`. Low-rate context is
-  read from `session_metrics` the same way.
+  decodes overlapping `waveform_chunks` first. When no relevant chunks exist it
+  falls back to a `(session_id, ts)` range scan of `session_waveform`,
+  downsampled in SQL via `ROW_NUMBER() % :ds`. Low-rate context is read from
+  `session_metrics` the same way.
 
 - **Full-night waveform API** (`GET /sessions/{id}/waveforms` and
   `/waveforms/{signal_name}`) reads `waveform_chunks`: it selects the chunk rows
@@ -66,9 +67,9 @@ import paths and read by the session/Event-Inspector API.
 - **Breath / metrics** (`GET /sessions/{id}/metrics`, `/breath`) read
   `session_metrics`.
 
-So today the two high-rate stores serve **different read shapes**:
-`session_waveform` backs the Event Inspector's direct SQL window scan;
-`waveform_chunks` backs the full-night decode-and-downsample API.
+So today `waveform_chunks` is the preferred high-rate store for cpap-parser
+imports and both waveform APIs. `session_waveform` remains the native importer's
+write target and the Event Inspector's compatibility fallback.
 
 ## 2. Evidence from the local alpha DB
 
@@ -141,8 +142,15 @@ architecture doc designates as the target; it is ~70× denser per sample, has a
 trivially small index footprint at 6,750 rows, is unit-tested
 (`tests/test_waveform_chunks.py`), and already backs the `/waveforms` API.
 
-**`session_waveform` should become one of the following**, in order of
-preference as readers migrate:
+**`session_waveform` is now legacy/fallback storage.** For cpap-parser-backed
+imports, successfully encoded chunks suppress the event-window row write and
+remove stale rows for that session. If no chunks can be produced, the importer
+still writes event-window rows so incomplete inputs retain Event Inspector
+coverage. The native/legacy importer continues to write rows because it does
+not yet write chunks.
+
+Longer term, `session_waveform` can become one of the following, in order of
+preference as remaining writers migrate:
 
 1. a **derived, rebuildable event-window cache** populated from the canonical
    chunks (fast `(session_id, ts)`-range reads for the Event Inspector), then
@@ -151,12 +159,10 @@ preference as readers migrate:
 3. **retired** once the native importer writes chunks and all readers decode from
    chunks.
 
-**This is a recommendation, not a statement of current state.** As of this
-document, `waveform_chunks` is populated **only** by the non-production
-cpap-parser path; the native ResMed production path still writes
-`session_waveform` exclusively. Making chunks canonical therefore requires
-real importer and API work that is **not** done here and is gated by the phases
-and validation below.
+`waveform_chunks` is populated by the cpap-parser path; the native ResMed path
+still writes `session_waveform` exclusively. Chunk-first Event Inspector reads
+and cpap-parser write suppression are implemented, but completing the canonical
+cutover still requires migrating that remaining native writer.
 
 ## 5. Why not drop indexes now
 
@@ -235,8 +241,10 @@ row-per-sample high-rate table rather than shrinking it.
 - **Event Inspector decodes windows from chunks.** This reader cutover is now
   implemented with a `session_waveform` fallback; see §8.
 
-- **`session_waveform` becomes a cache or is retired.** Once the native path
-  writes chunks and the Event Inspector reads from them, `session_waveform` is
+- **`session_waveform` remains fallback storage or is retired.** The Event
+  Inspector already reads chunks first and cpap-parser imports no longer write
+  duplicate rows when chunks are produced. Once the native path writes chunks,
+  `session_waveform` is
   either a rebuildable cache (kept for read latency) or removed entirely —
   reclaiming 870 MB of table + 537 MB of indexes.
 
@@ -260,17 +268,17 @@ This preserves the frontend API contract and its current empty-window behavior.
 
 If no relevant chunks overlap the requested window, the reader falls back to
 the existing `session_waveform` query. The fallback is intentionally retained
-for legacy and partially populated nights; `session_waveform` is not deleted and
-import routing is unchanged. Chunk rows win when both stores contain the window,
+for legacy and partially populated nights; `session_waveform` is not deleted.
+Chunk rows win when both stores contain the window,
 so the row table is now a compatibility fallback for this reader rather than its
 preferred source.
 
 ## 9. Open questions
 
 - **Does `session_waveform` duplicate `waveform_chunks` for every future input?**
-  Current local validation found that all row-backed parser sessions also had
-  chunks, and 10 anonymous signal windows passed value/timestamp/null parity.
-  The fallback remains necessary for legacy and partially populated databases.
+  No for cpap-parser-backed imports: a successful chunk write clears/suppresses
+  row storage. The fallback remains necessary for native imports, legacy data,
+  and parser inputs with no chunkable high-rate signals.
 
 - **What non-Event-Inspector consumers still depend on `session_waveform`?** The
   runtime Event Inspector reader has moved to chunks-first behavior, but reports,
