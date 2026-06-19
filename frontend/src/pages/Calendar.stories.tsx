@@ -1,134 +1,67 @@
 import type { Meta, StoryObj } from '@storybook/react'
 import CalendarPage from './Calendar'
 import { api } from '../api/client'
-import type { SessionSummary } from '../api/client'
+import type { Equipment, SessionSummary } from '../api/client'
 
-const mockSessions: SessionSummary[] = [
-  {
-    id: '1',
-    session_id: 's1',
-    folder_date: '2023-10-01',
+function makeSession(overrides: Partial<SessionSummary> & Pick<SessionSummary, 'folder_date'>): SessionSummary {
+  return {
+    id: `id-${overrides.folder_date}`,
+    session_id: `s-${overrides.folder_date}`,
     block_index: 0,
-    start_datetime: '2023-10-01T22:00:00Z',
+    start_datetime: `${overrides.folder_date}T22:00:00Z`,
+    end_datetime: null,
     duration_seconds: 28800,
     duration_hours: 8,
-    ahi: 2.5, // Normal (< 5)
-    central_apnea_count: 0,
-    obstructive_apnea_count: 5,
-    hypopnea_count: 10,
-    apnea_count: 5,
-    arousal_count: 20,
-    total_ahi_events: 15,
-    avg_pressure: 10,
-    p95_pressure: 12,
-    avg_leak: 5,
-    has_spo2: true,
-    machine_tz: 'America/New_York',
-  },
-  {
-    id: '2',
-    session_id: 's2',
-    folder_date: '2023-10-02',
-    block_index: 0,
-    start_datetime: '2023-10-02T22:30:00Z',
-    duration_seconds: 25200,
-    duration_hours: 7,
-    ahi: 8.5, // Mild (5 - 15)
-    central_apnea_count: 2,
-    obstructive_apnea_count: 10,
-    hypopnea_count: 45,
-    apnea_count: 12,
-    arousal_count: 30,
-    total_ahi_events: 57,
-    avg_pressure: 11,
-    p95_pressure: 13,
-    avg_leak: 8,
-    has_spo2: false,
-    machine_tz: 'America/New_York',
-  },
-  {
-    id: '3',
-    session_id: 's3',
-    folder_date: '2023-10-03',
-    block_index: 0,
-    start_datetime: '2023-10-03T23:00:00Z',
-    duration_seconds: 21600,
-    duration_hours: 6,
-    ahi: 18.0, // Moderate (15 - 30)
-    central_apnea_count: 5,
-    obstructive_apnea_count: 20,
-    hypopnea_count: 83,
-    apnea_count: 25,
-    arousal_count: 50,
-    total_ahi_events: 108,
-    avg_pressure: 12,
-    p95_pressure: 14,
-    avg_leak: 15,
-    has_spo2: true,
-    machine_tz: 'America/New_York',
-  },
-  {
-    id: '4',
-    session_id: 's4',
-    folder_date: '2023-10-04',
-    block_index: 0,
-    start_datetime: '2023-10-04T22:15:00Z',
-    duration_seconds: 27000,
-    duration_hours: 7.5,
-    ahi: 35.0, // Severe (30+)
-    central_apnea_count: 10,
-    obstructive_apnea_count: 50,
-    hypopnea_count: 200,
-    apnea_count: 60,
-    arousal_count: 100,
-    total_ahi_events: 260,
-    avg_pressure: 15,
-    p95_pressure: 18,
-    avg_leak: 30,
-    has_spo2: false,
-    machine_tz: 'America/New_York',
-  },
-  {
-    id: '5',
-    session_id: 's5',
-    folder_date: '2023-10-05',
-    block_index: 0,
-    start_datetime: '2023-10-05T22:00:00Z',
-    duration_seconds: 28800,
-    duration_hours: 8,
-    ahi: 1.2, // Normal
-    central_apnea_count: 0,
-    obstructive_apnea_count: 2,
+    ahi: 4,
+    central_apnea_count: 1,
+    obstructive_apnea_count: 4,
     hypopnea_count: 8,
-    apnea_count: 2,
-    arousal_count: 10,
-    total_ahi_events: 10,
-    avg_pressure: 9,
-    p95_pressure: 10,
-    avg_leak: 2,
-    has_spo2: true,
-    machine_tz: 'America/New_York',
-  },
-  {
-    id: '6',
-    session_id: 's6',
-    folder_date: '2023-10-06',
-    block_index: 0,
-    start_datetime: '2023-10-06T22:00:00Z',
-    duration_seconds: 28800,
-    duration_hours: 8,
-    ahi: null, // No Data Available
-    central_apnea_count: 0,
-    obstructive_apnea_count: 0,
-    hypopnea_count: 0,
-    apnea_count: 0,
-    arousal_count: 0,
-    total_ahi_events: 0,
+    apnea_count: 5,
+    arousal_count: 12,
+    total_ahi_events: 20,
     avg_pressure: 10,
     p95_pressure: 12,
-    avg_leak: 5,
-    has_spo2: false,
+    avg_leak: 0.08,
+    leak_unit: 'L/s',
+    has_spo2: true,
     machine_tz: 'America/New_York',
+    ...overrides,
+  }
+}
+
+// A spread of nights across October 2023 with a deliberate gap (Oct 9–13 missing),
+// a short-usage night, a high-leak night, a severe-AHI night, and a summary-only
+// night so every marker, filter, and severity color is exercised.
+const mockSessions: SessionSummary[] = [
+  makeSession({ folder_date: '2023-10-01', ahi: 2.5 }),
+  makeSession({ folder_date: '2023-10-02', ahi: 8.5 }),
+  makeSession({ folder_date: '2023-10-03', ahi: 18, total_ahi_events: 110 }),
+  makeSession({ folder_date: '2023-10-04', ahi: 35, total_ahi_events: 260 }),
+  makeSession({ folder_date: '2023-10-05', ahi: 1.2, duration_hours: 2.5, duration_seconds: 9000 }),
+  makeSession({ folder_date: '2023-10-06', ahi: 3.1, avg_leak: 0.6 }),
+  makeSession({ folder_date: '2023-10-07', ahi: null, avg_pressure: null, avg_leak: null, total_ahi_events: 0 }),
+  makeSession({ folder_date: '2023-10-08', ahi: 4.2 }),
+  // gap: Oct 9 – Oct 13
+  makeSession({ folder_date: '2023-10-14', ahi: 5.6 }),
+  makeSession({ folder_date: '2023-10-15', ahi: 3.3 }),
+  makeSession({ folder_date: '2023-10-16', ahi: 12.1 }),
+  makeSession({ folder_date: '2023-10-17', ahi: 6.7 }),
+]
+
+const mockEquipment: Equipment[] = [
+  {
+    id: 'eq-1',
+    equipment_type: 'cushion',
+    start_date: '2023-10-14',
+    replacement_days: 30,
+    mask_category: 'nasal',
+    brand: 'ResMed',
+    model: 'AirFit N20',
+    notes: null,
+    days_in_use: 3,
+    is_default: true,
+    created_at: '2023-10-14T00:00:00Z',
+    updated_at: '2023-10-14T00:00:00Z',
   },
 ]
 
@@ -138,10 +71,36 @@ const meta: Meta<typeof CalendarPage> = {
   tags: ['autodocs', 'ai-generated'],
   decorators: [
     (Story, context) => {
-      const { mockGetSessions } = context.parameters
-      if (mockGetSessions) {
-        api.getSessions = mockGetSessions
-      }
+      const { mockGetSessions, mockListEquipment, mockGetSessionByDate } = context.parameters
+      if (mockGetSessions) api.getSessions = mockGetSessions
+      api.listEquipment = mockListEquipment ?? (async () => mockEquipment)
+      api.getSessionByDate =
+        mockGetSessionByDate ??
+        (async (date: string) =>
+          ({
+            ...mockSessions.find((s) => s.folder_date === date),
+            note: '',
+            tags: [],
+            equipment_overrides: {},
+            mask_type: 'Nasal',
+            therapy_mode: 'APAP',
+            machine_family: 'AirSense',
+            machine_model: '11',
+            p95_leak: 0.1,
+            data_availability: {
+              import_backend: 'cpap-parser',
+              event_count: 20,
+              metric_sample_count: 1000,
+              waveform_sample_count: 5000,
+              events_available: true,
+              therapy_graphs_available: true,
+              event_waveforms_available: true,
+              event_waveform_source: 'chunks',
+              full_night_flow_available: true,
+              spo2_available: true,
+              settings_available: true,
+            },
+          }) as never)
       return <Story />
     },
   ],
@@ -158,7 +117,7 @@ export const Populated: Story = {
 
 export const Loading: Story = {
   parameters: {
-    mockGetSessions: () => new Promise((resolve) => setTimeout(resolve, 1000000)), // Simulate hanging request
+    mockGetSessions: () => new Promise(() => {}),
   },
 }
 

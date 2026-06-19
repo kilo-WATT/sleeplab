@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType, type FormEvent, type SVGProps } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { getDisplayTz } from '../lib/displayTz'
 import { leakToLpm } from '../lib/units'
@@ -176,6 +176,7 @@ const EVENT_COLORS: Record<string, string> = {
 export default function SessionDetail() {
   const { date } = useParams<{ date: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const sessionDate = date ?? ''
 
   const [session, setSession] = useState<SessionDetailType | null>(null)
@@ -211,6 +212,15 @@ export default function SessionDetail() {
   const [tagsError, setTagsError] = useState<string | null>(null)
   const [isTagsSubmitting, setIsTagsSubmitting] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
+
+  // Honor a target section in the URL hash (e.g. /sessions/2026-06-01#daily-review)
+  // so deep links from the Night Explorer land on the Event Inspector once the
+  // page has finished loading and the section has rendered.
+  useEffect(() => {
+    if (loading || !location.hash) return
+    const target = document.getElementById(location.hash.slice(1))
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [loading, location.hash])
 
   useEffect(() => {
     // These resets intentionally clear the previous session while the new route loads.
@@ -679,7 +689,7 @@ export default function SessionDetail() {
         <SessionAICard sessionId={session.id} />
       </section>
 
-      <section data-testid="graph-review" aria-labelledby="daily-review-heading" className="space-y-4">
+      <section id="daily-review" data-testid="graph-review" aria-labelledby="daily-review-heading" className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--accent)]">Daily review</p>
