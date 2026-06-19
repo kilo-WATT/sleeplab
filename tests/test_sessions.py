@@ -156,10 +156,46 @@ class TestGetSession:
             "events_available": False,
             "therapy_graphs_available": False,
             "event_waveforms_available": False,
+            "event_waveform_source": "none",
             "full_night_flow_available": False,
             "spo2_available": False,
             "settings_available": False,
         }
+
+    def test_chunk_only_waveforms_are_reported_available(
+        self, client: TestClient, auth_headers, test_user, db
+    ):
+        """Chunk-backed parser nights expose Event Inspector waveform coverage."""
+        sid = _seed_session(
+            db,
+            test_user["id"],
+            provenance_status="native_resmed_cpap_parser",
+        )
+        start = datetime(2025, 1, 15, 22, 0, tzinfo=UTC)
+        db.execute(
+            text("""
+                INSERT INTO waveform_chunks (
+                    session_id, signal_name, unit, sample_rate_hz, start_time,
+                    end_time, chunk_index, sample_count, encoding, payload,
+                    uncompressed_bytes, compressed_bytes, adapter_id
+                ) VALUES (
+                    CAST(:sid AS uuid), 'flow_rate', 'L/s', 25, :start,
+                    :start, 0, 1, 'float32-le-zlib-v1', :payload,
+                    4, 1, 'resmed-cpap-parser-v1'
+                )
+            """),
+            {"sid": sid, "start": start, "payload": b"\x00"},
+        )
+        db.commit()
+
+        response = client.get(f"/sessions/{sid}", headers=auth_headers)
+
+        assert response.status_code == 200
+        availability = response.json()["data_availability"]
+        assert availability["waveform_sample_count"] == 0
+        assert availability["event_waveforms_available"] is True
+        assert availability["event_waveform_source"] == "chunks"
+        assert availability["full_night_flow_available"] is True
 
     def test_parser_night_coverage_and_children_are_machine_scoped(
         self,
@@ -252,6 +288,7 @@ class TestGetSession:
             "events_available": True,
             "therapy_graphs_available": True,
             "event_waveforms_available": True,
+            "event_waveform_source": "rows",
             "full_night_flow_available": False,
             "spo2_available": False,
             "settings_available": True,

@@ -1756,6 +1756,13 @@ def _night_data_availability(
                     SELECT 1
                     FROM waveform_chunks wc
                     JOIN night_sessions x ON x.id = wc.session_id
+                    WHERE wc.signal_name IN ('flow_rate', 'pressure')
+                      AND wc.sample_count > 0
+                ) AS has_event_waveform_chunks,
+                EXISTS (
+                    SELECT 1
+                    FROM waveform_chunks wc
+                    JOIN night_sessions x ON x.id = wc.session_id
                     WHERE wc.signal_name = 'flow_rate'
                       AND wc.sample_count > 0
                 ) AS has_full_night_flow,
@@ -1772,6 +1779,12 @@ def _night_data_availability(
     event_count = int(row["event_count"])
     metric_sample_count = int(row["metric_sample_count"])
     waveform_sample_count = int(row["waveform_sample_count"])
+    if row["has_event_waveform_chunks"]:
+        event_waveform_source = "chunks"
+    elif waveform_sample_count > 0:
+        event_waveform_source = "rows"
+    else:
+        event_waveform_source = "none"
     return {
         "import_backend": "cpap-parser" if row["parser_backed"] else "legacy",
         "event_count": event_count,
@@ -1779,7 +1792,8 @@ def _night_data_availability(
         "waveform_sample_count": waveform_sample_count,
         "events_available": event_count > 0,
         "therapy_graphs_available": metric_sample_count > 0,
-        "event_waveforms_available": waveform_sample_count > 0,
+        "event_waveforms_available": event_waveform_source != "none",
+        "event_waveform_source": event_waveform_source,
         "full_night_flow_available": bool(row["has_full_night_flow"]),
         "spo2_available": has_spo2,
         "settings_available": has_inline_settings or bool(row["has_settings_snapshot"]),

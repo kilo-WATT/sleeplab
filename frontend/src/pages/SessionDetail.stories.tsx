@@ -70,6 +70,7 @@ const mockSession = {
     events_available: true,
     therapy_graphs_available: true,
     event_waveforms_available: true,
+    event_waveform_source: 'chunks' as const,
     full_night_flow_available: true,
     spo2_available: false,
     settings_available: true,

@@ -1151,9 +1151,11 @@ function NightDataCoverage({ session }: { session: SessionDetailType }) {
     },
     {
       label: 'Event waveforms',
-      value: availability.event_waveforms_available
-        ? `${availability.waveform_sample_count.toLocaleString()} sample${availability.waveform_sample_count === 1 ? '' : 's'}`
-        : 'Not available',
+      value: availability.event_waveform_source === 'chunks'
+        ? 'Chunk-backed'
+        : availability.event_waveform_source === 'rows'
+          ? `${availability.waveform_sample_count.toLocaleString()} row sample${availability.waveform_sample_count === 1 ? '' : 's'} (fallback)`
+          : 'Not available',
       available: availability.event_waveforms_available,
     },
     {

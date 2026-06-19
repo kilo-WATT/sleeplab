@@ -431,6 +431,7 @@ export interface SessionDetail extends SessionSummary {
     events_available: boolean
     therapy_graphs_available: boolean
     event_waveforms_available: boolean
+    event_waveform_source: 'chunks' | 'rows' | 'none'
     full_night_flow_available: boolean
     spo2_available: boolean
     settings_available: boolean

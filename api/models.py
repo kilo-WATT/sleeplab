@@ -134,6 +134,7 @@ class NightDataAvailability(BaseModel):
     events_available: bool
     therapy_graphs_available: bool
     event_waveforms_available: bool
+    event_waveform_source: Literal["chunks", "rows", "none"]
     full_night_flow_available: bool
     spo2_available: bool
     settings_available: bool

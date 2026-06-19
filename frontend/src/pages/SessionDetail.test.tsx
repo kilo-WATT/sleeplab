@@ -84,6 +84,7 @@ function sessionDetail(machineTz: string | null) {
       events_available: true,
       therapy_graphs_available: false,
       event_waveforms_available: false,
+      event_waveform_source: 'none',
       full_night_flow_available: false,
       spo2_available: false,
       settings_available: false,
@@ -181,6 +182,7 @@ describe('SessionDetail timezone display', () => {
     renderSessionDetail()
 
     expect(await screen.findByText('Nightly data coverage')).toBeInTheDocument()
+    expect(within(screen.getByTestId('nightly-data-coverage')).getByText('Not available')).toBeInTheDocument()
     expect(screen.getAllByText('ResMed cpap-parser').length).toBeGreaterThan(0)
     expect(screen.getByText('2 imported')).toBeInTheDocument()
     expect(screen.getByText('Detailed graph tracks unavailable')).toBeInTheDocument()
@@ -188,6 +190,29 @@ describe('SessionDetail timezone display', () => {
     expect(screen.getByText(/does not yet claim SpO2 or pulse support/)).toBeInTheDocument()
     expect(screen.getByText('Full-night flow unavailable')).toBeInTheDocument()
     expect(screen.getByText(/Re-import this SD card to populate waveform data/)).toBeInTheDocument()
+  })
+
+  it('identifies chunk-backed Event Inspector waveforms in nightly coverage', async () => {
+    const session = sessionDetail('America/New_York')
+    session.data_availability.event_waveforms_available = true
+    session.data_availability.event_waveform_source = 'chunks'
+    apiMock.getSessionByDate.mockResolvedValue(session)
+
+    renderSessionDetail()
+
+    expect(await screen.findByText('Chunk-backed')).toBeInTheDocument()
+  })
+
+  it('identifies row-backed Event Inspector waveforms as the fallback', async () => {
+    const session = sessionDetail('America/New_York')
+    session.data_availability.waveform_sample_count = 42
+    session.data_availability.event_waveforms_available = true
+    session.data_availability.event_waveform_source = 'rows'
+    apiMock.getSessionByDate.mockResolvedValue(session)
+
+    renderSessionDetail()
+
+    expect(await screen.findByText('42 row samples (fallback)')).toBeInTheDocument()
   })
 
   it('renders a coherent daily review workspace with mobile event controls', async () => {
