@@ -22,9 +22,10 @@ const MONTHS_LONG = [
 const DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
 // Diagonal slashes overlaid on a solid color: "used, but not fully recorded".
-// Kept subtle so it reads as a texture cue without overpowering the tile color.
+// Thin, low-opacity, widely spaced so it reads as a faint texture cue rather
+// than bold bands that fight the tile color.
 const SLASH_OVERLAY =
-  'repeating-linear-gradient(45deg, rgba(255,255,255,0.32), rgba(255,255,255,0.32) 1.5px, transparent 1.5px, transparent 6px)'
+  'repeating-linear-gradient(45deg, rgba(255,255,255,0.18), rgba(255,255,255,0.18) 1px, transparent 1px, transparent 8px)'
 // Gray slashes on the card background: past days with no session at all (gaps).
 const EMPTY_HATCH =
   'repeating-linear-gradient(45deg, var(--surface-muted), var(--surface-muted) 4px, transparent 4px, transparent 8px)'
