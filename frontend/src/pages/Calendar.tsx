@@ -6,7 +6,7 @@ import { api } from '../api/client'
 import NightCalendar from '../components/NightCalendar'
 import NightDetailPanel from '../components/NightDetailPanel'
 import { CardSection, MICRO_LABEL } from '../components/nightExplorerUi'
-import { Card, CardContent } from '../components/ui/card'
+import { Card } from '../components/ui/card'
 import { IMPORT_COMPLETED_EVENT } from '../lib/aiSummaryCache'
 import {
   type NightCell,
@@ -134,7 +134,7 @@ export default function CalendarPage() {
   if (sortedDates.length === 0) {
     return (
       <Card>
-        <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+        <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
           <p className="text-lg font-extrabold text-[var(--foreground)]">No nights imported yet</p>
           <p className="max-w-md text-sm text-[var(--muted-foreground)]">
             Once you import therapy data, every night shows up here as a browsable logbook — find a night,
@@ -146,7 +146,7 @@ export default function CalendarPage() {
           >
             Go to import
           </Link>
-        </CardContent>
+        </div>
       </Card>
     )
   }
@@ -262,7 +262,7 @@ export default function CalendarPage() {
 
 function UtilityStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="flex min-w-[8.5rem] flex-1 flex-col gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3.5 py-3">
+    <div className="flex min-w-[8.5rem] flex-1 flex-col gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-3">
       <p className={MICRO_LABEL}>{label}</p>
       <p className="text-base font-extrabold leading-none text-[var(--foreground)]">{value}</p>
       <p className="text-[10px] leading-none text-[var(--muted-foreground)]">{hint ?? ' '}</p>

@@ -8,7 +8,7 @@ import { leakToLpm } from '../lib/units'
 import { CalendarIcon } from './icons/ChevronIcons'
 import { EYEBROW, MICRO_LABEL } from './nightExplorerUi'
 import { Button } from './ui/button'
-import { Card, CardContent } from './ui/card'
+import { Card } from './ui/card'
 
 /** Properties and structure for the night detail panel. */
 interface Props {
@@ -85,7 +85,7 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
   if (!selectedDate || !cell) {
     return (
       <Card className="h-full" data-testid="night-detail-empty">
-        <CardContent className="flex h-full flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
           <span
             className="flex h-11 w-11 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-soft)] text-[var(--accent)]"
             aria-hidden="true"
@@ -98,7 +98,7 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
               Pick a night on the calendar to preview its therapy summary before opening the full session.
             </p>
           </div>
-        </CardContent>
+        </div>
       </Card>
     )
   }
@@ -129,7 +129,7 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
 
   return (
     <Card className="h-full" data-testid="night-detail">
-      <CardContent className="space-y-4 p-5">
+      <div className="space-y-4 p-5">
         <div className="flex min-h-7 items-start justify-between gap-3">
           <div className="min-w-0 space-y-1.5">
             <p className={EYEBROW}>Selected night</p>
@@ -264,7 +264,7 @@ export default function NightDetailPanel({ selectedDate, cell }: Props) {
             </Button>
           ) : null}
         </div>
-      </CardContent>
+      </div>
     </Card>
   )
 }

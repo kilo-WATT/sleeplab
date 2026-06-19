@@ -22,10 +22,10 @@ const MONTHS_LONG = [
 const DAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
 // Diagonal slashes overlaid on a solid color: "used, but not fully recorded".
-// Thin, low-opacity, widely spaced so it reads as a faint texture cue rather
-// than bold bands that fight the tile color.
+// Visible but widely spaced — a clear cue without the dense banding that fights
+// the tile color.
 const SLASH_OVERLAY =
-  'repeating-linear-gradient(45deg, rgba(255,255,255,0.18), rgba(255,255,255,0.18) 1px, transparent 1px, transparent 8px)'
+  'repeating-linear-gradient(45deg, rgba(255,255,255,0.3), rgba(255,255,255,0.3) 1.5px, transparent 1.5px, transparent 16px)'
 // Gray slashes on the card background: past days with no session at all (gaps).
 const EMPTY_HATCH =
   'repeating-linear-gradient(45deg, var(--surface-muted), var(--surface-muted) 4px, transparent 4px, transparent 8px)'
@@ -297,8 +297,8 @@ export default function NightCalendar({ cells, metric, filter, selectedDate, onS
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span
-              className="inline-block h-2.5 w-2.5 rounded-[3px] ring-1 ring-[var(--border)]"
-              style={{ backgroundColor: 'var(--calendar-empty)', backgroundImage: SLASH_OVERLAY }}
+              className="inline-block h-4 w-4 rounded-[4px] ring-1 ring-[var(--border)]"
+              style={{ backgroundColor: '#6AA136', backgroundImage: SLASH_OVERLAY }}
             />
             Used, not recorded
           </span>
