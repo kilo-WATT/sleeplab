@@ -16,22 +16,21 @@ alpha**:
   recording windows.
 - The parser exposes therapy primarily as device-reported totals, not per-mask
   intervals; the nightly view selects the best available therapy accordingly.
-- **Users may need to delete and re-import their data from their SD cards during
-  the 2.0 alpha.** That is an accepted alpha cost.
+- Existing imported histories must remain intact. Cross-backend migration is not
+  automatic; users continue native histories with the explicit fallback.
 
 A "remaining gap" below is therefore only a **blocker** if it risks data loss,
 duplicate imports, bad usage totals, missing core events, broken import history,
 crashes, or database inconsistency. Differences that are merely "not identical to
 legacy" are accepted 2.0 model differences once documented.
 
-Status: **cpap-parser is the 2.0 ResMed target; the runtime default has not been
-flipped yet** — parser packaging is implemented, but the second-card,
-real-SpO2, and parser-enabled CI/DB evidence gates remain. To run SleepLab 2.0 on cpap-parser today, set
-`SLEEPLAB_USE_CPAP_PARSER=1` (the `compose.advanced.yaml`/`.env.example` document
-this).
+Status: **cpap-parser is the default SleepLab 2.0 ResMed route.** The pinned
+runtime is packaged in the release image and same-path re-import is idempotent.
+Set `SLEEPLAB_USE_CPAP_PARSER=0` to select the retained legacy/native fallback,
+including for machines with existing native-imported history.
 
-This document is the short operational view of what remains before SleepLab can
-make `cpap-parser` the *default* ResMed route. It separates three questions that
+This document is the short operational view of remaining parser conformance and
+eventual legacy-retirement work. It separates three questions that
 are easy to blur together:
 
 1. **Can the parser read the card correctly?**
@@ -40,8 +39,8 @@ are easy to blur together:
 
 The committed AirSense 10 fixture gives useful evidence for all three questions,
 but it is one card and it does not exercise usable oximetry. The legacy importer
-remains the runtime default and parity oracle until the before-default gates below
-are met.
+remains an explicit fallback and parity oracle; those evidence gaps constrain
+support claims rather than changing the selected default.
 
 ## What has improved
 
@@ -105,7 +104,7 @@ second card, real oximetry, and a green parser-enabled CI/DB matrix.
 | Duplicate import / same-path re-import safety | **Closed for same-card re-import.** Parser sessions upsert by machine/night key; generated blocks and parser settings are cleared and rewritten; events, channels, metrics, waveform rows, and derived values use replacement writers. | A retry or repeated card upload must not duplicate sessions, events, blocks, settings, or samples. | closed for beta | SleepLab | The parser-backed AirSense 10/Postgres harness imports the same card twice as two durable attempts and proves stable aggregate state for sessions, blocks, settings, events, SpO2 rows, channels, derived values, metrics, waveform rows, and nightly aggregates. `import_runs` intentionally increases from one to two, with one source manifest per attempt. | Keep the double-import test as a release gate; add an expanded-card incremental test when a second safe fixture exists. |
 | Cross-path dedupe after a flag change | **Explicit reset policy enforced.** Legacy and parser keys still differ, so `/source` rejects an opposite-backend ResMed history before creating a run. | Prevents silent parallel rows while preserving user-owned data from automatic deletion. | closed beta policy; migration remains RC work | SleepLab | Database-backed mixed-history route test. | Build preservation-aware migration before RC. |
 | `cpap-py` dependency/runtime posture | The immutable parser revision is in the optional `parser` extra and lockfile, Docker installs it, and Linux CI installs and verifies both modules. Windows may still need native build tools when no wheel is available. | Clean installs and CI now have an explicit supported parser path. | implementation closed; CI evidence pending | SleepLab | `pyproject.toml`, `uv.lock`, Dockerfile, CI runtime check, missing-runtime route test. | Keep the parser-enabled CI job green and document platform limitations. |
-| `/source/{id}/finish` flag behavior | The endpoint honors `SLEEPLAB_USE_CPAP_PARSER`; default remains off. Detection/planning are shared and execution branches after the durable run is created. `/config` reports the selected backend and parser runtime availability. | This is the actual switch point, so status, failures, cleanup, and import-run completion must remain truthful. | reduced blocker | SleepLab | Route tests prove flag-on schedules the parser task and flag-off schedules legacy. Config tests prove the selected backend is visible. | Add database-backed route coverage for success, missing backend, parser failure, durable run status, and cleanup. |
+| `/source/{id}/finish` flag behavior | The endpoint honors `SLEEPLAB_USE_CPAP_PARSER`; default and flag-on select parser, while `0` selects legacy/native fallback. Detection/planning are shared and execution branches after the durable run is created. `/config` reports the selected backend and parser runtime availability. | This is the actual switch point, so status, failures, cleanup, and import-run completion must remain truthful. | closed for default selection | SleepLab | Route tests prove unset/default and flag-on schedule parser, while flag-off schedules legacy. Config tests prove the selected backend is visible. | Keep database-backed route coverage for success, missing backend, parser failure, durable run status, and cleanup. |
 | `/datalog/*` behavior | Explicitly legacy-only for beta and disabled with HTTP 409 while parser mode is selected. Local triggers and webhooks follow the same rule. | Prevents accidental mixed-path imports while retaining a rollback path. | closed beta policy | SleepLab | Route/config/local-trigger tests. | Revisit only with a full-card server-side parser flow. |
 | Second ResMed card and private soak | Only one anonymized AirSense 10 card is in the repeatable parser-backed evidence set. **A private, local-only dual-path soak against a real multi-night card has now been run** (aggregate-only, nothing committed); it confirmed the recording-span/summary-only fixes hold at scale (e.g. exact low-rate `session_metrics` parity over hundreds of thousands of rows) and surfaced the two findings above (data-dependent usage overcount; a small event-total divergence, **now decided** as an accepted device-scored-event policy — Option A, preserve the full device-scored list — not a parser overcount). No committed two-path soak *report* exists, and no second committed fixture exists. | One device/card cannot cover firmware, split sessions, clock behavior, real SpO2, or unknown layouts. | must fix before cutover | test data needed | Fixture matrix requires at least two independent ResMed fixtures; current committed parity figures come from one card. | Obtain a second safe fixture with immutable hashes; keep the private soak local-only. |
 | User-visible import history and diagnostics | Durable runs and source manifests exist, but parser provenance is partial and route-level failure/status behavior is not fully exercised. | The UI and API must not claim files were unused, data was complete, or import succeeded when evidence is partial. | must fix before cutover | SleepLab | Manifest parity is honest in tests; parser execution has failure handling, but row-level source linkage is mostly absent. | Audit import-history wording and status transitions against parser success, partial provenance, and failure cases. |
@@ -121,7 +120,7 @@ second card, real oximetry, and a green parser-enabled CI/DB matrix.
    **decided**: SleepLab 2.0 preserves the full device-scored list, so parser ≥
    legacy is the accepted policy — just guard against duplicates.)
 2. Define and test the legacy-to-night-level migration and cross-path dedupe
-   strategy (**the remaining hard blocker** for flipping the default safely).
+   strategy before any automatic backend migration or legacy retirement.
 3. Decide the supported `cpap-py` runtime, packaging, and CI posture.
 4. Add a private-card, local-only dual-path soak report if suitable data is
    available. Do not commit the card or identifying output.
@@ -171,8 +170,8 @@ Option A (upstream per-mask STR intervals so the parser can persist
 `resmed_str_mask_interval` blocks) is still desirable for *block-level* labeling,
 but it no longer affects the usage number.
 
-The next real blocker is **cross-path dedupe and the legacy-to-night-level
-migration**: enabling the flag for a user with legacy history must not create
-parallel rows for the same therapy night. Implement and test that around the
-night-level ownership rules before flipping the runtime default. During 2.0 alpha,
-the accepted interim is that **users may delete and re-import their card data**.
+The next retirement blocker is **cross-path dedupe and the legacy-to-night-level
+migration**: selecting parser for a user with legacy history must not create
+parallel rows for the same therapy night. Until a preservation-aware migration
+exists, the route blocks cross-backend writes and users continue that history by
+selecting the legacy/native fallback.

@@ -2,8 +2,10 @@
 
 ## 1. What works now
 
-The `cpap-parser` ResMed path is the SleepLab 2.0 target. Root-folder `/source`
-imports select it with `SLEEPLAB_USE_CPAP_PARSER=1`. Same-card parser re-imports
+The `cpap-parser` ResMed path is the default and recommended SleepLab 2.0 path.
+Root-folder `/source` imports select it unless
+`SLEEPLAB_USE_CPAP_PARSER=0` explicitly selects the legacy/native fallback.
+Same-card parser re-imports
 replace normalized data without duplication while retaining a durable
 `import_runs` record for every attempt.
 
@@ -30,20 +32,17 @@ import fails before creating an import run when the runtime is absent.
   `therapy_mode`.
 - Beta keeps event-window waveform storage.
 
-## 3. Delete and re-import policy
+## 3. Existing-history preservation policy
 
-Beta uses an explicit reset policy for backend switching. `/source` detects an
-existing ResMed history from the opposite backend and returns HTTP 409 before
-creating a new import run. It does not silently duplicate nights or delete
-notes, tags, oximetry, and other user-owned data.
+`/source` detects an existing ResMed history from the opposite backend and
+returns HTTP 409 before creating a new import run. It does not duplicate nights,
+rewrite sessions, or delete notes, tags, oximetry, and other user-owned data.
 
-To switch:
-
-1. Back up the database.
-2. Use **Delete all session data** (`DELETE /sessions/all`).
-3. Select one backend and restart SleepLab.
-4. Confirm `/config` reports the expected backend and readiness.
-5. Re-import the full card through `/source`.
+For a machine previously imported by the legacy/native backend, set
+`SLEEPLAB_USE_CPAP_PARSER=0`, restart SleepLab, and continue importing through
+that fallback. `/config` reports the selected backend and readiness. Switching
+an existing machine between backends remains an explicit future migration task;
+deleting existing data is not part of the default-readiness workflow.
 
 Automatic preservation-aware migration remains RC work.
 

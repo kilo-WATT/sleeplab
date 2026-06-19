@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 
 import { api } from '../api/client'
-import type { ImportPlanResponse, ImportRunSummary, OximeterImportResponse } from '../api/client'
+import type { AppConfig, ImportPlanResponse, ImportRunSummary, OximeterImportResponse } from '../api/client'
 import {
   ActivityIcon,
   CheckCircleIcon,
@@ -54,6 +54,7 @@ export default function Import() {
   const [importRuns, setImportRuns] = useState<ImportRunSummary[]>([])
   const [sourceImportMessage, setSourceImportMessage] = useState<string | null>(null)
   const [progressNow, setProgressNow] = useState(0)
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
 
   // Which import source the workflow area is showing.
   const [selectedSource, setSelectedSource] = useState<ImportSource>('cpap')
@@ -81,6 +82,10 @@ export default function Import() {
   const [oximeterOverwrite, setOximeterOverwrite] = useState(false)
   const [oximeterResult, setOximeterResult] = useState<OximeterImportResponse | null>(null)
   const [oximeterError, setOximeterError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void api.getAppConfig().then(setAppConfig).catch(() => {})
+  }, [])
 
   useEffect(() => {
     api
@@ -406,10 +411,22 @@ export default function Import() {
       {selectedSource === 'cpap' ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">CPAP SD card import</CardTitle>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="text-lg">CPAP SD card import</CardTitle>
+              {appConfig ? (
+                <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-xs font-bold text-[var(--accent)]">
+                  {appConfig.resmed_import_backend === 'cpap-parser'
+                    ? 'Recommended ResMed parser'
+                    : 'Legacy/native fallback'}
+                </span>
+              ) : null}
+            </div>
             <CardDescription>
               Select the <span className="font-bold text-[var(--foreground)]">SD card or root folder</span>. SleepLab
-              inspects its structure, identifies the machine, and shows what the loader can read before importing.
+              inspects its structure, identifies the machine, and shows what the loader can read before importing.{' '}
+              {appConfig?.resmed_import_backend === 'legacy'
+                ? 'This server is configured to use the legacy/native ResMed fallback.'
+                : 'ResMed cards use the recommended SleepLab 2.0 parser by default.'}
             </CardDescription>
           </CardHeader>
           <CardContent>

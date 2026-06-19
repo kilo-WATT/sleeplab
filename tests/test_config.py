@@ -12,16 +12,17 @@ class TestGetConfig:
         """Test defaults to utc."""
         monkeypatch.delenv("DISPLAY_TZ", raising=False)
         monkeypatch.delenv("MACHINE_TZ", raising=False)
+        monkeypatch.delenv("SLEEPLAB_USE_CPAP_PARSER", raising=False)
         resp = client.get("/config")
         assert resp.status_code == 200
         data = resp.json()
         assert data["display_tz"] == "UTC"
         assert data["machine_tz"] == "UTC"
-        assert data["resmed_import_backend"] == "legacy"
+        assert data["resmed_import_backend"] == "cpap-parser"
         assert isinstance(data["cpap_parser_available"], bool)
-        assert data["resmed_import_ready"] is True
+        assert data["resmed_import_ready"] is data["cpap_parser_available"]
         assert data["datalog_import_backend"] == "legacy"
-        assert data["datalog_import_available"] is True
+        assert data["datalog_import_available"] is False
         assert data["cpap_parser_oximetry_supported"] is False
         assert data["cpap_parser_source_provenance"] == "manifest-level-partial"
 
@@ -35,16 +36,16 @@ class TestGetConfig:
         assert data["display_tz"] == "America/New_York"
         assert data["machine_tz"] == "America/Chicago"
 
-    def test_reports_selected_resmed_backend(self, monkeypatch):
-        monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", "1")
+    def test_reports_legacy_fallback_selection(self, monkeypatch):
+        monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", "0")
 
         resp = client.get("/config")
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["resmed_import_backend"] == "cpap-parser"
-        assert data["datalog_import_available"] is False
-        assert data["resmed_import_ready"] is data["cpap_parser_available"]
+        assert data["resmed_import_backend"] == "legacy"
+        assert data["datalog_import_available"] is True
+        assert data["resmed_import_ready"] is True
 
     def test_no_auth_required(self):
         """Test no auth required."""

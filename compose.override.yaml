@@ -7,9 +7,8 @@ services:
     environment:
       API_URL: http://localhost:8000
       CORS_ALLOWED_ORIGINS: "*"
-      # cpap-parser is the SleepLab 2.0 ResMed import target. Enable the in-process
-      # cpap-parser execution path (ResMedNativeLoader) for local 2.0. The code
-      # default is off (legacy fallback); this override runs 2.0 on cpap-parser.
+      # Keep local builds explicit about using the recommended/default parser path.
+      # Set to "0" to exercise the legacy/native fallback.
       SLEEPLAB_USE_CPAP_PARSER: "1"
     ports:
       - "8080:8080"

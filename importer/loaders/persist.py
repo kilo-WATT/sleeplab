@@ -9,8 +9,9 @@ runs and writes it through the existing ``importer.db`` helpers, reusing exactly
 the same upsert/replace functions the legacy native subprocess uses.
 
 It is called by the loader-registry execution path in
-:mod:`importer.loaders.execution` (gated behind ``SLEEPLAB_USE_CPAP_PARSER=1``),
-never by the default subprocess importer.
+:mod:`importer.loaders.execution` (the default ResMed path, with
+``SLEEPLAB_USE_CPAP_PARSER=0`` selecting the legacy fallback),
+never by the legacy subprocess importer.
 
 Documented mapping gaps (``ImportRun`` -> ``sessions``/sample tables)
 --------------------------------------------------------------------

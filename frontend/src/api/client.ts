@@ -687,6 +687,13 @@ export interface OverviewStats {
 export interface AppConfig {
   display_tz: string
   machine_tz: string
+  resmed_import_backend: 'cpap-parser' | 'legacy'
+  cpap_parser_available: boolean
+  resmed_import_ready: boolean
+  datalog_import_backend: 'legacy'
+  datalog_import_available: boolean
+  cpap_parser_oximetry_supported: boolean
+  cpap_parser_source_provenance: string
 }
 
 /**

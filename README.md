@@ -344,19 +344,28 @@ Relevant files:
 
 ## Importing Data
 
-SleepLab imports ResMed SD card data from a `DATALOG` folder.
+SleepLab imports ResMed SD card data through the recommended SleepLab 2.0
+`cpap-parser` path by default. Select the SD card root (the folder containing
+`STR.edf` and `DATALOG`) so SleepLab can inspect and import the complete source.
 
 In the UI:
 
 1. Create an account or log in.
 2. Open the import screen.
-3. Select the `DATALOG` folder from the SD card.
+3. Select the SD card root folder.
 4. The frontend uploads the files in batches to the API.
 5. The API runs the importer in the background and writes parsed sessions into Postgres.
 
-The upload/import endpoints are implemented in [`api/routers/upload.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/routers/upload.py), and the importer lives in [`importer/import_sessions.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/importer/import_sessions.py).
+The upload/import endpoints are implemented in `api/routers/upload.py`. The
+default parser loader lives under `importer/loaders/`; the older native importer
+in `importer/import_sessions.py` remains available as an explicit fallback.
 
-You can also run the importer manually:
+To select the legacy/native fallback, set `SLEEPLAB_USE_CPAP_PARSER=0` and
+restart SleepLab. This is useful for continuing a machine history originally
+created by that backend. SleepLab does not rewrite existing sessions or mix the
+two backends for one machine.
+
+You can also run the legacy/native importer manually:
 
 ```bash
 cd importer

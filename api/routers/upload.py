@@ -230,12 +230,11 @@ def _run_cpap_parser_import(
     machine_id: str,
     cleanup_dir: str | None = None,
 ) -> None:
-    """Run the opt-in cpap-parser execution path in the background.
+    """Run the default cpap-parser execution path in the background.
 
     Mirrors :func:`_run_import`'s status/cleanup contract but drives
     ``ResMedNativeLoader`` in-process (via the loader registry execution path)
-    instead of spawning the legacy importer subprocess. Used only when
-    ``SLEEPLAB_USE_CPAP_PARSER=1``.
+    instead of spawning the legacy importer subprocess.
     """
     try:
         counts = run_cpap_parser_import(
@@ -477,7 +476,7 @@ def finish_source_import(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Start the existing native importer for a detected ResMed source."""
+    """Start the selected importer for a detected ResMed source."""
 
     session = _require_session(upload_id, current_user["id"])
     plan = create_import_plan(session.source_root)
@@ -506,9 +505,10 @@ def finish_source_import(
             status_code=409,
             detail=(
                 "This ResMed machine already has sessions imported by the other "
-                "backend. SleepLab 2.0 beta does not mix legacy and cpap-parser "
-                "histories. Back up the database, delete existing imported session "
-                "data, then re-import the full card with one backend."
+                "backend. SleepLab does not mix legacy/native and cpap-parser "
+                "histories for one machine. Existing sessions remain unchanged; "
+                "set SLEEPLAB_USE_CPAP_PARSER=0 to continue importing this machine "
+                "through the legacy/native fallback."
             ),
         )
 
@@ -532,12 +532,10 @@ def finish_source_import(
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)
     # Detection/planning always run through the registry; only execution differs.
-    # cpap-parser is the SleepLab 2.0 ResMed target: when SLEEPLAB_USE_CPAP_PARSER=1
+    # cpap-parser is the default SleepLab 2.0 ResMed path. When selected,
     # we route through the in-process cpap-parser loader
     # (ResMedNativeLoader.import_data -> persist_import_run). The legacy native
-    # importer subprocess is retained as the fallback/rollback path and stays the
-    # runtime default until the cpap-py runtime posture is settled (see
-    # docs/sleeplab_2_resmed_cutover_remaining_work.md).
+    # importer subprocess is retained as the explicit fallback/rollback path.
     if parser_selected:
         logger.info(
             "Routing import run %s through the cpap-parser loader (SLEEPLAB_USE_CPAP_PARSER=1).",

@@ -80,9 +80,10 @@ events, signal metadata, derived values, low-rate metrics, and event-window
 waveforms. A separate `import_runs` row and source manifest remain for every
 attempt. Legacy-to-parser transition is not automatic. The `/source` route
 rejects an existing machine history from the opposite backend before it creates
-a new import run. Users must back up, clear imported session data, and re-import
-because silently deleting or merging legacy rows could lose notes, tags,
-oximetry, or other user-owned data.
+a new import run. Existing rows remain visible and unchanged. Set
+`SLEEPLAB_USE_CPAP_PARSER=0` to continue that machine through the legacy/native
+fallback; SleepLab does not silently delete or merge rows that may own notes,
+tags, oximetry, or other user data.
 
 `nightly_therapy_aggregates` derives a machine/night read model:
 

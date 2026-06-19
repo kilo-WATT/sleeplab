@@ -158,7 +158,7 @@ def create_default_registry() -> LoaderRegistry:
 
 
 def create_execution_registry() -> LoaderRegistry:
-    """Registry for the opt-in execution path, flag-gated by env var.
+    """Registry for execution, with the parser adapter selected by env var.
 
     When ``SLEEPLAB_USE_CPAP_PARSER=1`` this additionally registers
     :class:`~importer.loaders.resmed_native.ResMedNativeLoader` (priority 20, so it

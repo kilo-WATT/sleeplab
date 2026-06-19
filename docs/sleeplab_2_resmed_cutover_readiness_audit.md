@@ -4,10 +4,11 @@
 architecture. The legacy native importer is a fallback/rollback and a parity
 oracle, not the goal — **exact old-vs-new row parity is no longer required**, and
 **breaking old importer assumptions (including users having to delete/re-import
-card data during alpha) is acceptable.** This audit therefore measures *safety to
-flip the runtime default*, not fidelity to legacy rows.
+card data during alpha) was historically acceptable.** This audit now records
+the completed default flip and remaining retirement work, not fidelity to legacy
+rows.
 
-Status: **cpap-parser is the 2.0 target; runtime default not yet flipped.** The
+Status: **cpap-parser is the 2.0 target and runtime default.** The
 therapy-usage reconciliation that used to block this is now resolved (migration
 `025_prefer_authoritative_therapy_usage.sql` — best-available therapy priority).
 The remaining gates are cross-path dedupe/migration safety, the `cpap-py`
@@ -17,9 +18,9 @@ document inventories those, grounded in the current code, and cross-references t
 retirement-evidence list in `docs/sleeplab_2_loader_and_conformance_plan.md`.
 
 For the concise owner/category/next-task view, see
-`docs/sleeplab_2_resmed_cutover_remaining_work.md`. Recommendation: cpap-parser is
-the target and is enabled with `SLEEPLAB_USE_CPAP_PARSER=1`; do not flip the
-*default* until the dedupe/runtime/routing/soak gates are met.
+`docs/sleeplab_2_resmed_cutover_remaining_work.md`. The legacy/native importer is
+retained with `SLEEPLAB_USE_CPAP_PARSER=0` for rollback and for continuing
+existing native-imported machine histories.
 
 ## Beta-hardening update
 
@@ -30,13 +31,13 @@ metadata, derived values, metrics, waveform rows, and nightly aggregates.
 Parser-owned blocks and settings are authoritative replacements, so corrected
 input can remove stale children instead of only upserting new rows.
 
-The runtime default remains unchanged. Route tests now prove flag-on selects the
-parser task and flag-off selects legacy, while `/config` reports both the
+The runtime default is now cpap-parser. Route tests prove the unset/default and
+flag-on cases select the parser task while flag-off selects legacy; `/config` reports both the
 selected backend and parser runtime availability. Cross-path legacy-to-parser
 dedupe is still not automatic because deleting legacy sessions could silently
 discard notes, tags, oximetry, or other user-owned data. The supported alpha/beta
-transition is an explicit backup, clear, and SD-card re-import workflow documented
-in `docs/sleeplab_2_beta_readiness_plan.md`.
+transition remains blocked before mutation. Existing data stays visible and
+unchanged; selecting the legacy/native fallback allows that history to continue.
 
 ## 1. Scope and method
 
@@ -55,13 +56,11 @@ The comparison is at the **persisted-row** level (what lands in the database),
 because that is what a production cutover changes — normalized `ImportRun`
 conformance (already strong) is necessary but not sufficient.
 
-## 2. Current routing state (no change proposed here)
+## 2. Current routing state
 
-- A feature flag already exists: `use_cpap_parser()` reads
-  `SLEEPLAB_USE_CPAP_PARSER` (`execution.py`), **default off** at runtime even
-  though cpap-parser is the 2.0 target — the default stays off only until the
-  `cpap-py` runtime gate is met. `compose.override.yaml` and `.env.example`
-  document enabling it (`SLEEPLAB_USE_CPAP_PARSER=1`) for 2.0 dev/alpha.
+- `use_cpap_parser()` reads `SLEEPLAB_USE_CPAP_PARSER` (`execution.py`) and
+  defaults on. `.env.example` and all compose examples use `1`; setting `0`
+  explicitly selects the legacy/native fallback.
 - `POST /source/{id}/finish` (`upload.py:461`) honors the flag — flag on →
   `run_cpap_parser_import` (in-process loader → `persist_import_run`); flag off →
   legacy subprocess. Detection/planning are shared (`resmed-native-v2`) regardless.
@@ -91,7 +90,7 @@ parity/polish. "Evidence" = what proves it today (or its absence).
 | 8 | **Signal-channel source** | from raw EDF header `replace_signal_channels(header=…)` (`import_sessions.py:388`) | from `ImportRun.signals` metadata (`persist.py:343`) | Different source; channel set/units/rates parity unproven | **P1** | both code paths |
 | 9 | **Event-type vocabulary** | raw labels; AHI counts via `_AHI_EVENT_TYPES` | same raw labels + loader-derived `Large Leak` rows; **not** OSCAR enum | Persisted `session_events.event_type` vocabulary is SleepLab-normalized, not OSCAR parity; `Large Leak` becomes an event row | **P1** | gap audit §12; `persist.py:66,214` |
 | 10 | **`leak_unit` label** | `'L/s'` (`import_sessions.py:302`) | `'L/min'` (`persist.py:304`) | Direct metadata mismatch between paths (plan criterion: "leak unit/kind … match") | **P2** | both code paths |
-| 11 | **`session_id` / dedupe** | block-scoped id; `source_session_key` legacy | `cpapparser_{date}`; `source_session_key=resmed:{key}:{date}` | Keys do not dedupe, so beta enforces delete-and-reimport and rejects mixed histories before run creation | **Closed beta policy / RC migration remains** | DB-backed route test |
+| 11 | **`session_id` / dedupe** | block-scoped id; `source_session_key` legacy | `cpapparser_{date}`; `source_session_key=resmed:{key}:{date}` | Keys do not dedupe across backends, so mixed histories are rejected before run creation and existing rows remain unchanged | **Closed default-safety policy / RC migration remains** | DB-backed route test |
 | 12 | **TZ/DST + cross-midnight** | localizes EDF instants with `machine_tz` | same localization (`persist.py:158`) | Not yet conformance-proven on the new path (plan criterion) | **P2** | no targeted test |
 | 13 | **`cpap-py` dependency** | not required | pinned optional extra, locked, installed in Docker/Linux CI | Runtime packaging is explicit; green CI evidence remains | **Closed implementation / evidence pending** | pyproject, lockfile, CI |
 | 14 | **`/datalog/*` endpoint** | legacy subprocess only | explicitly disabled in parser mode | Prevents mixed-path imports during beta | **Closed beta policy** | route/config tests |
@@ -149,10 +148,11 @@ Each step is small and safe on its own; persistence/routing/dependency steps are
    mode; use `/source`.
 9. **Acquire a second independent anonymized ResMed fixture** (P1 #15) for
    retirement evidence; blocked on a safe contributed/anonymized card.
-10. **Soak**: run both paths in parallel on real imports, diff, no parser-backed
-    writes (plan criterion) before flipping the default.
-11. **Flip `SLEEPLAB_USE_CPAP_PARSER` default** — only after 1–10. Explicit
-    **stop-and-ask**; this is the cutover.
+10. **Soak**: keep running both paths against safe fixtures/private-card evidence
+    to inform eventual legacy retirement and broaden support claims.
+11. **Flip `SLEEPLAB_USE_CPAP_PARSER` default** — **DONE.** Parser is the normal
+    route; legacy/native remains an explicit fallback and no existing history is
+    rewritten.
 
 ## 5a. DB parity harness — BUILT (step 1 done)
 

@@ -8,7 +8,8 @@ import { shouldDismissImportRunOnNavigation, shouldPollImportRuns } from '../com
 import { collectOximeterFilesFromInput } from '../lib/oximeterFiles'
 import ImportPage, { ImportProgressCard, LoaderInspectionPanel, SourceInspectedCallout } from './Import'
 
-const { mockGetImportRuns, mockGetImportSettings, mockDiscardSourceUpload } = vi.hoisted(() => ({
+const { mockGetAppConfig, mockGetImportRuns, mockGetImportSettings, mockDiscardSourceUpload } = vi.hoisted(() => ({
+  mockGetAppConfig: vi.fn(),
   mockGetImportRuns: vi.fn(),
   mockGetImportSettings: vi.fn(),
   mockDiscardSourceUpload: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock('../api/client', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
+      getAppConfig: mockGetAppConfig,
       getImportRuns: mockGetImportRuns,
       getImportSettings: mockGetImportSettings,
       discardSourceUpload: mockDiscardSourceUpload,
@@ -30,6 +32,50 @@ vi.mock('../api/client', async (importOriginal) => {
 function file(name: string) {
   return new File(['data'], name, { type: 'application/octet-stream' })
 }
+
+beforeEach(() => {
+  mockGetAppConfig.mockResolvedValue({
+    display_tz: 'UTC',
+    machine_tz: 'UTC',
+    resmed_import_backend: 'cpap-parser',
+    cpap_parser_available: true,
+    resmed_import_ready: true,
+    datalog_import_backend: 'legacy',
+    datalog_import_available: false,
+    cpap_parser_oximetry_supported: false,
+    cpap_parser_source_provenance: 'manifest-level-partial',
+  })
+  mockGetImportRuns.mockResolvedValue([])
+  mockGetImportSettings.mockResolvedValue({
+    local_datalog_path: null,
+    last_local_import_at: null,
+    last_local_import_status: null,
+    sleephq_enabled: false,
+  })
+  mockDiscardSourceUpload.mockResolvedValue({ status: 'discarded' })
+})
+
+describe('ResMed import backend label', () => {
+  it('presents cpap-parser as the recommended default', async () => {
+    render(<MemoryRouter><ImportPage /></MemoryRouter>)
+
+    expect(await screen.findByText('Recommended ResMed parser')).toBeInTheDocument()
+    expect(screen.getByText(/recommended SleepLab 2.0 parser by default/i)).toBeInTheDocument()
+  })
+
+  it('presents native mode as the fallback', async () => {
+    mockGetAppConfig.mockResolvedValueOnce({
+      ...(await mockGetAppConfig()),
+      resmed_import_backend: 'legacy',
+      datalog_import_available: true,
+    })
+
+    render(<MemoryRouter><ImportPage /></MemoryRouter>)
+
+    expect(await screen.findByText('Legacy/native fallback')).toBeInTheDocument()
+    expect(screen.getByText(/configured to use the legacy\/native ResMed fallback/i)).toBeInTheDocument()
+  })
+})
 
 describe('collectOximeterFilesFromInput', () => {
   it('keeps extensionless Viatom filenames', () => {

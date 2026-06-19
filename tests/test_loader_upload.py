@@ -144,6 +144,7 @@ def test_source_upload_can_be_discarded_after_inspection():
 @pytest.mark.parametrize(
     ("flag_value", "expected_task"),
     [
+        (None, upload._run_cpap_parser_import),
         ("1", upload._run_cpap_parser_import),
         ("0", upload._run_import),
     ],
@@ -161,7 +162,10 @@ def test_source_finish_routes_by_cpap_parser_flag(monkeypatch, flag_value, expec
             current_user={"id": "route-user"},
         )
         inspect_uploaded_source(upload_id, current_user={"id": "route-user"})
-        monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", flag_value)
+        if flag_value is None:
+            monkeypatch.delenv("SLEEPLAB_USE_CPAP_PARSER", raising=False)
+        else:
+            monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", flag_value)
         monkeypatch.setattr(upload, "cpap_parser_runtime_available", lambda: True)
         monkeypatch.setattr(upload, "resmed_backend_conflict", lambda *_args, **_kwargs: False)
         monkeypatch.setattr(upload, "reusable_import_run", lambda *_args, **_kwargs: None)
@@ -327,7 +331,8 @@ def test_source_finish_rejects_mixed_legacy_history(db, test_user, monkeypatch):
             )
 
         assert exc_info.value.status_code == 409
-        assert "delete existing imported session data" in exc_info.value.detail
+        assert "Existing sessions remain unchanged" in exc_info.value.detail
+        assert "SLEEPLAB_USE_CPAP_PARSER=0" in exc_info.value.detail
     finally:
         UPLOAD_SESSIONS.pop(upload_id, None)
         shutil.rmtree(temp_root, ignore_errors=True)
