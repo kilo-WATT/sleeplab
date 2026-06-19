@@ -354,3 +354,27 @@ literals are sanitized as a second precaution. It reports aggregate session
 coverage across the two waveform stores because Phase 2 is not cutover-ready
 while any `session_waveform` session lacks chunks. Its recommendation is
 deliberately conservative and does not authorize a migration.
+
+### Validating row/chunk waveform parity
+
+Before a chunk-canonical reader cutover, compare representative windows from
+sessions populated in both stores:
+
+```powershell
+$env:DATABASE_URL = 'postgresql+psycopg2://user:password@localhost:5432/cpap_copy'
+uv run python scripts/waveform_parity_validator.py --sessions 5 --window-seconds 300 --output waveform-parity-report.md
+```
+
+The validator uses a read-only transaction and compares the row-backed `flow`
+and `pressure` windows with decoded chunk-backed `flow_rate` and `pressure`
+windows. It checks ordered timestamp alignment, sample and null counts,
+individual value tolerances, and min/max/mean parity. Defaults reflect the row
+store's existing rounding (0.0001 for flow and 0.0051 for pressure), plus a
+0.5 ms timestamp tolerance. `--value-tolerance` overrides both signal defaults;
+`--timestamp-tolerance-ms` controls timestamp matching.
+
+The command exits zero only when at least one window was compared and every
+comparison passed. Its Markdown contains anonymous window numbers, counts,
+pass/fail results, and aggregate differences only. It never includes session
+IDs, exact timestamps, waveform values, patient/device details, provenance, or
+source paths. Keep reports from real databases outside source control.
