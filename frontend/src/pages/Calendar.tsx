@@ -159,7 +159,7 @@ export default function CalendarPage() {
   return (
     <div className="space-y-5">
       {/* Compact utility strip — navigation-focused, not a dashboard */}
-      <div className="flex flex-wrap items-stretch gap-2 sm:gap-3" data-testid="calendar-utility-bar">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4" data-testid="calendar-utility-bar">
         <UtilityStat label="Nights with data" value={String(nightsWithData)} />
         <UtilityStat label="Current streak" value={`${streak} ${streak === 1 ? 'night' : 'nights'}`} />
         <UtilityStat label="Range" value={rangeLabel} />
@@ -262,7 +262,7 @@ export default function CalendarPage() {
 
 function UtilityStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="flex min-w-[8.5rem] flex-1 flex-col gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-3">
+    <div className="flex flex-col gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--card)] px-3.5 py-3">
       <p className={EYEBROW}>{label}</p>
       <p className="text-base font-extrabold leading-none text-[var(--foreground)]">{value}</p>
       <p className="text-[10px] leading-none text-[var(--muted-foreground)]">{hint ?? ' '}</p>
