@@ -179,7 +179,7 @@ and validation below.
   counters reflect only the queries this developer ran against this dataset.
   Production plans depend on data distribution and statistics. **No index is
   added, dropped, or altered without `EXPLAIN (ANALYZE, BUFFERS)` on a realistic
-  database** (see §9).
+  database** (see §10).
 
 ## 6. Phase 1 option — shrink `session_waveform` in place
 
@@ -232,10 +232,8 @@ row-per-sample high-rate table rather than shrinking it.
   sessions a canonical full-night store. This must preserve current native
   behavior and remain the regression oracle (Alpha-6 constraint).
 
-- **Event Inspector decodes windows from chunks.** `decode_window` already
-  accepts `start_time`/`end_time`, so the Event Inspector could read its
-  ±120/180 s windows by decoding the overlapping chunks instead of scanning
-  `session_waveform`.
+- **Event Inspector decodes windows from chunks.** This reader cutover is now
+  implemented with a `session_waveform` fallback; see §8.
 
 - **`session_waveform` becomes a cache or is retired.** Once the native path
   writes chunks and the Event Inspector reads from them, `session_waveform` is
@@ -251,19 +249,33 @@ row-per-sample high-rate table rather than shrinking it.
 
 - **Retention settings for old detailed data.** A retention/decimation policy
   (e.g. keep raw chunks for N days, then keep only rollups) bounds long-term
-  growth. Policy choice is an open question (§8).
+  growth. Policy choice is an open question (§9).
 
-## 8. Open questions
+## 8. Event Inspector preferred read path
 
-- **Does `session_waveform` duplicate `waveform_chunks` for all parser
-  sessions?** For parser-path sessions it appears to be a strict event-window
-  *subset* of the full-night chunks. This must be confirmed empirically (do all
-  parser sessions with `session_waveform` rows also have covering chunks, with
-  matching values within the windows?).
+The Event Inspector now reads overlapping `flow_rate` and `pressure` data from
+`waveform_chunks` first, decodes the requested event window, and merges both
+signals into the existing columnar `timestamps` / `flow` / `pressure` response.
+This preserves the frontend API contract and its current empty-window behavior.
 
-- **What exact API queries depend on `session_waveform`?** The Event Inspector
-  window query is the known reader; a full audit (including any reports, exports,
-  tests, or ad-hoc tools) is required before retiring the table.
+If no relevant chunks overlap the requested window, the reader falls back to
+the existing `session_waveform` query. The fallback is intentionally retained
+for legacy and partially populated nights; `session_waveform` is not deleted and
+import routing is unchanged. Chunk rows win when both stores contain the window,
+so the row table is now a compatibility fallback for this reader rather than its
+preferred source.
+
+## 9. Open questions
+
+- **Does `session_waveform` duplicate `waveform_chunks` for every future input?**
+  Current local validation found that all row-backed parser sessions also had
+  chunks, and 10 anonymous signal windows passed value/timestamp/null parity.
+  The fallback remains necessary for legacy and partially populated databases.
+
+- **What non-Event-Inspector consumers still depend on `session_waveform`?** The
+  runtime Event Inspector reader has moved to chunks-first behavior, but reports,
+  diagnostics, tests, and ad-hoc tooling must still be audited before retiring
+  the table.
 
 - **Can the native ResMed import write chunks without losing current behavior?**
   The native path must remain the production oracle; adding chunk writes must be
@@ -280,7 +292,7 @@ row-per-sample high-rate table rather than shrinking it.
   operational complexity, byte-range read design, and consistency. Out of scope
   here; flagged for a later decision.
 
-## 9. Required validation before any code
+## 10. Required validation before any schema migration
 
 No migration is written until these are gathered from a **realistic** database
 (ideally a copy of the alpha DB), not assumed from local counters:
@@ -310,11 +322,11 @@ No migration is written until these are gathered from a **realistic** database
    duration, how to restore the prior shape, and confirmation that importer
    `INSERT` paths and API readers tolerate the new schema.
 
-## 10. Proposed next decision
+## 11. Proposed next decision
 
 **Do not start Phase 1 or Phase 2 yet.** First land a small,
 non-schema-changing **diagnostic / reporting PR or runbook** that gathers, from a
-real alpha DB, the artifacts in §9: the `(session_id, ts)` uniqueness check, the
+real alpha DB, the artifacts in §10: the `(session_id, ts)` uniqueness check, the
 `EXPLAIN (ANALYZE, BUFFERS)` plans for the Event-Inspector / metrics / chunk
 queries, the `pg_stat_user_indexes` usage review, and the before/after size
 estimates.
@@ -327,12 +339,12 @@ With that evidence in hand, make the explicit, reviewed choice:
   scaling problem structurally and the native-importer + API reader work is in
   scope.
 
-Either way, the migration is a separate, stop-and-ask change backed by the §9
+Either way, the migration is a separate, stop-and-ask change backed by the §10
 validation — never inferred from local index counters alone.
 
-## 11. Running the diagnostics
+## 12. Running the diagnostics
 
-`scripts/waveform_storage_diagnostics.py` gathers the section 9 evidence without
+`scripts/waveform_storage_diagnostics.py` gathers the section 10 evidence without
 changing the database. Run it only against a local development database or a
 copy of the alpha database, preferably while no import is active:
 

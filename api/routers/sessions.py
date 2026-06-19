@@ -1,7 +1,7 @@
 import json
 import re
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from importer.waveform_chunks import decode_window, downsample_extrema
+from importer.waveform_chunks import WaveformPoint, decode_window, downsample_extrema
 
 from ..auth import get_current_user
 from ..database import get_db
@@ -1119,7 +1119,114 @@ def get_event_window(
         .all()
     )
 
-    waveform_rows = (
+    window_start = event_row["event_datetime"] - timedelta(seconds=before_seconds)
+    window_end = event_row["event_datetime"] + timedelta(seconds=after_seconds)
+    waveform_rows = _event_waveform_chunk_rows(
+        internal_session_id,
+        current_user["id"],
+        window_start,
+        window_end,
+        waveform_downsample,
+        db,
+    )
+    if waveform_rows is None:
+        waveform_rows = _event_waveform_legacy_rows(
+            internal_session_id,
+            current_user["id"],
+            event_row["event_datetime"],
+            before_seconds,
+            after_seconds,
+            waveform_downsample,
+            db,
+        )
+
+    return EventWindowResponse(
+        event=EventRecord.model_validate(dict(event_row)),
+        neighboring_events=[EventRecord.model_validate(dict(r)) for r in neighboring_event_rows],
+        metrics=_metrics_response(metric_rows),
+        waveform=WaveformResponse(
+            timestamps=[r["ts"].isoformat() for r in waveform_rows],
+            flow=[_f(r["flow"]) for r in waveform_rows],
+            pressure=[_f(r["pressure"]) for r in waveform_rows],
+        ),
+        leak_kind=event_row["leak_kind"],
+        leak_unit=event_row["leak_unit"],
+    )
+
+
+def _event_waveform_chunk_rows(
+    session_id: str,
+    user_id: str,
+    start_time: datetime,
+    end_time: datetime,
+    downsample: int,
+    db: Session,
+) -> list[dict] | None:
+    """Return a merged chunk-backed Event Inspector window, or None to use rows."""
+    chunk_rows = (
+        db.execute(
+            text("""
+            WITH target AS (
+                SELECT folder_date, machine_id
+                FROM sessions
+                WHERE id = CAST(:sid AS uuid) AND user_id = CAST(:uid AS uuid)
+            )
+            SELECT wc.signal_name, wc.sample_rate_hz, wc.start_time, wc.sample_count,
+                   wc.payload
+                FROM waveform_chunks wc
+                JOIN sessions s ON wc.session_id = s.id
+                JOIN target t ON t.folder_date = s.folder_date
+                             AND t.machine_id IS NOT DISTINCT FROM s.machine_id
+                WHERE s.user_id = CAST(:uid AS uuid)
+                  AND wc.signal_name IN ('flow_rate', 'pressure')
+                  AND wc.end_time >= CAST(:start_time AS timestamptz)
+                  AND wc.start_time <= CAST(:end_time AS timestamptz)
+                ORDER BY wc.signal_name, wc.start_time, wc.chunk_index
+        """),
+            {
+                "sid": session_id,
+                "uid": user_id,
+                "start_time": start_time,
+                "end_time": end_time,
+            },
+        )
+        .mappings()
+        .all()
+    )
+    if not chunk_rows:
+        return None
+
+    points_by_signal: dict[str, list[WaveformPoint]] = defaultdict(list)
+    for signal_name in ("flow_rate", "pressure"):
+        signal_rows = [row for row in chunk_rows if row["signal_name"] == signal_name]
+        if signal_rows:
+            points_by_signal[signal_name] = decode_window(
+                signal_rows, start_time=start_time, end_time=end_time
+            )
+
+    merged: dict[datetime, dict[str, float | datetime | None]] = {}
+    for signal_name, points in points_by_signal.items():
+        output_name = "flow" if signal_name == "flow_rate" else signal_name
+        for point in points:
+            row = merged.setdefault(
+                point.timestamp,
+                {"ts": point.timestamp, "flow": None, "pressure": None},
+            )
+            row[output_name] = point.value
+    return [merged[ts] for ts in sorted(merged)][::downsample]
+
+
+def _event_waveform_legacy_rows(
+    session_id: str,
+    user_id: str,
+    event_time: datetime,
+    before_seconds: int,
+    after_seconds: int,
+    downsample: int,
+    db: Session,
+) -> list[dict]:
+    """Read the legacy row-backed Event Inspector window."""
+    return list(
         db.execute(
             text("""
             WITH target AS (
@@ -1144,29 +1251,16 @@ def get_event_window(
             ORDER BY ts
         """),
             {
-                "sid": internal_session_id,
-                "uid": current_user["id"],
-                "event_ts": event_row["event_datetime"],
+                "sid": session_id,
+                "uid": user_id,
+                "event_ts": event_time,
                 "before_seconds": before_seconds,
                 "after_seconds": after_seconds,
-                "ds": waveform_downsample,
+                "ds": downsample,
             },
         )
         .mappings()
         .all()
-    )
-
-    return EventWindowResponse(
-        event=EventRecord.model_validate(dict(event_row)),
-        neighboring_events=[EventRecord.model_validate(dict(r)) for r in neighboring_event_rows],
-        metrics=_metrics_response(metric_rows),
-        waveform=WaveformResponse(
-            timestamps=[r["ts"].isoformat() for r in waveform_rows],
-            flow=[_f(r["flow"]) for r in waveform_rows],
-            pressure=[_f(r["pressure"]) for r in waveform_rows],
-        ),
-        leak_kind=event_row["leak_kind"],
-        leak_unit=event_row["leak_unit"],
     )
 
 

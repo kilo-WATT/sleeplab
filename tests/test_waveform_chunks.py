@@ -197,6 +197,167 @@ def _seed_parser_session(db, user_id: str) -> tuple[str, str]:
     return session_id, run_id
 
 
+def _seed_event(db, session_id: str, *, offset_seconds: int = 4) -> int:
+    return db.execute(
+        text("""
+            INSERT INTO session_events (
+                session_id, event_type, onset_seconds, duration_seconds,
+                event_datetime, source_event_key, source_event_type
+            ) VALUES (
+                CAST(:sid AS uuid), 'Obstructive Apnea', :offset, 10,
+                :event_time, :source_key, 'Obstructive Apnea'
+            )
+            RETURNING id
+        """),
+        {
+            "sid": session_id,
+            "offset": offset_seconds,
+            "event_time": datetime(2026, 6, 11, 22, 0, tzinfo=UTC)
+            + timedelta(seconds=offset_seconds),
+            "source_key": f"event-{uuid.uuid4()}",
+        },
+    ).scalar_one()
+
+
+def _write_test_chunks(db, session_id: str, run_id: str) -> None:
+    detailed = [
+        SimpleNamespace(
+            start_time=datetime(2026, 6, 11, 22, 0),
+            file_type="BRP+PLD",
+            sample_rate=2,
+            timeseries=SimpleNamespace(
+                flow_rate=[index / 2 for index in range(17)],
+                pressure=[8.0 + index / 2 for index in range(17)],
+            ),
+        )
+    ]
+    _write_waveform_chunks(
+        db.connection().connection.driver_connection,
+        session_db_id=session_id,
+        import_run_id=run_id,
+        detailed=detailed,
+        machine_tz=UTC,
+        parser_version="test",
+    )
+    db.flush()
+
+
+def _event_window(client, auth_headers, session_id: str, event_id: int):
+    return client.get(
+        f"/sessions/{session_id}/events/{event_id}/window",
+        params={"before_seconds": 10, "after_seconds": 10},
+        headers=auth_headers,
+    )
+
+
+def test_event_inspector_prefers_chunk_backed_waveform_window(
+    db, test_user, client, auth_headers
+):
+    session_id, run_id = _seed_parser_session(db, test_user["id"])
+    event_id = _seed_event(db, session_id)
+    _write_test_chunks(db, session_id, run_id)
+    db.execute(
+        text("""
+            INSERT INTO session_waveform (session_id, ts, flow, pressure)
+            VALUES (CAST(:sid AS uuid), :ts, 999, 999)
+        """),
+        {"sid": session_id, "ts": datetime(2026, 6, 11, 22, 0, 4, tzinfo=UTC)},
+    )
+    db.commit()
+
+    response = _event_window(client, auth_headers, session_id, event_id)
+
+    assert response.status_code == 200
+    waveform = response.json()["waveform"]
+    assert set(waveform) == {"timestamps", "flow", "pressure"}
+    assert len(waveform["timestamps"]) == len(waveform["flow"]) == len(waveform["pressure"]) == 17
+    assert waveform["flow"][8] == 4.0
+    assert waveform["pressure"][8] == 12.0
+    assert 999 not in waveform["flow"]
+
+
+def test_event_inspector_falls_back_to_session_waveform_when_chunks_are_missing(
+    db, test_user, client, auth_headers
+):
+    session_id, _ = _seed_parser_session(db, test_user["id"])
+    event_id = _seed_event(db, session_id)
+    db.execute(
+        text("""
+            INSERT INTO session_waveform (session_id, ts, flow, pressure)
+            VALUES
+                (CAST(:sid AS uuid), :first_ts, 1.25, 9.5),
+                (CAST(:sid AS uuid), :second_ts, NULL, 10.0)
+        """),
+        {
+            "sid": session_id,
+            "first_ts": datetime(2026, 6, 11, 22, 0, 3, tzinfo=UTC),
+            "second_ts": datetime(2026, 6, 11, 22, 0, 4, tzinfo=UTC),
+        },
+    )
+    db.commit()
+
+    response = _event_window(client, auth_headers, session_id, event_id)
+
+    assert response.status_code == 200
+    assert response.json()["waveform"] == {
+        "timestamps": ["2026-06-11T22:00:03+00:00", "2026-06-11T22:00:04+00:00"],
+        "flow": [1.25, None],
+        "pressure": [9.5, 10.0],
+    }
+
+
+def test_event_inspector_row_and_chunk_waveform_shapes_are_compatible(
+    db, test_user, client, auth_headers
+):
+    chunk_session_id, run_id = _seed_parser_session(db, test_user["id"])
+    chunk_event_id = _seed_event(db, chunk_session_id)
+    _write_test_chunks(db, chunk_session_id, run_id)
+
+    row_session_id, _ = _seed_parser_session(db, test_user["id"])
+    row_event_id = _seed_event(db, row_session_id)
+    for index in range(17):
+        db.execute(
+            text("""
+                INSERT INTO session_waveform (session_id, ts, flow, pressure)
+                VALUES (CAST(:sid AS uuid), :ts, :flow, :pressure)
+            """),
+            {
+                "sid": row_session_id,
+                "ts": datetime(2026, 6, 11, 22, 0, tzinfo=UTC)
+                + timedelta(seconds=index / 2),
+                "flow": index / 2,
+                "pressure": 8.0 + index / 2,
+            },
+        )
+    db.commit()
+
+    chunk_waveform = _event_window(
+        client, auth_headers, chunk_session_id, chunk_event_id
+    ).json()["waveform"]
+    row_waveform = _event_window(
+        client, auth_headers, row_session_id, row_event_id
+    ).json()["waveform"]
+
+    assert chunk_waveform == row_waveform
+
+
+def test_event_inspector_missing_waveform_data_remains_an_empty_response(
+    db, test_user, client, auth_headers
+):
+    session_id, _ = _seed_parser_session(db, test_user["id"])
+    event_id = _seed_event(db, session_id)
+    db.commit()
+
+    response = _event_window(client, auth_headers, session_id, event_id)
+
+    assert response.status_code == 200
+    assert response.json()["waveform"] == {
+        "timestamps": [],
+        "flow": [],
+        "pressure": [],
+    }
+
+
 def test_parser_waveform_persistence_is_idempotent_and_api_reads_windows(
     db, test_user, client, auth_headers
 ):
