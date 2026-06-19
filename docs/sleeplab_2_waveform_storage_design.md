@@ -329,3 +329,28 @@ With that evidence in hand, make the explicit, reviewed choice:
 
 Either way, the migration is a separate, stop-and-ask change backed by the §9
 validation — never inferred from local index counters alone.
+
+## 11. Running the diagnostics
+
+`scripts/waveform_storage_diagnostics.py` gathers the section 9 evidence without
+changing the database. Run it only against a local development database or a
+copy of the alpha database, preferably while no import is active:
+
+```powershell
+$env:DATABASE_URL = 'postgresql+psycopg2://user:password@localhost:5432/cpap_copy'
+uv run python scripts/waveform_storage_diagnostics.py --output waveform-storage-report.md
+```
+
+The command starts a read-only transaction, applies a two-minute statement
+timeout, runs aggregate size/duplicate/index queries and representative
+`EXPLAIN (ANALYZE, BUFFERS)` reads, then rolls back. Override the timeout with
+`--statement-timeout-ms` if a large copied database needs longer. The output
+path should remain outside source control when it contains evidence from a real
+database.
+
+The generated Markdown excludes session IDs, exact timestamps, signal values,
+device identifiers, provenance, source paths, and serial numbers. Query-plan
+literals are sanitized as a second precaution. It reports aggregate session
+coverage across the two waveform stores because Phase 2 is not cutover-ready
+while any `session_waveform` session lacks chunks. Its recommendation is
+deliberately conservative and does not authorize a migration.
