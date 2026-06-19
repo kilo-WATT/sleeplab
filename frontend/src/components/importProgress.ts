@@ -1,12 +1,14 @@
 import type { ImportRunSummary } from '../api/client'
 
 export const IMPORT_STAGE_LABELS: Record<string, string> = {
+  preparing_import: 'Preparing import',
   scanning_files: 'Scanning card files',
+  selecting_importer: 'Selecting importer',
   parsing_sessions: 'Parsing sessions',
   importing_summaries: 'Importing summaries and events',
-  writing_database: 'Writing database records',
-  building_waveform_chunks: 'Building waveform chunks',
-  refreshing_aggregates: 'Refreshing aggregates',
+  writing_database: 'Writing sessions and events',
+  building_waveform_chunks: 'Writing waveform chunks',
+  refreshing_aggregates: 'Finalizing',
   complete: 'Complete',
   failed: 'Failed',
 }

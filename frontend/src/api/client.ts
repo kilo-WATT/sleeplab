@@ -123,6 +123,11 @@ export interface ImportRunSummary {
   imported_channel_count: number
   imported_settings_count?: number
   summary_only_day_count?: number
+  importer_mode?: 'cpap-parser' | 'legacy' | null
+  sessions_added_count?: number | null
+  sessions_updated_count?: number | null
+  sessions_skipped_count?: number | null
+  waveform_chunk_count?: number | null
   capability_status?: Record<string, string>
   current_stage?: string | null
   current_message?: string | null

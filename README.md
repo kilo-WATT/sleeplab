@@ -354,7 +354,12 @@ In the UI:
 2. Open the import screen.
 3. Select the SD card root folder.
 4. The frontend uploads the files in batches to the API.
-5. The API runs the importer in the background and writes parsed sessions into Postgres.
+5. The API runs the importer in the background. The UI reports honest stages
+   (scan, parser selection, session/event writes, waveform chunks, finalizing)
+   rather than estimating a percentage it cannot know.
+6. The completion card and Import History show the importer used, sessions
+   added or already present, events, waveform chunks, warnings, and errors when
+   those values were recorded. Older history remains readable.
 
 The upload/import endpoints are implemented in `api/routers/upload.py`. The
 default parser loader lives under `importer/loaders/`; the older native importer
@@ -364,6 +369,11 @@ To select the legacy/native fallback, set `SLEEPLAB_USE_CPAP_PARSER=0` and
 restart SleepLab. This is useful for continuing a machine history originally
 created by that backend. SleepLab does not rewrite existing sessions or mix the
 two backends for one machine.
+
+Re-importing the same card snapshot is an idempotent no-op. A changed snapshot
+imports only new work where possible. If SleepLab blocks mixed parser/native
+history, it leaves existing sessions untouched and explains how to continue
+with the matching importer.
 
 You can also run the legacy/native importer manually:
 

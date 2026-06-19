@@ -814,6 +814,14 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
   const stage = run.current_stage
     ? IMPORT_STAGE_LABELS[run.current_stage] ?? run.current_stage.replaceAll('_', ' ')
     : null
+  const importerLabel = run.importer_mode === 'legacy'
+    ? 'Legacy/native fallback'
+    : run.importer_mode === 'cpap-parser' || run.adapter_id === 'resmed-cpap-parser-v1'
+      ? 'Recommended cpap-parser'
+      : 'Importer not recorded'
+  const sessionsHeadline = run.sessions_added_count == null
+    ? `${run.imported_session_count} session${run.imported_session_count === 1 ? '' : 's'} processed`
+    : `${run.sessions_added_count} added · ${run.sessions_skipped_count ?? 0} already present`
 
   return (
     <details className="group rounded-[16px] border border-[var(--border)] bg-[var(--surface-soft)] open:bg-[var(--surface-strong)]">
@@ -830,8 +838,7 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
         <div className="min-w-0">
           <p className="truncate font-bold text-[var(--foreground)]">{machineName}</p>
           <p className="truncate text-xs text-[var(--muted-foreground)]">
-            {formatImportDate(run.completed_at ?? run.started_at)} · {run.imported_session_count} session
-            {run.imported_session_count === 1 ? '' : 's'} · <span className="capitalize">{run.validation_status}</span>
+            {formatImportDate(run.completed_at ?? run.started_at)} · {sessionsHeadline}
           </p>
         </div>
         {summaryOnlyCount > 0 || errorCount > 0 ? (
@@ -850,9 +857,13 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
         ) : null}
       </summary>
       <div className="space-y-3 border-t border-[var(--border)] px-4 py-3 text-sm">
-        <p className="text-xs text-[var(--muted-foreground)]">
-          {run.adapter_id} · {run.source_file_count} source files
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+          <span className="rounded-full border border-[var(--border)] bg-[var(--surface-strong)] px-2.5 py-1 font-bold text-[var(--foreground)]">
+            {importerLabel}
+          </span>
+          <span>Started {formatImportTimestamp(run.started_at)}</span>
+          <span>Finished {formatImportTimestamp(run.completed_at)}</span>
+        </div>
         {stage || run.current_message ? (
           <div className="rounded-[14px] border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2">
             {stage ? <p className="font-bold text-[var(--foreground)]">{stage}</p> : null}
@@ -863,10 +874,20 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
         ) : null}
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <InspectionValue label="Validation" value={run.validation_status} />
-          <InspectionValue label="Sessions" value={String(run.imported_session_count)} />
-          <InspectionValue label="Blocks" value={String(run.imported_block_count)} />
+          <InspectionValue
+            label="Sessions added"
+            value={run.sessions_added_count == null ? 'Not recorded' : String(run.sessions_added_count)}
+          />
+          <InspectionValue
+            label="Already present"
+            value={run.sessions_skipped_count == null ? 'Not recorded' : String(run.sessions_skipped_count)}
+          />
           <InspectionValue label="Events" value={String(run.imported_event_count)} />
-          <InspectionValue label="Settings" value={String(run.imported_settings_count ?? 0)} />
+          <InspectionValue
+            label="Waveform chunks"
+            value={run.waveform_chunk_count == null ? 'Not recorded' : String(run.waveform_chunk_count)}
+          />
+          <InspectionValue label="Warnings" value={String(warningCount)} />
           <InspectionValue label="Summary-only" value={String(summaryOnlyCount)} />
         </dl>
         {summaryOnlyCount > 0 ? (
@@ -890,14 +911,20 @@ function ImportRunRow({ run }: { run: ImportRunSummary }) {
             ))}
           </div>
         ) : null}
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
-            Source fingerprint
+        <details className="rounded-[14px] border border-[var(--border)] px-3 py-2">
+          <summary className="cursor-pointer text-xs font-bold text-[var(--muted-foreground)]">Technical details</summary>
+          <div className="mt-2">
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+              Source fingerprint
+            </p>
+            <p className="mt-1 truncate font-mono text-xs text-[var(--muted-foreground)]" title={run.source_fingerprint}>
+              {run.source_fingerprint}
+            </p>
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+            {run.adapter_id} · {run.source_file_count} source files
           </p>
-          <p className="mt-1 truncate font-mono text-xs text-[var(--muted-foreground)]" title={run.source_fingerprint}>
-            {run.source_fingerprint}
-          </p>
-        </div>
+        </details>
         {errorCount > 0 || warningCount > 0 ? (
           <div className="space-y-1">
             <p className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
@@ -1251,6 +1278,13 @@ function formatImportDate(iso: string | null) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return 'Unknown date'
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function formatImportTimestamp(iso: string | null) {
+  if (!iso) return 'not recorded'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'not recorded'
+  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 function formatBytes(bytes: number) {

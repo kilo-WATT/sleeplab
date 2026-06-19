@@ -405,7 +405,7 @@ describe('ImportProgressCard', () => {
     )
 
     expect(screen.getByText('Synchronizing sleep data')).toBeInTheDocument()
-    expect(screen.getByText('Building waveform chunks')).toBeInTheDocument()
+    expect(screen.getByText('Writing waveform chunks')).toBeInTheDocument()
     expect(screen.getByText('Elapsed 1:05')).toBeInTheDocument()
     expect(screen.getByText('Sessions')).toBeInTheDocument()
     expect(screen.getByText('2 of 5')).toBeInTheDocument()
@@ -451,6 +451,11 @@ function historyRun(): ImportRunSummary {
     status: 'partial',
     completed_at: '2026-06-15T08:30:00Z',
     imported_session_count: 4,
+    importer_mode: 'cpap-parser',
+    sessions_added_count: 2,
+    sessions_updated_count: 0,
+    sessions_skipped_count: 2,
+    waveform_chunk_count: 18,
     summary_only_day_count: 3,
     warnings: [
       {
@@ -562,5 +567,33 @@ describe('Import center', () => {
     expect(within(details).getByText('Failed to parse one event file.')).toBeInTheDocument()
     expect(within(details).getByText('Summary-only days detected')).toBeInTheDocument()
     expect(within(details).getByText('Device clock drift detected during import.')).toBeInTheDocument()
+  })
+
+  it('shows an honest completion summary and recommended importer provenance', async () => {
+    await renderImportCenter([historyRun()])
+
+    expect(screen.getAllByText('Recommended cpap-parser').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/2 added.*2 already present/).length).toBeGreaterThan(0)
+    expect(screen.getByText('18')).toBeInTheDocument()
+  })
+
+  it('renders old history records safely when result fields are absent', async () => {
+    const oldRun = { ...historyRun() }
+    delete oldRun.importer_mode
+    delete oldRun.sessions_added_count
+    delete oldRun.sessions_updated_count
+    delete oldRun.sessions_skipped_count
+    delete oldRun.waveform_chunk_count
+
+    await renderImportCenter([oldRun])
+
+    expect(screen.getByText(/4 sessions processed/)).toBeInTheDocument()
+    expect(screen.getAllByText('Not recorded').length).toBeGreaterThan(0)
+  })
+
+  it('labels the legacy importer as an explicit fallback', async () => {
+    await renderImportCenter([{ ...historyRun(), importer_mode: 'legacy' }])
+
+    expect(screen.getAllByText('Legacy/native fallback').length).toBeGreaterThan(0)
   })
 })

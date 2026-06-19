@@ -264,12 +264,13 @@ def _fail_durable_import_run(import_run_id: str | None, message: str) -> None:
         return
     db = SessionLocal()
     try:
+        code, user_message = _friendly_import_error(message)
         db.execute(
             text("""
             UPDATE import_runs
             SET status = 'failed',
                     current_stage = 'failed',
-                    current_message = 'Import failed. Check the uploaded files and try again.',
+                    current_message = :user_message,
                     errors = errors || CAST(:error AS jsonb),
                     completed_at = NOW(),
                     updated_at = NOW()
@@ -278,7 +279,8 @@ def _fail_durable_import_run(import_run_id: str | None, message: str) -> None:
             """),
             {
                 "run_id": import_run_id,
-                "error": f'[{{"code":"execution_failed","message":{_json_string(message)}}}]',
+                "error": f'[{{"code":{_json_string(code)},"message":{_json_string(user_message)},"detail":{_json_string(message[:500])}}}]',
+                "user_message": user_message,
             },
         )
         db.commit()
@@ -293,6 +295,23 @@ def _json_string(value: str) -> str:
     import json
 
     return json.dumps(value)
+
+
+def _friendly_import_error(message: str) -> tuple[str, str]:
+    """Map importer failures to concise, actionable UI copy without tracebacks."""
+
+    normalized = message.casefold()
+    if "cpap-parser" in normalized and any(word in normalized for word in ("unavailable", "requires", "install")):
+        return "parser_unavailable", "The recommended cpap-parser importer is unavailable. Restart SleepLab after installing the parser, or explicitly select the legacy fallback."
+    if "datalog" in normalized or "no resmed source" in normalized:
+        return "missing_resmed_files", "This folder does not contain the expected ResMed card files. Select the card root containing Identification.tgt, STR.edf, and DATALOG."
+    if any(word in normalized for word in ("no such file", "not found", "does not exist")):
+        return "source_not_found", "SleepLab could not read the selected SD card path. Reconnect the card and select its root folder again."
+    if "waveform" in normalized or "chunk" in normalized:
+        return "waveform_write_failed", "Sessions were not finalized because SleepLab could not safely write waveform chunks. No partial waveform data was committed; check storage and try again."
+    if "mix" in normalized and ("legacy" in normalized or "parser" in normalized):
+        return "mixed_import_history", "This machine already uses the other ResMed importer. SleepLab left existing sessions unchanged to avoid mixing parser and legacy history."
+    return "unexpected_import_failure", "SleepLab could not finish this import. The technical detail is saved in Import History for troubleshooting."
 
 
 @router.post("/datalog/start")
@@ -528,6 +547,7 @@ def finish_source_import(
         plan=plan,
         source_root=session.source_root,
         source_label=session.source_root.name,
+        importer_mode="cpap-parser" if parser_selected else "legacy",
     )
     UPLOAD_SESSIONS.pop(upload_id, None)
     _mark_import_running(session.user_id)

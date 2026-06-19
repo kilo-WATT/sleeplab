@@ -76,6 +76,7 @@ def create_import_run(
     plan: ImportPlan,
     source_root: Path,
     source_label: str,
+    importer_mode: str,
 ) -> tuple[str, str]:
     """Persist a reviewed import plan and return ``(run_id, machine_id)``."""
 
@@ -149,15 +150,16 @@ def create_import_run(
                 source_fingerprint, import_fingerprint, source_label, status,
                 validation_status, identity_confidence, detected_manufacturer,
                 detected_family, detected_capabilities, warnings, started_at, updated_at,
-                current_stage, current_message, files_processed, files_total
+                current_stage, current_message, files_processed, files_total,
+                importer_mode
             ) VALUES (
                 CAST(:user_id AS uuid), CAST(:machine_id AS uuid), :adapter_id,
                 :adapter_version, 'uploaded_root', :source_fingerprint,
                 :import_fingerprint, :source_label, 'running', :validation_status,
                 :identity_confidence, :manufacturer, :family,
                 CAST(:capabilities AS jsonb), CAST(:warnings AS jsonb), NOW(), NOW(),
-                'scanning_files', 'Card scan complete; preparing the parser.',
-                :files_total, :files_total
+                'selecting_importer', :importer_message,
+                :files_total, :files_total, :importer_mode
             )
             RETURNING id::text
         """),
@@ -176,6 +178,12 @@ def create_import_run(
             "capabilities": _json(device["capabilities"]),
             "warnings": _json([*plan.inspection["warnings"], *device["warnings"]]),
             "files_total": plan.source_manifest.file_count,
+            "importer_mode": importer_mode,
+            "importer_message": (
+                "Card scan complete; starting the recommended cpap-parser importer."
+                if importer_mode == "cpap-parser"
+                else "Card scan complete; starting the legacy/native fallback importer."
+            ),
         },
     ).scalar_one()
 

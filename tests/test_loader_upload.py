@@ -169,10 +169,11 @@ def test_source_finish_routes_by_cpap_parser_flag(monkeypatch, flag_value, expec
         monkeypatch.setattr(upload, "cpap_parser_runtime_available", lambda: True)
         monkeypatch.setattr(upload, "resmed_backend_conflict", lambda *_args, **_kwargs: False)
         monkeypatch.setattr(upload, "reusable_import_run", lambda *_args, **_kwargs: None)
+        created = {}
         monkeypatch.setattr(
             upload,
             "create_import_run",
-            lambda *_args, **_kwargs: ("run-id", "machine-id"),
+            lambda *_args, **kwargs: (created.update(kwargs) or ("run-id", "machine-id")),
         )
         tasks = BackgroundTasks()
 
@@ -186,9 +187,29 @@ def test_source_finish_routes_by_cpap_parser_flag(monkeypatch, flag_value, expec
         assert result["import_run_id"] == "run-id"
         assert len(tasks.tasks) == 1
         assert tasks.tasks[0].func is expected_task
+        assert created["importer_mode"] == (
+            "legacy" if flag_value == "0" else "cpap-parser"
+        )
     finally:
         UPLOAD_SESSIONS.pop(upload_id, None)
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    ("raw", "code", "copy"),
+    [
+        ("cpap-parser runtime unavailable", "parser_unavailable", "recommended cpap-parser"),
+        ("DATALOG directory is missing", "missing_resmed_files", "expected ResMed card files"),
+        ("waveform chunk insert failed", "waveform_write_failed", "safely write waveform chunks"),
+        ("unexpected decoder panic", "unexpected_import_failure", "Import History"),
+    ],
+)
+def test_import_failures_map_to_actionable_messages(raw, code, copy):
+    mapped_code, message = upload._friendly_import_error(raw)
+
+    assert mapped_code == code
+    assert copy in message
+    assert "Traceback" not in message
 
 
 def test_source_finish_skips_exact_successful_card_snapshot(monkeypatch):

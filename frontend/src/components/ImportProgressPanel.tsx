@@ -22,6 +22,11 @@ export function ImportProgressPanel({
   const sessionProgress = sessionTotal ? `${sessionProcessed} of ${sessionTotal}` : null
   const elapsedNow = now ?? new Date(run.completed_at ?? run.started_at ?? 0).getTime()
   const title = failed ? 'Import failed' : active ? 'Synchronizing sleep data' : 'Import complete'
+  const importerLabel = run.importer_mode === 'legacy'
+    ? 'Legacy/native fallback'
+    : run.importer_mode === 'cpap-parser' || run.adapter_id === 'resmed-cpap-parser-v1'
+      ? 'Recommended cpap-parser'
+      : 'Importer not recorded'
 
   return (
     <div
@@ -63,6 +68,7 @@ export function ImportProgressPanel({
         </div>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--muted-foreground)]">
+        <span className="font-bold text-[var(--foreground)]">{importerLabel}</span>
         <span>{formatImportElapsed(run.started_at, elapsedNow)}</span>
         {fileProgress ? (
           <span>
@@ -80,11 +86,30 @@ export function ImportProgressPanel({
           </span>
         ) : null}
       </div>
+      {!active && !failed ? <ImportResultSummary run={run} /> : null}
       {active && !compact ? (
         <p className="mt-3 text-xs leading-5 text-[var(--muted-foreground)]">
           Large first imports that include full-night waveforms may take several minutes. You can continue using SleepLab while this finishes.
         </p>
       ) : null}
+    </div>
+  )
+}
+
+function ImportResultSummary({ run }: { run: ImportRunSummary }) {
+  const values = [
+    run.sessions_added_count == null ? null : `${run.sessions_added_count} added`,
+    run.sessions_updated_count == null ? null : `${run.sessions_updated_count} updated`,
+    run.sessions_skipped_count == null ? null : `${run.sessions_skipped_count} already present`,
+    `${run.imported_event_count} events`,
+    run.waveform_chunk_count == null ? null : `${run.waveform_chunk_count} waveform chunks`,
+  ].filter(Boolean)
+  const noOp = run.sessions_added_count === 0 && run.sessions_updated_count === 0
+
+  return (
+    <div className="mt-3 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted-foreground)]">
+      <p>{values.join(' · ')}</p>
+      {noOp ? <p className="mt-1 font-bold text-[var(--foreground)]">No new sessions were needed.</p> : null}
     </div>
   )
 }

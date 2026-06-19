@@ -216,6 +216,9 @@ def run_cpap_parser_import(
                 persist_progress_conn, import_run_id, **progress
             ),
         )
+        counts["skipped_existing_nights"] = max(
+            counts["skipped_existing_nights"], len(skip_dates)
+        )
         conn.commit()
         finish_import_run(
             conn,
@@ -227,6 +230,10 @@ def run_cpap_parser_import(
             imported_channels=counts["channels"],
             imported_settings=counts["settings"],
             summary_only_days=counts["summary_only_days"],
+            sessions_added=counts["sessions_added"],
+            sessions_updated=counts["sessions_updated"],
+            sessions_skipped=counts["skipped_existing_nights"],
+            waveform_chunks=counts["waveform_chunks"],
             warnings=[_warning_dict(warning) for warning in run.warnings],
             errors=[],
             consumed_unlinked_roles=(

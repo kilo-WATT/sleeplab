@@ -161,6 +161,8 @@ def persist_import_run(
 
     counts = {
         "sessions": 0,
+        "sessions_added": 0,
+        "sessions_updated": 0,
         "blocks": 0,
         "events": 0,
         "channels": 0,
@@ -218,8 +220,15 @@ def persist_import_run(
             machine_tz_name=machine_tz_name,
             has_detailed=has_detailed,
         )
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM sessions WHERE machine_id = %s AND source_session_key = %s",
+                (machine_id, session_data["source_session_key"]),
+            )
+            session_existed = cur.fetchone() is not None
         session_db_id = upsert_session(db_conn, session_data)
         counts["sessions"] += 1
+        counts["sessions_updated" if session_existed else "sessions_added"] += 1
         if not has_detailed:
             counts["summary_only_days"] += 1
 

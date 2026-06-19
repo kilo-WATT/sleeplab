@@ -30,14 +30,22 @@ All protected routes check the stored token on every request via the `useAuth` h
 
 SleepLab supports three independent import paths that can be used in any combination. All imports are idempotent — re-importing the same data never creates duplicates.
 
-### DATALOG folder upload
+### ResMed SD card import
 
 ![Import page](public/ui-snapshots/import.png)
 
-The primary import method reads EDF files directly from a ResMed SD card:
+The primary import method uses the recommended `cpap-parser` backend to read a
+complete ResMed SD card. Choose the card root containing `STR.edf` and
+`DATALOG`, not the `DATALOG` folder alone. The native importer is an explicit
+fallback selected with `SLEEPLAB_USE_CPAP_PARSER=0`.
+
+Long imports report durable stages such as parsing sessions, writing events,
+writing waveform chunks, and finalizing. Import History records importer
+provenance and the available result counts; older records remain readable when
+newer summary fields were not recorded.
 
 1. Remove the SD card from your machine and insert it into your computer.
-2. Click **Select folder** and choose the `DATALOG` directory at the root of the card. The browser enumerates all `.edf` files recursively — no files are sent until you confirm.
+2. Click **Select folder** and choose the card root. The browser enumerates its files recursively — no files are sent until you confirm.
 3. Click **Start import**. Files are batched in groups of 200 and uploaded sequentially; a progress bar tracks completion. The backend queues an import job that parses each session block in the background.
 4. A status indicator in the header polls the job state and turns green once the import finishes. New sessions appear in the Overview immediately.
 
