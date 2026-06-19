@@ -1302,8 +1302,8 @@ function RecentOverviewTable({ nights }: { nights: OverviewDailyStat[] }) {
           <p className="text-sm font-bold text-[var(--foreground)]">Recent nights</p>
           <p className="mt-1 text-sm text-[var(--muted-foreground)]">Most recent nights with key event and therapy values. Select a row to open the night.</p>
         </div>
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[680px] border-collapse text-sm">
+        <div className="mt-4 hidden md:block">
+          <table aria-label="Recent nights desktop table" className="w-full min-w-[680px] border-collapse text-sm">
             <thead>
               <tr className="border-y border-[var(--border)] bg-[var(--surface-soft)] text-left text-xs font-bold uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
                 <th className="px-5 py-3 sm:px-6">Date</th>
@@ -1357,6 +1357,46 @@ function RecentOverviewTable({ nights }: { nights: OverviewDailyStat[] }) {
               })}
             </tbody>
           </table>
+        </div>
+        <div className="mt-4 md:hidden">
+          <ul aria-label="Recent nights mobile list" className="divide-y divide-[var(--border)] border-y border-[var(--border)]">
+            {recent.map((night) => {
+              const notes = deriveNightNotes(night)
+              return (
+                <li key={night.folder_date}>
+                  <button
+                    type="button"
+                    className="block w-full min-w-0 px-5 py-3 text-left transition-colors hover:bg-[var(--surface-soft)] focus-visible:bg-[var(--surface-soft)] focus-visible:outline-none sm:px-6"
+                    aria-label={`Open night ${night.folder_date}`}
+                    onClick={() => navigate(`/sessions/${night.session_id}`)}
+                  >
+                    <span className="flex min-w-0 items-start justify-between gap-3">
+                      <span className="shrink-0 text-sm font-bold text-[var(--foreground)]">{night.folder_date}</span>
+                      {notes.length === 0 ? (
+                        <span className="text-sm text-[var(--muted-foreground)]">—</span>
+                      ) : (
+                        <span className="flex min-w-0 flex-wrap justify-end gap-1.5">
+                          {notes.map((note) => (
+                            <span key={note.label} className={`rounded-full px-2 py-0.5 text-xs font-bold ${STATUS_BADGE[note.tone]}`}>
+                              {note.label}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-1 block text-sm text-[var(--muted-foreground)]">
+                      <span className={`font-bold ${ahiTone(night.ahi)}`}>AHI {night.ahi == null ? '—' : night.ahi.toFixed(1)}</span>
+                      {' · '}CAI {night.central_apnea_index == null ? '—' : night.central_apnea_index.toFixed(1)}
+                      {' · '}OAI {night.obstructive_apnea_index == null ? '—' : night.obstructive_apnea_index.toFixed(1)}
+                    </span>
+                    <span className="mt-0.5 block text-sm text-[var(--muted-foreground)]">
+                      Usage {night.usage_hours.toFixed(2)} h{' · '}Leak {formatMetricValue(night.avg_leak, leakMetric)}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
         </div>
       </CardContent>
     </Card>

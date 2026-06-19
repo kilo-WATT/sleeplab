@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AdherenceResponse, SummaryStats } from '../api/client'
+import type { AdherenceResponse, OverviewDailyStat, SummaryStats } from '../api/client'
 import TrendsPage from './Trends'
 
 const {
@@ -42,6 +42,33 @@ const summary: SummaryStats = {
   avg_pressure: 10.4,
   ahi_trend: [],
   event_breakdown: {},
+}
+
+const recentNight: OverviewDailyStat = {
+  folder_date: '2026-06-17',
+  session_id: 'session-2026-06-17',
+  ahi: 1.3,
+  central_apnea_index: 0.7,
+  obstructive_apnea_index: 0.4,
+  hypopnea_index: 0.2,
+  apnea_index: 1.1,
+  arousal_index: 3.2,
+  usage_hours: 6.85,
+  session_start_hour: 22.5,
+  session_end_hour: 5.35,
+  avg_pressure: 10.2,
+  p95_pressure: 11.8,
+  avg_leak: 2.4,
+  leak_unit: 'L/min',
+  large_leak_minutes: 0,
+  avg_flow_lim: 0.1,
+  avg_tidal_vol: 460,
+  avg_min_vent: 6.8,
+  avg_resp_rate: 14.2,
+  min_spo2: 92,
+  avg_spo2: 96,
+  avg_pulse: 62,
+  equipment_age_days: 20,
 }
 
 function adherenceResponse({
@@ -185,5 +212,24 @@ describe('Trends adherence analytics', () => {
 
     expect(await screen.findByText('No therapy data in this evaluation period')).toBeInTheDocument()
     expect(screen.getByText('All 90 calendar days are currently counted as missing.')).toBeInTheDocument()
+  })
+})
+
+describe('Trends recent nights', () => {
+  it('renders the desktop table and a compact mobile list with the same night data', async () => {
+    mockGetOverviewStats.mockResolvedValue({ nights: [recentNight] })
+    renderTrends()
+
+    const mobileList = await screen.findByRole('list', { name: 'Recent nights mobile list' })
+    const mobileNight = within(mobileList).getByRole('button', { name: 'Open night 2026-06-17' })
+    const desktopTable = screen.getByRole('table', { name: 'Recent nights desktop table' })
+
+    expect(mobileList.parentElement).toHaveClass('md:hidden')
+    expect(mobileNight).toHaveClass('min-w-0')
+    expect(mobileNight).toHaveTextContent('2026-06-17')
+    expect(mobileNight).toHaveTextContent('Low leak')
+    expect(mobileNight).toHaveTextContent('AHI 1.3 · CAI 0.7 · OAI 0.4')
+    expect(mobileNight).toHaveTextContent('Usage 6.85 h · Leak 2.4 L/min')
+    expect(desktopTable.parentElement).toHaveClass('hidden', 'md:block')
   })
 })
