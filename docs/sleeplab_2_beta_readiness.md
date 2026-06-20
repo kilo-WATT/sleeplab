@@ -80,7 +80,7 @@ database. Parser-runtime tests (cpap-py) are exercised by the Linux CI matrix.
 
 ## 5. Beta blocker status (burn-down)
 
-1. **Parser-enabled Linux CI matrix green — CLOSED (code) / verify on next run.**
+1. **Parser-enabled Linux CI matrix green — CLOSED.**
    The GitHub `CI` `backend` job (`ubuntu-latest`, Postgres 16, `uv sync --extra
    parser`) passes — alpha.24 run: **453 passed, 2 skipped** with the cpap-py
    conformance and cutover-parity suites running. CI was red *only* because the
@@ -90,17 +90,18 @@ database. Parser-runtime tests (cpap-py) are exercised by the Linux CI matrix.
    normalize PEP 440 → semver and to compare the real app-version carriers
    (`pyproject.toml`, `package.json`, `frontend/package.json`, `VERSION`, and the
    git tag). NOTICE.md keeps its own third-party-notices version and is no longer
-   conflated with the app version. The full pipeline should be green on the next
-   push; confirm the run.
+   conflated with the app version. The post-alpha.25 pipeline is green.
 
-2. **Second independent private-card soak — OPEN (requires maintainer hardware).**
-   Cannot be run from this environment: no private card is available and the
-   cpap-parser/cpap-py runtime cannot build on Windows dev (pyedflib needs MSVC).
-   An automated, independent end-to-end soak does run in Linux CI against the
-   committed, non-private **AirSense 10 conformance fixture**
-   (`tests/conformance/test_resmed_airsense10.py`), exercising the full
-   parser→persist path. The real private-card soak remains a manual step — see
-   the checklist in §9 below. Do not fabricate its results.
+2. **Second independent private-card soak — CLOSED.**
+   The maintainer ran `scripts/private_card_soak.ps1` against a real private
+   ResMed card on `develop/2.0` at `a4b3daf`. The parser-default fresh import
+   succeeded with safe aggregate totals of **51 sessions**, **432 events**, and
+   **7,396 `waveform_chunks`**; `session_waveform` remained **0**. Exact-snapshot
+   re-import was an unchanged/no-op and all four counts stayed stable. Import
+   History, Nightly chunk coverage, Event Inspector, and full-night waveform
+   checks passed. `resmed_summary_only_day` was an expected non-fatal warning.
+   No private filenames, serials, dates, card contents, or report data are
+   recorded here.
 
 3. **DB-backed background-failure / temp-upload-cleanup coverage — CLOSED.**
    Added `tests/test_import_failure_cleanup.py` (DB-backed failure-status
@@ -118,21 +119,16 @@ database. Parser-runtime tests (cpap-py) are exercised by the Linux CI matrix.
 
 ## 7. Recommendation
 
-Two of the three beta blockers are now closed in code: the CI version-check fix
-makes the parser-enabled Linux pipeline green (blocker 1), and DB-backed
-background-failure and temp-upload-cleanup coverage is in place (blocker 3). The
-cpap-parser default path remains functionally validated and safe on all
-supported flows: fresh install, default parser import, idempotent same-backend
-re-import (no waveform bloat), legacy fallback, and mixed-history protection.
+All beta blockers are closed. Parser-enabled Linux CI and version consistency
+checks are green, DB-backed failure/cleanup coverage is in place, and the second
+independent real-card soak passed with stable idempotent storage and working
+chunk-backed API/UI data paths.
 
-**Recommendation: tag `v2.0.0-alpha.25` first, then `v2.0.0-beta.1` after the
-private-card soak.** The single remaining blocker (blocker 2, the independent
-*real* private-card soak) cannot be discharged from CI or this dev environment —
-it needs the maintainer to run the §9 checklist on their own card and confirm no
-duplicate sessions/events/chunks, no `session_waveform` bloat, and working Event
-Inspector / full-night views. An `alpha.25` tag captures the now-green CI plus
-the failure/cleanup hardening as a clean checkpoint; promote to `beta.1` once the
-soak passes. (Per project rules, no tag is created by this change.)
+**Recommendation: release `v2.0.0-beta.1`.** The cpap-parser default path is
+validated across fresh install, parser import, exact-snapshot re-import (no
+session/event/chunk duplication or row-waveform bloat), Import History, Nightly
+coverage, Event Inspector, full-night waveform, legacy fallback, and
+mixed-history protection.
 
 ## 8. Testing notes
 
@@ -153,7 +149,7 @@ uv run pytest tests/conformance/test_resmed_airsense10.py tests/test_resmed_cuto
   resolved `C:\data\...`). These pass on Linux/Docker, where `/data` is the real
   volume mount; they are an environment artifact, not a product defect.
 
-## 9. Private-card soak checklist (manual — blocker 2)
+## 9. Private-card soak checklist (completed — blocker 2 closed)
 
 Run on a Linux/Docker host with the parser runtime installed and a **real**
 ResMed card. This is the independent second soak; it must not be faked, and no
@@ -168,16 +164,16 @@ uv run pytest tests/test_resmed_private_card_soak.py -q -s
 Then exercise the full DB-backed import path in a running instance
 (`SLEEPLAB_USE_CPAP_PARSER=1`) and confirm:
 
-- [ ] fresh parser-default import of the card succeeds
-- [ ] same-card re-import produces **no duplicate sessions**
-- [ ] re-import produces **no duplicate events**
-- [ ] re-import produces **no duplicate `waveform_chunks`** (chunk count stable)
-- [ ] `session_waveform` is **not** repopulated (stays empty for parser nights)
-- [ ] Event Inspector windows render for scored events
-- [ ] full-night waveform view renders
-- [ ] Nightly data coverage reports chunk-backed waveforms (not row-backed)
-- [ ] Import History shows both runs; the second reports a sensible
-      re-import/unchanged summary
+- [x] fresh parser-default import of the card succeeds
+- [x] same-card re-import produces **no duplicate sessions**
+- [x] re-import produces **no duplicate events**
+- [x] re-import produces **no duplicate `waveform_chunks`** (chunk count stable)
+- [x] `session_waveform` is **not** repopulated (stays empty for parser nights)
+- [x] Event Inspector windows render for scored events
+- [x] full-night waveform view renders
+- [x] Nightly data coverage reports chunk-backed waveforms (not row-backed)
+- [x] Import History shows the completed run; exact-snapshot re-import reports
+      a sensible re-import/unchanged summary
 
 If any check fails, treat it as a beta blocker and do not promote to `beta.1`.
 
@@ -218,6 +214,6 @@ usable Event Inspector/full-night waveform responses. A maintainer may still
 visually inspect the rendered screens. Any unavailable automation is a manual
 item and exit code 2 (INCONCLUSIVE), never a false pass.
 
-Do not close blocker 2 until this runner actually reports PASS on the second
-independent real private card. Any FAIL remains a blocker; do not promote to
-`v2.0.0-beta.1`.
+Blocker 2 closed when this runner reported PASS on the second independent real
+private card at `a4b3daf`. Only the safe aggregates in §5 are retained in the
+repository; the private source and local report remain outside it.

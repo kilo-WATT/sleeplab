@@ -21,21 +21,21 @@ def test_get_app_version_extracts_semver_from_bracketed_version_file():
     assert get_app_version() == match.group(1)
 
 
-def test_committed_version_is_not_stale_alpha2():
-    """The committed VERSION must not regress to the stale alpha.2 footer value.
+def test_committed_version_is_sleep_lab_2_prerelease():
+    """The committed VERSION must remain a current SleepLab 2 prerelease.
 
-    Parses the `2.0.0-alpha.N` pre-release number and asserts it is at least the
-    current alpha.9 milestone, so a forgotten bump (the recurring footer bug) fails
-    loudly rather than silently shipping an old version string to users.
+    Accepts the established alpha/beta forms while retaining the stale-alpha
+    guard that catches a forgotten VERSION bump.
     """
     version = get_app_version()
-    match = re.fullmatch(r"2\.0\.0-alpha\.(\d+)", version)
-    assert match, f"VERSION semver must be a 2.0.0-alpha.N pre-release, got {version!r}"
-    assert int(match.group(1)) >= 9, f"VERSION {version!r} is stale (expected >= alpha.9)"
+    match = re.fullmatch(r"2\.0\.0-(alpha|beta)\.(\d+)", version)
+    assert match, f"VERSION semver must be a SleepLab 2 alpha/beta prerelease, got {version!r}"
+    if match.group(1) == "alpha":
+        assert int(match.group(2)) >= 9, f"VERSION {version!r} is stale (expected >= alpha.9)"
 
 
-def test_committed_version_matches_latest_published_alpha():
-    assert get_app_version() == "2.0.0-alpha.25"
+def test_committed_version_matches_latest_published_prerelease():
+    assert get_app_version() == "2.0.0-beta.1"
 
 
 def test_sleeplab_version_env_override_wins(monkeypatch):
