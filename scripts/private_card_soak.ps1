@@ -47,6 +47,14 @@ function Get-OptionalProperty {
     return $Default
 }
 
+function ConvertTo-FlatArray([AllowNull()][object]$InputObject) {
+    if ($null -eq $InputObject) { return }
+    @($InputObject) | ForEach-Object {
+        if ($_ -is [Array]) { $_ | ForEach-Object { $_ } }
+        else { $_ }
+    }
+}
+
 function ConvertTo-OptionalBoolean([AllowNull()][object]$Value) {
     if ($null -eq $Value) { return $null }
     if ($Value -is [bool]) { return $Value }
@@ -263,39 +271,49 @@ try {
     $fresh = Invoke-SourceImport $soakRoot
     $afterFresh = Get-Counts $userId $dbService
 
-    $sessions = @(Invoke-Api GET "/sessions/?page=1&per_page=600")
+    $sessions = @(ConvertTo-FlatArray (Invoke-Api GET "/sessions/?page=1&per_page=600"))
     $coveragePassed = $false; $eventPassed = $false; $fullNightPassed = $false
+    $visibilityDiagnostics = [ordered]@{
+        sessions_examined = 0; parser_backed_nights = 0; chunk_backed_nights = 0
+        full_night_flow_candidates = 0; chunk_and_event_candidates = 0
+    }
     foreach ($session in $sessions) {
+        $visibilityDiagnostics.sessions_examined++
         $sessionId = Get-OptionalProperty $session @("id", "session_id")
         if (-not $sessionId) { continue }
         $detail = Invoke-Api GET "/sessions/$sessionId"
         $availability = Get-OptionalProperty $detail @("data_availability", "coverage")
         $nightBackend = Get-OptionalProperty $availability @("import_backend", "importer_backend", "backend")
+        if ($nightBackend -ne "cpap-parser") { continue }
+        $visibilityDiagnostics.parser_backed_nights++
+        $waveformSource = Get-OptionalProperty $availability @("event_waveform_source", "waveform_source")
+        if ($waveformSource -ne "chunks") { continue }
+        $visibilityDiagnostics.chunk_backed_nights++
         $hasFullNight = Get-OptionalProperty $availability @("full_night_flow_available", "full_night_waveform_available") $false
-        if ($nightBackend -ne "cpap-parser" -or -not $hasFullNight) { continue }
-        $coveragePassed = (Get-OptionalProperty $availability @("event_waveform_source", "waveform_source")) -eq "chunks"
-        $signals = @(Invoke-Api GET "/sessions/$sessionId/waveforms")
+        if (-not $hasFullNight) { continue }
+        $visibilityDiagnostics.full_night_flow_candidates++
+        $signals = @(ConvertTo-FlatArray (Invoke-Api GET "/sessions/$sessionId/waveforms"))
         $signalNames = @($signals | ForEach-Object { Get-OptionalProperty $_ @("signal_name", "name") })
-        if ($signalNames -contains "flow_rate") {
-            $signal = Invoke-Api GET "/sessions/$sessionId/waveforms/flow_rate?max_points=500"
-            $fullNightPassed = [long](Get-OptionalProperty $signal @("returned_sample_count", "sample_count") 0) -gt 0
-        }
-        $events = @(Invoke-Api GET "/sessions/$sessionId/events")
-        if ($events.Count) {
-            $eventId = Get-OptionalProperty $events[0] @("id", "event_id")
-            if ($eventId) {
-                $window = Invoke-Api GET "/sessions/$sessionId/events/$eventId/window?waveform_downsample=10"
-                $waveform = Get-OptionalProperty $window @("waveform")
-                $eventPassed = @((Get-OptionalProperty $waveform @("timestamps") @())).Count -gt 0
-            }
-        }
-        if ($coveragePassed -and $eventPassed -and $fullNightPassed) { break }
+        if ($signalNames -notcontains "flow_rate") { continue }
+        $events = @(ConvertTo-FlatArray (Invoke-Api GET "/sessions/$sessionId/events"))
+        if (-not $events.Count) { continue }
+        $eventId = Get-OptionalProperty $events[0] @("id", "event_id")
+        if (-not $eventId) { continue }
+        $visibilityDiagnostics.chunk_and_event_candidates++
+
+        $coveragePassed = $true
+        $signal = Invoke-Api GET "/sessions/$sessionId/waveforms/flow_rate?max_points=500"
+        $fullNightPassed = [long](Get-OptionalProperty $signal @("returned_sample_count", "sample_count") 0) -gt 0
+        $window = Invoke-Api GET "/sessions/$sessionId/events/$eventId/window?waveform_downsample=10"
+        $waveform = Get-OptionalProperty $window @("waveform")
+        $eventPassed = @((Get-OptionalProperty $waveform @("timestamps") @())).Count -gt 0
+        if ($eventPassed -and $fullNightPassed) { break }
     }
 
     Write-Host "Starting exact same-card re-import..."
     $second = Invoke-SourceImport $soakRoot
     $afterSecond = Get-Counts $userId $dbService
-    $history = @(Invoke-Api GET "/imports/runs?limit=100")
+    $history = @(ConvertTo-FlatArray (Invoke-Api GET "/imports/runs?limit=100"))
     $failures = [Collections.Generic.List[string]]::new()
     $manual = [Collections.Generic.List[string]]::new()
     $freshStatus = Get-OptionalProperty $fresh.Run @("status", "import_status") "unknown"
@@ -332,6 +350,9 @@ try {
     if (-not $sessions.Count) { $failures.Add("No imported sessions are visible.") }
     $decision = if ($failures.Count) { "FAIL" } elseif ($manual.Count) { "INCONCLUSIVE" } else { "PASS" }
     Write-Host "Parser default/provenance: $parserProvenanceStatus"
+    $warningCodes = @((Get-OptionalProperty $fresh.Run @("warnings") @()) | ForEach-Object { Get-OptionalProperty $_ @("code") } | Where-Object { $_ } | Sort-Object -Unique)
+    $sessionWaveformNoBloat = [long]$before.session_waveform -eq [long]$afterFresh.session_waveform -and
+        [long]$afterFresh.session_waveform -eq [long]$afterSecond.session_waveform
     $report = [ordered]@{
         decision = $decision; generated_at = (Get-Date).ToString("o")
         git = [ordered]@{ branch = $branch; head = $head; tags_at_head = $tags; dirty = $dirty }
@@ -342,13 +363,25 @@ try {
         counts = [ordered]@{ before = $before; after_fresh = $afterFresh; after_reimport = $afterSecond }
         checks = [ordered]@{
             parser_default_provenance = $parserProvenanceStatus
-            sessions_visible = [bool]$sessions.Count; import_history = $historyPassed
-            nightly_chunk_coverage = $coveragePassed; event_inspector = $eventPassed; full_night_waveform = $fullNightPassed
-            reimport_reported_no_op = $reimportNoOp
-            sessions_stable = [long]$afterSecond.sessions -eq [long]$afterFresh.sessions
-            events_stable = [long]$afterSecond.events -eq [long]$afterFresh.events
-            waveform_chunks_stable = [long]$afterSecond.waveform_chunks -eq [long]$afterFresh.waveform_chunks
-            session_waveform_bloat = [long]$afterSecond.session_waveform -ne [long]$afterFresh.session_waveform
+            import_storage_idempotency = [ordered]@{
+                fresh_import_success = $freshStatus -eq "success"
+                reimport_reported_no_op = $reimportNoOp
+                sessions_stable = [long]$afterSecond.sessions -eq [long]$afterFresh.sessions
+                events_stable = [long]$afterSecond.events -eq [long]$afterFresh.events
+                waveform_chunks_stable = [long]$afterSecond.waveform_chunks -eq [long]$afterFresh.waveform_chunks
+                session_waveform_no_bloat = $sessionWaveformNoBloat
+            }
+            api_waveform_visibility = [ordered]@{
+                sessions_visible = [bool]$sessions.Count; import_history = $historyPassed
+                nightly_chunk_coverage = $coveragePassed; event_inspector = $eventPassed
+                full_night_waveform = $fullNightPassed
+            }
+        }
+        visibility_diagnostics = $visibilityDiagnostics
+        warnings = [ordered]@{
+            codes = $warningCodes
+            summary_only_day_present = $warningCodes -contains "resmed_summary_only_day"
+            treated_as_failures = $false
         }
         manual_checks = @($manual); failures = @($failures)
     }
