@@ -2,6 +2,22 @@ import os
 import uuid
 from unittest.mock import patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _legacy_datalog_mode(monkeypatch):
+    """Exercise these legacy/native DATALOG flows with the parser backend off.
+
+    The local DATALOG trigger and per-user webhook routes are intentionally
+    disabled (HTTP 409) while the cpap-parser backend is the default
+    (``SLEEPLAB_USE_CPAP_PARSER=1``). These tests validate the legacy fallback
+    behavior of those routes, so they pin the fallback. The parser-mode 409
+    guard itself is covered by ``test_trigger_local_is_disabled_in_parser_mode``,
+    which re-sets the flag to ``"1"`` in its own body (after this fixture runs).
+    """
+    monkeypatch.setenv("SLEEPLAB_USE_CPAP_PARSER", "0")
+
 
 def test_save_local_path_roundtrip(client, auth_headers):
     """Test save local path roundtrip."""
