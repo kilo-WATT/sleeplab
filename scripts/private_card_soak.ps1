@@ -30,6 +30,70 @@ function Test-PathInside([string]$Candidate, [string]$Parent) {
         $candidatePath.StartsWith($parentPath + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-OptionalProperty {
+    param(
+        [AllowNull()][object]$InputObject,
+        [Parameter(Mandatory)][string[]]$Names,
+        [AllowNull()][object]$Default = $null
+    )
+    if ($null -eq $InputObject) { return $Default }
+    foreach ($name in $Names) {
+        if ($InputObject -is [Collections.IDictionary] -and $InputObject.Contains($name)) {
+            return $InputObject[$name]
+        }
+        $property = $InputObject.PSObject.Properties[$name]
+        if ($null -ne $property -and $null -ne $property.Value) { return $property.Value }
+    }
+    return $Default
+}
+
+function ConvertTo-OptionalBoolean([AllowNull()][object]$Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [bool]) { return $Value }
+    if ($Value -is [string]) {
+        if ($Value.Trim() -match '^(1|true|yes|on)$') { return $true }
+        if ($Value.Trim() -match '^(0|false|no|off)$') { return $false }
+        return $null
+    }
+    return [bool]$Value
+}
+
+function Normalize-BackendName([AllowNull()][object]$Value) {
+    if ($null -eq $Value) { return $null }
+    $normalized = ([string]$Value).Trim().ToLowerInvariant()
+    if ($normalized -match 'cpap[-_ ]?parser|parser.*(default|recommended)|^(parser|recommended|default)$') { return "cpap-parser" }
+    if ($normalized -match 'legacy|native') { return "legacy" }
+    return $normalized
+}
+
+function Resolve-ApiBase([string]$RequestedBase) {
+    $candidates = [Collections.Generic.List[string]]::new()
+    $candidates.Add($RequestedBase.TrimEnd('/'))
+    try {
+        $runtimeConfig = Invoke-WebRequest -UseBasicParsing "$($RequestedBase.TrimEnd('/'))/config.js"
+        if ($runtimeConfig.Content -match 'API_URL\s*:\s*["''](?<url>[^"'']+)["'']') {
+            $candidates.Add($Matches.url.TrimEnd('/'))
+        }
+    } catch { }
+    if ($RequestedBase -match '^https?://(localhost|127\.0\.0\.1)(:\d+)?$') {
+        $candidates.Add("http://localhost:8000")
+        $candidates.Add("http://127.0.0.1:8000")
+    }
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        try {
+            $response = Invoke-RestMethod "$candidate/config"
+            $displayTz = Get-OptionalProperty $response @("display_tz")
+            $backend = Get-OptionalProperty $response @("resmed_import_backend", "importer_backend", "backend")
+            $parserFlag = Get-OptionalProperty $response @("parser_enabled", "use_cpap_parser")
+            if ($response -isnot [string] -and
+                ($null -ne $displayTz -or $null -ne $backend -or $null -ne $parserFlag -or $response.PSObject.Properties.Count -gt 0)) {
+                return [pscustomobject]@{ Base = $candidate; Config = $response }
+            }
+        } catch { }
+    }
+    return [pscustomobject]@{ Base = $RequestedBase.TrimEnd('/'); Config = $null }
+}
+
 function Invoke-Api([string]$Method, [string]$Path, [object]$Body = $null) {
     $args = @{ Method = $Method; Uri = "$($script:Base)/$($Path.TrimStart('/'))" }
     if ($script:Headers.Count) { $args.Headers = $script:Headers }
@@ -44,7 +108,8 @@ function Wait-Import([string]$RunId) {
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     while ((Get-Date) -lt $deadline) {
         $run = Invoke-Api GET "/imports/runs/$RunId"
-        if ($run.status -notin @("pending", "running")) { return $run }
+        $status = Get-OptionalProperty $run @("status", "import_status") "unknown"
+        if ($status -notin @("pending", "running")) { return $run }
         Start-Sleep -Seconds 3
     }
     throw "Import did not finish within $TimeoutMinutes minutes."
@@ -106,13 +171,17 @@ function Get-Counts([string]$UserId, [string]$DbService) {
 
 function Get-SafeRunSummary($Run) {
     [ordered]@{
-        status = $Run.status; validation_status = $Run.validation_status
-        importer_backend = $Run.importer_mode
-        sessions_added = $Run.sessions_added_count; sessions_updated = $Run.sessions_updated_count
-        sessions_skipped = $Run.sessions_skipped_count; imported_sessions = $Run.imported_session_count
-        imported_events = $Run.imported_event_count; waveform_chunks = $Run.waveform_chunk_count
-        warning_codes = @($Run.warnings | ForEach-Object { $_.code } | Where-Object { $_ } | Sort-Object -Unique)
-        error_codes = @($Run.errors | ForEach-Object { $_.code } | Where-Object { $_ } | Sort-Object -Unique)
+        status = Get-OptionalProperty $Run @("status", "import_status") "unknown"
+        validation_status = Get-OptionalProperty $Run @("validation_status") "unknown"
+        importer_backend = Get-OptionalProperty $Run @("importer_mode", "importer_backend", "backend")
+        sessions_added = Get-OptionalProperty $Run @("sessions_added_count")
+        sessions_updated = Get-OptionalProperty $Run @("sessions_updated_count")
+        sessions_skipped = Get-OptionalProperty $Run @("sessions_skipped_count")
+        imported_sessions = Get-OptionalProperty $Run @("imported_session_count")
+        imported_events = Get-OptionalProperty $Run @("imported_event_count")
+        waveform_chunks = Get-OptionalProperty $Run @("waveform_chunk_count")
+        warning_codes = @((Get-OptionalProperty $Run @("warnings") @()) | ForEach-Object { Get-OptionalProperty $_ @("code") } | Where-Object { $_ } | Sort-Object -Unique)
+        error_codes = @((Get-OptionalProperty $Run @("errors") @()) | ForEach-Object { Get-OptionalProperty $_ @("code") } | Where-Object { $_ } | Sort-Object -Unique)
     }
 }
 
@@ -143,16 +212,23 @@ try {
     & docker compose up -d $dbService $appService
     if ($LASTEXITCODE) { throw "Docker Compose services did not start." }
 
-    $script:Base = $BaseUrl.TrimEnd('/')
+    $resolvedApi = Resolve-ApiBase $BaseUrl
+    $script:Base = $resolvedApi.Base
     $script:Headers = @{}
     $script:Http = [Net.Http.HttpClient]::new()
     $script:Http.Timeout = [TimeSpan]::FromMinutes(10)
     $deadline = (Get-Date).AddMinutes(5); $health = $null
     do { try { $health = Invoke-RestMethod "$($script:Base)/health" } catch { Start-Sleep 3 } } while (-not $health -and (Get-Date) -lt $deadline)
     if (-not $health) { throw "SleepLab is not reachable at $($script:Base)." }
-    $config = Invoke-Api GET "/config"
-    if (-not $AllowLegacyFallback -and $config.resmed_import_backend -ne "cpap-parser") { throw "Running app uses the legacy backend." }
-    if ($config.resmed_import_backend -eq "cpap-parser" -and -not $config.resmed_import_ready) { throw "cpap-parser is not ready." }
+    $config = if ($null -ne $resolvedApi.Config) { $resolvedApi.Config } else { try { Invoke-Api GET "/config" } catch { $null } }
+    $configBackend = Normalize-BackendName (Get-OptionalProperty $config @("resmed_import_backend", "importer_backend", "backend"))
+    $parserEnabled = ConvertTo-OptionalBoolean (Get-OptionalProperty $config @("parser_enabled", "use_cpap_parser"))
+    $parserReady = ConvertTo-OptionalBoolean (Get-OptionalProperty $config @("resmed_import_ready", "cpap_parser_ready", "parser_ready", "cpap_parser_available"))
+    if (-not $configBackend -and $null -ne $parserEnabled) { $configBackend = if ($parserEnabled) { "cpap-parser" } else { "legacy" } }
+    $parserDefaultCheck = if ($configBackend -eq "cpap-parser" -and $parserReady -eq $true) { "PASS" }
+        elseif ($configBackend -eq "legacy" -or $parserReady -eq $false) { "FAIL" }
+        else { "INCONCLUSIVE" }
+    Write-Host "Parser default/provenance preflight: $parserDefaultCheck"
 
     if (-not $AccessToken) {
         if (-not $Email) { $Email = Read-Host "SleepLab login email" }
@@ -163,6 +239,8 @@ try {
     }
     $script:Headers.Authorization = "Bearer $AccessToken"
     $me = Invoke-Api GET "/auth/me"
+    $userId = Get-OptionalProperty $me @("id", "user_id")
+    if (-not $userId) { throw "Authenticated user response did not include id or user_id." }
 
     if ($SkipCopy) { $soakRoot = $source; $copyMode = "source used directly" }
     else {
@@ -180,44 +258,63 @@ try {
         Write-Warning "ResetSoakData deletes sessions, history, and machines for this user in this database."
         [void](Invoke-Api DELETE "/sessions/all?reset=true")
     }
-    $before = Get-Counts $me.id $dbService
+    $before = Get-Counts $userId $dbService
     Write-Host "Starting fresh parser-default import..."
     $fresh = Invoke-SourceImport $soakRoot
-    $afterFresh = Get-Counts $me.id $dbService
+    $afterFresh = Get-Counts $userId $dbService
 
     $sessions = @(Invoke-Api GET "/sessions/?page=1&per_page=600")
     $coveragePassed = $false; $eventPassed = $false; $fullNightPassed = $false
     foreach ($session in $sessions) {
-        $detail = Invoke-Api GET "/sessions/$($session.id)"
-        if ($detail.data_availability.import_backend -ne "cpap-parser" -or -not $detail.data_availability.full_night_flow_available) { continue }
-        $coveragePassed = $detail.data_availability.event_waveform_source -eq "chunks"
-        $signals = @(Invoke-Api GET "/sessions/$($session.id)/waveforms")
-        if ($signals.signal_name -contains "flow_rate") {
-            $signal = Invoke-Api GET "/sessions/$($session.id)/waveforms/flow_rate?max_points=500"
-            $fullNightPassed = $signal.returned_sample_count -gt 0
+        $sessionId = Get-OptionalProperty $session @("id", "session_id")
+        if (-not $sessionId) { continue }
+        $detail = Invoke-Api GET "/sessions/$sessionId"
+        $availability = Get-OptionalProperty $detail @("data_availability", "coverage")
+        $nightBackend = Get-OptionalProperty $availability @("import_backend", "importer_backend", "backend")
+        $hasFullNight = Get-OptionalProperty $availability @("full_night_flow_available", "full_night_waveform_available") $false
+        if ($nightBackend -ne "cpap-parser" -or -not $hasFullNight) { continue }
+        $coveragePassed = (Get-OptionalProperty $availability @("event_waveform_source", "waveform_source")) -eq "chunks"
+        $signals = @(Invoke-Api GET "/sessions/$sessionId/waveforms")
+        $signalNames = @($signals | ForEach-Object { Get-OptionalProperty $_ @("signal_name", "name") })
+        if ($signalNames -contains "flow_rate") {
+            $signal = Invoke-Api GET "/sessions/$sessionId/waveforms/flow_rate?max_points=500"
+            $fullNightPassed = [long](Get-OptionalProperty $signal @("returned_sample_count", "sample_count") 0) -gt 0
         }
-        $events = @(Invoke-Api GET "/sessions/$($session.id)/events")
+        $events = @(Invoke-Api GET "/sessions/$sessionId/events")
         if ($events.Count) {
-            $window = Invoke-Api GET "/sessions/$($session.id)/events/$($events[0].id)/window?waveform_downsample=10"
-            $eventPassed = @($window.waveform.timestamps).Count -gt 0
+            $eventId = Get-OptionalProperty $events[0] @("id", "event_id")
+            if ($eventId) {
+                $window = Invoke-Api GET "/sessions/$sessionId/events/$eventId/window?waveform_downsample=10"
+                $waveform = Get-OptionalProperty $window @("waveform")
+                $eventPassed = @((Get-OptionalProperty $waveform @("timestamps") @())).Count -gt 0
+            }
         }
         if ($coveragePassed -and $eventPassed -and $fullNightPassed) { break }
     }
 
     Write-Host "Starting exact same-card re-import..."
     $second = Invoke-SourceImport $soakRoot
-    $afterSecond = Get-Counts $me.id $dbService
+    $afterSecond = Get-Counts $userId $dbService
     $history = @(Invoke-Api GET "/imports/runs?limit=100")
     $failures = [Collections.Generic.List[string]]::new()
     $manual = [Collections.Generic.List[string]]::new()
+    $freshStatus = Get-OptionalProperty $fresh.Run @("status", "import_status") "unknown"
+    $freshBackend = Normalize-BackendName (Get-OptionalProperty $fresh.Run @("importer_mode", "importer_backend", "backend"))
+    $secondStatus = Get-OptionalProperty $second.Run @("status", "import_status") "unknown"
+    $secondAdded = [long](Get-OptionalProperty $second.Run @("sessions_added_count") 0)
+    $secondUpdated = [long](Get-OptionalProperty $second.Run @("sessions_updated_count") 0)
+    $secondSkipped = [long](Get-OptionalProperty $second.Run @("sessions_skipped_count") 0)
+    $parserProvenanceStatus = if ($parserDefaultCheck -eq "PASS" -and $freshBackend -eq "cpap-parser") { "PASS" }
+        elseif ($parserDefaultCheck -eq "FAIL" -or ($freshBackend -and $freshBackend -ne "cpap-parser")) { "FAIL" }
+        else { "INCONCLUSIVE" }
+    if ($parserProvenanceStatus -eq "FAIL" -and -not $AllowLegacyFallback) { $failures.Add("Parser default/provenance check failed.") }
+    if ($parserProvenanceStatus -eq "FAIL" -and $AllowLegacyFallback) { $manual.Add("Parser default/provenance is not parser-backed because this was an explicit fallback test.") }
+    if ($parserProvenanceStatus -eq "INCONCLUSIVE") { $manual.Add("Parser default/provenance could not be confirmed from config and import history fields.") }
     if ($fresh.TriggerStatus -eq "unchanged") { $manual.Add("Fresh semantics were not exercised; rerun with -ResetSoakData on a disposable soak user/database.") }
-    if ($fresh.Run.status -notin @("success", "unchanged")) { $failures.Add("Fresh import status: $($fresh.Run.status).") }
-    if (-not $AllowLegacyFallback -and $fresh.Run.importer_mode -ne "cpap-parser") { $failures.Add("Fresh importer was not cpap-parser.") }
-    if ($second.TriggerStatus -ne "unchanged" -and $second.Run.status -notin @("success", "unchanged")) { $failures.Add("Re-import status: $($second.Run.status).") }
+    if ($freshStatus -notin @("success", "unchanged")) { $failures.Add("Fresh import status: $freshStatus.") }
+    if ($second.TriggerStatus -ne "unchanged" -and $secondStatus -notin @("success", "unchanged")) { $failures.Add("Re-import status: $secondStatus.") }
     $reimportNoOp = $second.TriggerStatus -eq "unchanged" -or
-        ([long]$second.Run.sessions_added_count -eq 0 -and
-         [long]$second.Run.sessions_updated_count -eq 0 -and
-         [long]$second.Run.sessions_skipped_count -gt 0)
+        ($secondAdded -eq 0 -and $secondUpdated -eq 0 -and $secondSkipped -gt 0)
     if (-not $reimportNoOp) { $failures.Add("Re-import did not clearly report unchanged/skipped no-op behavior.") }
     foreach ($name in @("sessions", "events", "waveform_chunks", "session_waveform")) {
         if ([long]$afterSecond.$name -ne [long]$afterFresh.$name) { $failures.Add("$name count changed on re-import.") }
@@ -227,19 +324,24 @@ try {
     if (-not $coveragePassed) { $failures.Add("No night reported chunk-backed Event waveform coverage.") }
     if (-not $eventPassed) { $failures.Add("Event Inspector returned no usable waveform.") }
     if (-not $fullNightPassed) { $failures.Add("Full-night endpoint returned no usable flow data.") }
-    $historyPassed = @($history | Where-Object { $_.importer_mode -eq "cpap-parser" -and $_.status -eq "success" }).Count -gt 0
+    $historyPassed = @($history | Where-Object {
+        (Normalize-BackendName (Get-OptionalProperty $_ @("importer_mode", "importer_backend", "backend"))) -eq "cpap-parser" -and
+        (Get-OptionalProperty $_ @("status", "import_status")) -eq "success"
+    }).Count -gt 0
     if (-not $historyPassed) { $failures.Add("Import History has no successful cpap-parser run.") }
     if (-not $sessions.Count) { $failures.Add("No imported sessions are visible.") }
     $decision = if ($failures.Count) { "FAIL" } elseif ($manual.Count) { "INCONCLUSIVE" } else { "PASS" }
+    Write-Host "Parser default/provenance: $parserProvenanceStatus"
     $report = [ordered]@{
         decision = $decision; generated_at = (Get-Date).ToString("o")
         git = [ordered]@{ branch = $branch; head = $head; tags_at_head = $tags; dirty = $dirty }
-        app = [ordered]@{ base_url = $script:Base; backend = $config.resmed_import_backend; parser_ready = $config.resmed_import_ready }
+        app = [ordered]@{ requested_base_url = $BaseUrl; api_base_url = $script:Base; backend = $configBackend; parser_ready = $parserReady }
         card_handling = $copyMode
         fresh_import = Get-SafeRunSummary $fresh.Run
         reimport = [ordered]@{ trigger_status = $second.TriggerStatus; summary = Get-SafeRunSummary $second.Run }
         counts = [ordered]@{ before = $before; after_fresh = $afterFresh; after_reimport = $afterSecond }
         checks = [ordered]@{
+            parser_default_provenance = $parserProvenanceStatus
             sessions_visible = [bool]$sessions.Count; import_history = $historyPassed
             nightly_chunk_coverage = $coveragePassed; event_inspector = $eventPassed; full_night_waveform = $fullNightPassed
             reimport_reported_no_op = $reimportNoOp
