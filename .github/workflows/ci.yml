@@ -57,37 +57,50 @@ jobs:
 
       - name: Check version alignment
         run: |
+          # Normalize a PEP 440 pre-release (e.g. 2.0.0a24 / 2.0.0b1 / 2.0.0rc1)
+          # to the semver form the npm packages, VERSION file, and git tags use
+          # (e.g. 2.0.0-alpha.24). pyproject.toml legitimately stores the PEP 440
+          # form, so a raw string compare can never match — normalize first.
+          norm() {
+            echo "$1" | sed -E 's/a([0-9]+)$/-alpha.\1/; s/b([0-9]+)$/-beta.\1/; s/rc([0-9]+)$/-rc.\1/'
+          }
+
           TAG_VERSION=""
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           fi
 
-          PYPROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          PYPROJECT_RAW=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -1)
+          PYPROJECT_VERSION=$(norm "$PYPROJECT_RAW")
           PACKAGE_VERSION=$(jq -r '.version' package.json)
-          NOTICE_VERSION=$(sed -n 's/^\*\*Version:\*\* \(.*\)/\1/p' NOTICE.md)
+          FRONTEND_VERSION=$(jq -r '.version' frontend/package.json)
+          # VERSION is "<calver> [<semver>]"; the bracketed semver is the app version.
+          VERSION_FILE_VERSION=$(sed -n 's/.*\[\(.*\)\].*/\1/p' VERSION | head -1)
 
-          echo "pyproject.toml: $PYPROJECT_VERSION"
-          echo "package.json:  $PACKAGE_VERSION"
-          echo "NOTICE.md:     $NOTICE_VERSION"
+          echo "pyproject.toml:        $PYPROJECT_RAW -> $PYPROJECT_VERSION"
+          echo "package.json:          $PACKAGE_VERSION"
+          echo "frontend/package.json: $FRONTEND_VERSION"
+          echo "VERSION:               $VERSION_FILE_VERSION"
           if [[ -n "$TAG_VERSION" ]]; then
-            echo "git tag:       v$TAG_VERSION"
+            echo "git tag:               v$TAG_VERSION"
           fi
+
+          # NOTE: NOTICE.md carries its own independent third-party-notices
+          # document version (managed by the update-notice workflow), not the app
+          # version, so it is intentionally not compared here.
 
           ERRORS=0
-
-          if [[ "$PYPROJECT_VERSION" != "$PACKAGE_VERSION" ]]; then
-            echo "::error::Version mismatch: pyproject.toml ($PYPROJECT_VERSION) != package.json ($PACKAGE_VERSION)"
-            ERRORS=$((ERRORS+1))
-          fi
-
-          if [[ "$PYPROJECT_VERSION" != "$NOTICE_VERSION" ]]; then
-            echo "::error::Version mismatch: pyproject.toml ($PYPROJECT_VERSION) != NOTICE.md ($NOTICE_VERSION)"
-            ERRORS=$((ERRORS+1))
-          fi
-
-          if [[ -n "$TAG_VERSION" && "$PYPROJECT_VERSION" != "$TAG_VERSION" ]]; then
-            echo "::error::Version mismatch: pyproject.toml ($PYPROJECT_VERSION) != git tag v$TAG_VERSION"
-            ERRORS=$((ERRORS+1))
+          check_version() {
+            if [[ "$2" != "$PYPROJECT_VERSION" ]]; then
+              echo "::error::Version mismatch: $1 ($2) != pyproject.toml ($PYPROJECT_RAW -> $PYPROJECT_VERSION)"
+              ERRORS=$((ERRORS+1))
+            fi
+          }
+          check_version "package.json" "$PACKAGE_VERSION"
+          check_version "frontend/package.json" "$FRONTEND_VERSION"
+          check_version "VERSION" "$VERSION_FILE_VERSION"
+          if [[ -n "$TAG_VERSION" ]]; then
+            check_version "git tag" "$TAG_VERSION"
           fi
 
           if [[ $ERRORS -gt 0 ]]; then
