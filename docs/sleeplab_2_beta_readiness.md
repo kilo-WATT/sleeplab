@@ -180,3 +180,44 @@ Then exercise the full DB-backed import path in a running instance
       re-import/unchanged summary
 
 If any check fails, treat it as a beta blocker and do not promote to `beta.1`.
+
+## 10. Automated private-card soak runner
+
+The manual checklist above is now automated by
+`scripts/private_card_soak.ps1`. Run it on Windows with Docker and a **real**
+ResMed card (or a private local copy). It uses the same `/upload/source/*` path
+as the UI, waits for completion, captures aggregate DB counts, exercises the
+chunk-backed coverage, Event Inspector, and full-night APIs, then re-imports the
+same snapshot. Its JSON report contains no card filenames, serials, dates, or
+session identifiers. Card, copy, and report paths inside the repository are
+refused.
+
+Use a disposable SleepLab database/user. `-ResetSoakData` is explicit and
+destructive: it clears sessions, import history, and machines for the logged-in
+user so the first import is genuinely fresh. Without it, existing data is kept;
+an already-imported snapshot produces INCONCLUSIVE instead of a false pass.
+
+```powershell
+# Prompts securely for the SleepLab login; report stays outside the repository.
+.\scripts\private_card_soak.ps1 `
+  -CardPath 'E:\' `
+  -CopyTo 'C:\tmp\sleeplab-private-card-soak\card' `
+  -ResetSoakData `
+  -OutputPath 'C:\tmp\sleeplab-private-card-soak\report.json'
+
+# Use an existing private copy without copying it again.
+.\scripts\private_card_soak.ps1 `
+  -CardPath 'D:\private\resmed-card-copy' `
+  -SkipCopy `
+  -OutputPath 'D:\private\sleeplab-soak-report.json'
+```
+
+The runner automates import status/provenance/history, aggregate session/event/
+chunk/legacy-waveform counts, same-card stability, nightly chunk coverage, and
+usable Event Inspector/full-night waveform responses. A maintainer may still
+visually inspect the rendered screens. Any unavailable automation is a manual
+item and exit code 2 (INCONCLUSIVE), never a false pass.
+
+Do not close blocker 2 until this runner actually reports PASS on the second
+independent real private card. Any FAIL remains a blocker; do not promote to
+`v2.0.0-beta.1`.
