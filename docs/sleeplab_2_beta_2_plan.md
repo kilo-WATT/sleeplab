@@ -33,23 +33,33 @@ the private-card soak passed; upstream reconciliation is documented
 
 ### 2. Install / docs rough edges
 
-Concrete drift found while preparing beta.1 feedback docs. Most are doc-only:
+Concrete drift found while preparing beta.1 feedback docs. Most are doc-only.
 
-- **README self-hosting section vs. real compose layout.** The repo ships
-  `compose.yaml` (minimal), `compose.advanced.yaml` (documented), and
-  `.env.example`. The README's "Copy-Paste" compose block and surrounding prose
-  still describe a single hand-rolled stack that exposes the API on `8000` and
-  sets `OPENAI_API_KEY`/`API_URL` inline; the real `compose.yaml` exposes only
-  `8080` and parameterizes far fewer vars. Reconcile the README example with the
-  shipped compose files (or point at them instead of duplicating).
-- **Quick Start manual-migration list is stale.** The README lists running
-  `migrations/001`–`005` by hand, but 2.0 auto-applies migrations at API startup
-  and the tree now goes well past `005` (2.0 uses `022`–`032`). The manual psql
-  steps should be removed or clearly marked as legacy/advanced.
-- **User Guide still describes DATALOG-folder selection.**
-  [`user-guide.md`](user-guide.md) §2 tells users to "Select DATALOG Folder",
-  which predates the 2.0 SD-card-**root** + cpap-parser flow. Update it to match
-  the root `/upload/source/*` path and mention the legacy fallback.
+**Resolved in the install/import docs-hardening pass:**
+
+- **README self-hosting section reconciled with the shipped compose files.** Now
+  documents `compose.yaml` (minimal, web UI only) vs. `compose.advanced.yaml`
+  (`.env`-driven, publishes UI `8080` + API `8000`), the `compose.override.yaml`
+  local-build merge on a bare `docker compose up`, accurate ports/service names,
+  and the fact that the browser calls the API directly at `API_URL` (nginx does
+  not proxy `/api`).
+- **Quick Start manual-migration list removed.** Replaced with a note that
+  `server.py:run_migrations()` auto-applies `schema.sql` + `migrations/*`
+  (through `032_*`) once each, on a fresh or upgraded DB.
+- **User Guide import flow updated** to the SD-card-**root** + cpap-parser
+  default, with the `SLEEPLAB_USE_CPAP_PARSER=0` legacy fallback and a
+  parser-import troubleshooting subsection (§3 below).
+
+**Still open:**
+
+- **`compose.yaml` (minimal) doesn't publish the API port.** It exposes only
+  `8080`, but the frontend calls the API directly at `API_URL` (default
+  `http://localhost:8000`) since nginx doesn't proxy `/api` — so the minimal file
+  alone yields a UI that can't reach the API. This is a **config/behavior**
+  question, not a docs fix: either publish `8000` in `compose.yaml` (matching
+  `compose.advanced.yaml`) or keep it intentionally UI-only. Decide with the
+  maintainer; the docs currently steer self-hosters to `compose.advanced.yaml`
+  and flag the limitation. Use the `sync-compose-config` workflow if changed.
 - **mkdocs nav.** The `docs/sleeplab_2_*.md` planning/release docs (including the
   beta.1 release notes) are not in [`../mkdocs.yml`](../mkdocs.yml) `nav`. Decide
   which, if any, belong on the published site (at least the release notes).

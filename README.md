@@ -55,18 +55,27 @@ backend (`cpap-parser` or legacy), what `GET /config` reports, and the relevant
 
 SleepLab can run as a self-hosted Docker stack with:
 
-- PostgreSQL
-- FastAPI backend
-- Nginx-served frontend
+- PostgreSQL (service `postgres`)
+- FastAPI backend + Nginx-served frontend in one image (service `app`)
 - automatic schema migrations at API startup
-- a prebuilt Docker image, so no local image build is required
+- a prebuilt, multi-arch Docker image, so no local build is required
 
-Key files:
+The repo ships two compose files plus a dev override:
 
-- [`compose.yaml`](compose.yaml)
-- [`docker/entrypoint.sh`](docker/entrypoint.sh)
-- [`docker/nginx.conf`](docker/nginx.conf)
-- [`.env.example`](.env.example)
+- [`compose.yaml`](compose.yaml) — minimal, zero-config skeleton. Publishes the
+  web UI on `8080` only. Good for a quick look; not a complete self-host (the
+  browser also needs to reach the API — see below).
+- [`compose.advanced.yaml`](compose.advanced.yaml) — fully documented,
+  `.env`-driven. Publishes the web UI on `8080` **and** the API on `8000`. This
+  is the recommended self-host file.
+- [`compose.override.yaml`](compose.override.yaml) — a development override that
+  **builds the image locally** from the [`Dockerfile`](Dockerfile). Docker
+  Compose auto-merges it into a bare `docker compose up`, so to use the
+  *published* image you must select a file explicitly with `-f` (shown below).
+
+Other relevant files: [`.env.example`](.env.example),
+[`docker/entrypoint.sh`](docker/entrypoint.sh),
+[`docker/nginx.conf`](docker/nginx.conf).
 
 The default self-hosted image is:
 
@@ -74,67 +83,89 @@ The default self-hosted image is:
 joshuaaaronmyers/sleeplab:latest
 ```
 
+> **How the frontend reaches the API:** the browser calls the API directly at
+> the `API_URL` baked into `/config.js` (default `http://localhost:8000`); nginx
+> serves only the static UI and does not proxy `/api`. So the API port must be
+> published and reachable from your browser. `compose.advanced.yaml` already
+> publishes `8000`; if you access SleepLab from another device, set `API_URL` to
+> the host's address (e.g. `http://192.168.1.50:8000`).
+
 ### Required Configuration
 
-Create an env file for deployment by copying [`.env.example`](.env.example).
+`compose.advanced.yaml` reads its configuration from a `.env` file. Create one
+by copying [`.env.example`](.env.example):
+
+```bash
+cp .env.example .env
+```
 
 Set at minimum:
 
-- `SECRET_KEY`
+- `SECRET_KEY` — generate with `openssl rand -hex 32`
+- `POSTGRES_PASSWORD` — pick a strong random value
 
-Optional but commonly needed:
+Optional but commonly used (see [`.env.example`](.env.example) for the full
+list): `OPENAI_API_KEY`, `CORS_ALLOWED_ORIGINS`, `API_URL`, `MACHINE_TZ`,
+`DISPLAY_TZ`, `SLEEPLAB_USE_CPAP_PARSER`.
 
-- `OPENAI_API_KEY`
-- `CORS_ALLOWED_ORIGINS`
-- `API_URL`
+`compose.advanced.yaml` builds the database DSN from your `.env` values
+(`postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}`,
+defaulting the user/db to `cpap`). The minimal `compose.yaml`, by contrast,
+hard-codes `cpap:cpap` and does not read most `.env` values.
 
-Recommended values for a local/self-hosted machine:
-
-```env
-SECRET_KEY=replace-me-with-a-long-random-secret
-OPENAI_API_KEY=
-CORS_ALLOWED_ORIGINS=*
-API_URL=http://localhost:8000
-```
-
-The self-hosted compose stack always uses the internal Postgres DSN:
-
-```text
-postgresql+psycopg2://cpap:cpap@postgres:5432/cpap
-```
-
-For the default self-hosted setup, `CORS_ALLOWED_ORIGINS` is `*` so the frontend can talk to the API regardless of whether you access it via `localhost`, `127.0.0.1`, or a LAN hostname/IP. If you expose the app publicly, tighten that value to your actual frontend origin(s).
+`CORS_ALLOWED_ORIGINS` defaults to `*` so the frontend can reach the API via
+`localhost`, `127.0.0.1`, or a LAN hostname/IP. If you expose the app publicly,
+tighten it to your actual frontend origin(s).
 
 ### Start The Stack
 
+Recommended (published image, API published on `8000`):
+
 ```bash
-docker compose up -d
+docker compose -f compose.advanced.yaml up -d
 ```
 
-If you want the newest published image first:
+For a quick zero-config look (web UI only on `8080`, insecure default
+`SECRET_KEY`, API not published):
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose -f compose.yaml up -d
+```
+
+> **Note:** a bare `docker compose up -d` (no `-f`) auto-merges
+> `compose.override.yaml` and **builds the image locally** from the `Dockerfile`.
+> That is the development workflow. For the published image, always pass
+> `-f compose.advanced.yaml` (or `-f compose.yaml`).
+
+Pull the newest published image first with:
+
+```bash
+docker compose -f compose.advanced.yaml pull
+docker compose -f compose.advanced.yaml up -d
 ```
 
 ### View Logs
 
 ```bash
-docker compose logs -f
+docker compose -f compose.advanced.yaml logs -f
 ```
 
 ### Stop The Stack
 
 ```bash
-docker compose down
+docker compose -f compose.advanced.yaml down
 ```
 
 ### Copy-Paste Compose File
 
-If you want to self-host quickly on a server, you can save this as `compose.yaml` and use it directly:
+If you'd rather not clone the repo, save the following as `compose.yaml` on your
+server and run `docker compose up -d`. It mirrors `compose.advanced.yaml` (minus
+the inline documentation) and publishes both the web UI (`8080`) and the API
+(`8000`):
 
 ```yaml
+name: sleeplab
+
 services:
   postgres:
     image: postgres:16
@@ -142,7 +173,7 @@ services:
     environment:
       POSTGRES_DB: cpap
       POSTGRES_USER: cpap
-      POSTGRES_PASSWORD: cpap
+      POSTGRES_PASSWORD: change-me-strong-password
     volumes:
       - sleeplab_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -158,25 +189,18 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+psycopg2://cpap:cpap@postgres:5432/cpap
+      DATABASE_URL: postgresql+psycopg2://cpap:change-me-strong-password@postgres:5432/cpap
       SECRET_KEY: replace-me-with-a-long-random-secret
-      OPENAI_API_KEY: ""
       CORS_ALLOWED_ORIGINS: "*"
       API_URL: http://localhost:8000
-      API_HOST: 0.0.0.0
-      API_PORT: 8000
+      # cpap-parser is the default ResMed path; set to "0" for the legacy fallback.
+      SLEEPLAB_USE_CPAP_PARSER: "1"
     ports:
       - "8080:8080"
       - "8000:8000"
 
 volumes:
   sleeplab_postgres_data:
-```
-
-Then start it with:
-
-```bash
-docker compose up -d
 ```
 
 ### `docker run` Command
@@ -205,15 +229,17 @@ Notes:
 
 ### Default Self-Hosted URLs
 
-- Frontend: `http://localhost:8080`
-- API: `http://localhost:8000`
+- Frontend (web UI): `http://localhost:8080` — published by both compose files.
+- API: `http://localhost:8000` — published by `compose.advanced.yaml` and the
+  copy-paste/`docker run` setups. The minimal `compose.yaml` does **not** publish
+  the API port, so the dashboard's API calls won't work with that file alone.
 
-### What The Compose File Does
+### What The Compose Stack Does
 
-- starts PostgreSQL with a named volume
-- pulls `joshuaaaronmyers/sleeplab:latest`
-- exposes the frontend on `8080`
-- exposes the API on `8000`
+- starts PostgreSQL (`postgres`) with a named volume
+- runs `joshuaaaronmyers/sleeplab:latest` (`app`), or builds locally when the
+  dev override is merged
+- exposes the frontend on `8080` (and the API on `8000` with the advanced file)
 - waits for Postgres to become healthy
 - runs migrations automatically at API startup
 
@@ -226,12 +252,15 @@ Database data is stored in the named volume:
 ### Upgrade Workflow
 
 ```bash
-git pull
-docker compose pull
-docker compose up -d
+docker compose -f compose.advanced.yaml pull
+docker compose -f compose.advanced.yaml up -d
 ```
 
-Migrations run automatically through [`server.py`](server.py) when the API starts.
+(Add `git pull` first if you self-host from a clone of this repo.) Migrations run
+automatically through [`server.py`](server.py) when the API starts, so no manual
+migration step is needed on upgrade. **Back up your database first** — see the
+[beta.1 release notes](docs/sleeplab_2_beta_1_release_notes.md) for upgrade and
+import cautions.
 
 ### Troubleshooting
 
@@ -273,17 +302,17 @@ postgresql+psycopg2://localhost/cpap
 
 That is defined in [`api/database.py`](api/database.py). If your local database setup differs, update that file or add your own configuration layer.
 
-### 3. Apply schema migrations
+### 3. Schema migrations (automatic)
 
-Run the SQL files in `migrations/` against the `cpap` database in order:
+You do **not** need to apply migrations by hand. On startup the API runs
+[`server.py`](server.py)'s `run_migrations()`, which applies `schema.sql` and
+every file in `migrations/` (currently through `032_*`) in order and records
+each one in a `schema_migrations` table so it is applied exactly once. A fresh
+database is initialized automatically the first time the API starts; existing
+databases pick up only the new migrations.
 
-```bash
-psql -d cpap -f migrations/001_add_auth.sql
-psql -d cpap -f migrations/002_scope_sessions_per_user.sql
-psql -d cpap -f migrations/003_add_public_ids.sql
-psql -d cpap -f migrations/004_reset_uuid_ids.sql
-psql -d cpap -f migrations/005_add_user_profile_fields.sql
-```
+This is the same mechanism used by the Docker stack, so upgrades need no manual
+migration step either.
 
 ### 4. Run the app
 
@@ -409,6 +438,58 @@ Optional filters:
 python3 import_sessions.py --datalog /absolute/path/to/DATALOG --user-id <user-uuid> --folder 20241215
 python3 import_sessions.py --datalog /absolute/path/to/DATALOG --user-id <user-uuid> --from 20250101
 ```
+
+> **Your CPAP data is personal health data.** It stays in your own database.
+> Keep your instance private, and never attach real card files, serial numbers,
+> dates, or session exports to public bug reports — only safe aggregates (session
+> / event / waveform-chunk counts).
+
+### Import troubleshooting (ResMed / cpap-parser)
+
+**Verify which backend is active.** `GET /config` reports the import posture:
+
+```bash
+curl http://localhost:8000/config
+```
+
+Look for `"resmed_import_backend": "cpap-parser"` (the default) and
+`"resmed_import_ready": true`. `"cpap_parser_available"` shows whether the parser
+runtime is installed; `"datalog_import_backend"` is always `"legacy"` and
+`"datalog_import_available"` is `true` only when the legacy fallback is selected.
+
+**Parser unavailable — HTTP 503 at finish.** If the parser backend is selected
+but its runtime isn't installed, the import fails before any run is created:
+
+> The cpap-parser ResMed backend is selected but unavailable. Install it with
+> `uv sync --extra parser --group dev` or use the SleepLab Docker image, then
+> restart SleepLab.
+
+The published Docker image already bundles the parser. For local `uv` installs,
+run that command and restart. (`"resmed_import_ready": false` in `/config` is the
+same condition.)
+
+**Mixed parser/native history — HTTP 409.** SleepLab will not mix legacy/native
+and cpap-parser data for one machine:
+
+> This ResMed machine already has sessions imported by the other backend …
+> Existing sessions remain unchanged; set `SLEEPLAB_USE_CPAP_PARSER=0` to
+> continue importing this machine through the legacy/native fallback.
+
+Existing sessions are never rewritten. To keep extending a machine first imported
+by the native backend, set `SLEEPLAB_USE_CPAP_PARSER=0` and restart; to start
+fresh on the parser, delete that machine's sessions and re-import.
+
+**DATALOG / native fallback behavior.** While the parser backend is selected, the
+legacy DATALOG-only flows (`/upload/datalog/*`, local DATALOG settings, scheduler
+triggers, and uploader webhooks) return HTTP 409 and tell you to upload the full
+card **root** through the `/upload/source/*` path instead. They operate normally
+once `SLEEPLAB_USE_CPAP_PARSER=0` is set.
+
+**Import finished with warnings.** Warnings don't fail an import. The common one,
+`resmed_summary_only_day`, means a day had only ResMed summary data (`STR.edf`
+totals) without detailed `DATALOG` records for that date — usage/AHI still import,
+but there are no waveforms or scored events to inspect for that day. This is
+expected for days the machine only summarized; it is not an error.
 
 ## SleepHQ Import
 
