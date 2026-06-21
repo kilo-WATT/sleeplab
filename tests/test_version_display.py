@@ -35,7 +35,7 @@ def test_committed_version_is_sleep_lab_2_prerelease():
 
 
 def test_committed_version_matches_latest_published_prerelease():
-    assert get_app_version() == "2.0.0-beta.2"
+    assert get_app_version() == "2.0.0-beta.3"
 
 
 def test_sleeplab_version_env_override_wins(monkeypatch):
