@@ -10,6 +10,27 @@ SleepLab is a local-first sleep therapy dashboard for importing and exploring Re
 - A FastAPI backend in `api/`
 - A PostgreSQL-backed importer in `importer/` for ResMed `DATALOG` folders
 
+## SleepLab 2.0 beta
+
+This branch (`develop/2.0`) is the SleepLab 2.0 beta line, currently released as
+**v2.0.0-beta.1**. ResMed SD-card imports now run through the `cpap-parser`
+backend by default, with the older native importer retained as an explicit
+fallback. See the
+[beta.1 release notes](docs/sleeplab_2_beta_1_release_notes.md) for what changed,
+[known limitations](docs/sleeplab_2_beta_1_release_notes.md#known-limitations),
+and upgrade/import cautions.
+
+> **Your CPAP data is personal health data.** SleepLab is local-first and stores
+> everything in your own PostgreSQL database. Keep your instance private — don't
+> expose it to the public internet without authentication and a tightened
+> `CORS_ALLOWED_ORIGINS`, and never attach real card files, serial numbers,
+> dates, or session exports to public bug reports.
+
+**Reporting beta feedback:** open an issue at
+<https://github.com/kilo-WATT/sleeplab/issues> with your platform, the importer
+backend (`cpap-parser` or legacy), what `GET /config` reports, and the relevant
+`docker compose logs app` excerpt. Redact private details first.
+
 ## Screenshots
 
 ![SleepLab dashboard screenshot 1](https://sleeplab-static.s3.ap-southeast-2.amazonaws.com/screenshot-1.png)
@@ -42,10 +63,10 @@ SleepLab can run as a self-hosted Docker stack with:
 
 Key files:
 
-- [`docker-compose.yml`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker-compose.yml)
-- [`docker/entrypoint.sh`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker/entrypoint.sh)
-- [`docker/nginx.conf`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker/nginx.conf)
-- [`.env.selfhost.example`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/.env.selfhost.example)
+- [`compose.yaml`](compose.yaml)
+- [`docker/entrypoint.sh`](docker/entrypoint.sh)
+- [`docker/nginx.conf`](docker/nginx.conf)
+- [`.env.example`](.env.example)
 
 The default self-hosted image is:
 
@@ -55,7 +76,7 @@ joshuaaaronmyers/sleeplab:latest
 
 ### Required Configuration
 
-Create an env file for deployment by copying [`.env.selfhost.example`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/.env.selfhost.example).
+Create an env file for deployment by copying [`.env.example`](.env.example).
 
 Set at minimum:
 
@@ -109,9 +130,9 @@ docker compose logs -f
 docker compose down
 ```
 
-### Copy-Paste `docker-compose.yml`
+### Copy-Paste Compose File
 
-If you want to self-host quickly on a server, you can use this `docker-compose.yml` directly:
+If you want to self-host quickly on a server, you can save this as `compose.yaml` and use it directly:
 
 ```yaml
 services:
@@ -210,7 +231,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Migrations run automatically through [`server.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/server.py) when the API starts.
+Migrations run automatically through [`server.py`](server.py) when the API starts.
 
 ### Troubleshooting
 
@@ -237,7 +258,7 @@ The repo includes a local Postgres service inside Docker Compose:
 docker compose up -d postgres
 ```
 
-Default database settings from [`docker-compose.yml`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker-compose.yml):
+Default database settings from [`compose.yaml`](compose.yaml):
 
 - Database: `cpap`
 - Username: `cpap`
@@ -250,7 +271,7 @@ The API currently connects to:
 postgresql+psycopg2://localhost/cpap
 ```
 
-That is defined in [`api/database.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/database.py). If your local database setup differs, update that file or add your own configuration layer.
+That is defined in [`api/database.py`](api/database.py). If your local database setup differs, update that file or add your own configuration layer.
 
 ### 3. Apply schema migrations
 
@@ -316,7 +337,7 @@ Two IANA timezone settings control how session data is interpreted and displayed
 
 Both values must be valid [IANA timezone names](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `America/New_York`, `Europe/London`, `Australia/Sydney`).
 
-Set them in your `.env` file or `docker-compose.yml`:
+Set them in your `.env` file or `compose.yaml`:
 
 ```env
 MACHINE_TZ=America/New_York
@@ -337,10 +358,10 @@ SleepLab uses bearer-token auth.
 
 Relevant files:
 
-- [`api/auth.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/auth.py)
-- [`api/routers/auth.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/routers/auth.py)
-- [`frontend/src/api/client.ts`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/frontend/src/api/client.ts)
-- [`frontend/src/context/AuthContext.tsx`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/frontend/src/context/AuthContext.tsx)
+- [`api/auth.py`](api/auth.py)
+- [`api/routers/auth.py`](api/routers/auth.py)
+- [`frontend/src/api/client.ts`](frontend/src/api/client.ts)
+- [`frontend/src/context/AuthContext.tsx`](frontend/src/context/AuthContext.tsx)
 
 ## Importing Data
 
@@ -448,7 +469,7 @@ Returns the active provider, base URL, model, and whether the backend is reachab
 ### Self-hosted with Ollama
 
 ```yaml
-# docker-compose.yml
+# compose.yaml
 services:
   app:
     environment:
@@ -511,11 +532,11 @@ Before opening a PR, make sure:
 - the frontend builds successfully
 - lint passes for the frontend
 - any README or env changes are documented
-- self-hosting changes are reflected in [`docker-compose.yml`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/docker-compose.yml) and [`.env.selfhost.example`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/.env.selfhost.example) where relevant
+- self-hosting changes are reflected in [`compose.yaml`](compose.yaml) and [`.env.example`](.env.example) where relevant
 
 ## Notes
 
-- The backend reads `DATABASE_URL` from environment and falls back to a local development default in [`api/database.py`](/Users/joshuanissenbaum/Desktop/cpap-dashboard/api/database.py).
+- The backend reads `DATABASE_URL` from environment and falls back to a local development default in [`api/database.py`](api/database.py).
 - The backend uses a fallback development JWT secret if `SECRET_KEY` is not set. Set a real `SECRET_KEY` outside local development.
 
 ## Acknowledgements
