@@ -62,12 +62,14 @@ SleepLab can run as a self-hosted Docker stack with:
 
 The repo ships two compose files plus a dev override:
 
-- [`compose.yaml`](compose.yaml) — minimal, zero-config skeleton. Publishes the
-  web UI on `8080` only. Good for a quick look; not a complete self-host (the
-  browser also needs to reach the API — see below).
+- [`compose.yaml`](compose.yaml) — minimal, zero-config quick start. Publishes
+  the web UI on `8080` and the API on `8000`. Works out of the box for a local
+  trial, but uses hard-coded `cpap:cpap` database credentials and an insecure
+  default `SECRET_KEY`, and reads no `.env` — not for real deployments.
 - [`compose.advanced.yaml`](compose.advanced.yaml) — fully documented,
-  `.env`-driven. Publishes the web UI on `8080` **and** the API on `8000`. This
-  is the recommended self-host file.
+  `.env`-driven, also publishes `8080` and `8000`. Lets you set a real
+  `SECRET_KEY`/`POSTGRES_PASSWORD`, `API_URL` (for remote access), timezones, AI,
+  and more. This is the recommended file for an actual self-host.
 - [`compose.override.yaml`](compose.override.yaml) — a development override that
   **builds the image locally** from the [`Dockerfile`](Dockerfile). Docker
   Compose auto-merges it into a bare `docker compose up`, so to use the
@@ -84,11 +86,13 @@ joshuaaaronmyers/sleeplab:latest
 ```
 
 > **How the frontend reaches the API:** the browser calls the API directly at
-> the `API_URL` baked into `/config.js` (default `http://localhost:8000`); nginx
-> serves only the static UI and does not proxy `/api`. So the API port must be
-> published and reachable from your browser. `compose.advanced.yaml` already
-> publishes `8000`; if you access SleepLab from another device, set `API_URL` to
-> the host's address (e.g. `http://192.168.1.50:8000`).
+> the `API_URL` baked into `/config.js`; nginx serves only the static UI and does
+> not proxy `/api`. So the API port must be published and reachable from your
+> browser — both compose files publish `8000` for this reason. `compose.yaml`
+> leaves `API_URL` at its default (`http://127.0.0.1:8000`), so it works for
+> same-host access only; if you reach SleepLab from another device, use
+> `compose.advanced.yaml` and set `API_URL` to the host's address (e.g.
+> `http://192.168.1.50:8000`).
 
 ### Required Configuration
 
@@ -125,8 +129,8 @@ Recommended (published image, API published on `8000`):
 docker compose -f compose.advanced.yaml up -d
 ```
 
-For a quick zero-config look (web UI only on `8080`, insecure default
-`SECRET_KEY`, API not published):
+For a quick zero-config trial on the same machine (publishes `8080` + `8000`,
+hard-coded DB credentials, insecure default `SECRET_KEY`):
 
 ```bash
 docker compose -f compose.yaml up -d
@@ -230,16 +234,15 @@ Notes:
 ### Default Self-Hosted URLs
 
 - Frontend (web UI): `http://localhost:8080` — published by both compose files.
-- API: `http://localhost:8000` — published by `compose.advanced.yaml` and the
-  copy-paste/`docker run` setups. The minimal `compose.yaml` does **not** publish
-  the API port, so the dashboard's API calls won't work with that file alone.
+- API: `http://localhost:8000` — published by both compose files. The browser
+  calls it directly (see the callout above), so it must stay reachable.
 
 ### What The Compose Stack Does
 
 - starts PostgreSQL (`postgres`) with a named volume
 - runs `joshuaaaronmyers/sleeplab:latest` (`app`), or builds locally when the
   dev override is merged
-- exposes the frontend on `8080` (and the API on `8000` with the advanced file)
+- exposes the frontend on `8080` and the API on `8000`
 - waits for Postgres to become healthy
 - runs migrations automatically at API startup
 

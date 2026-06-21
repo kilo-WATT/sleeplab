@@ -49,17 +49,24 @@ Concrete drift found while preparing beta.1 feedback docs. Most are doc-only.
 - **User Guide import flow updated** to the SD-card-**root** + cpap-parser
   default, with the `SLEEPLAB_USE_CPAP_PARSER=0` legacy fallback and a
   parser-import troubleshooting subsection (§3 below).
+- **`compose.yaml` (minimal) now publishes the API port (`8000`).** Audited
+  against `upstream/main`: the minimal/advanced split and the `8080`-only minimal
+  ports are **inherited from upstream**, not introduced by our branch
+  (`docker/nginx.conf`, `docker/runtime-config.template.js`, `docker/entrypoint.sh`,
+  and `frontend/src/config.ts` are byte-identical to upstream; our only prior
+  `compose.yaml` change added an env var). The frontend reads `API_URL` from
+  `/config.js` and calls the API directly (nginx has no `/api` proxy), so with
+  the minimal file publishing only `8080` the UI loaded but could not reach the
+  API. Proven empirically: minimal `/config.js` → `API_URL: http://127.0.0.1:8000`,
+  advanced → `http://localhost:8000`; the backend's default CORS allow list
+  already includes `http://localhost:8080`/`http://127.0.0.1:8080`. Fix
+  (beta.2, Option B): publish `8000` in `compose.yaml` so the zero-config file
+  actually works on the same host; docs updated to match. Remote/LAN access still
+  needs `compose.advanced.yaml` + `API_URL`. (Same-origin `/api` proxying — Option
+  C — remains a larger, separate change, not needed for beta.2.)
 
 **Still open:**
 
-- **`compose.yaml` (minimal) doesn't publish the API port.** It exposes only
-  `8080`, but the frontend calls the API directly at `API_URL` (default
-  `http://localhost:8000`) since nginx doesn't proxy `/api` — so the minimal file
-  alone yields a UI that can't reach the API. This is a **config/behavior**
-  question, not a docs fix: either publish `8000` in `compose.yaml` (matching
-  `compose.advanced.yaml`) or keep it intentionally UI-only. Decide with the
-  maintainer; the docs currently steer self-hosters to `compose.advanced.yaml`
-  and flag the limitation. Use the `sync-compose-config` workflow if changed.
 - **mkdocs nav.** The `docs/sleeplab_2_*.md` planning/release docs (including the
   beta.1 release notes) are not in [`../mkdocs.yml`](../mkdocs.yml) `nav`. Decide
   which, if any, belong on the published site (at least the release notes).

@@ -32,7 +32,13 @@ services:
       # Recommended/default ResMed path. Set to "0" for the legacy/native fallback.
       SLEEPLAB_USE_CPAP_PARSER: ${SLEEPLAB_USE_CPAP_PARSER:-1}
     ports:
+      # Web UI (nginx).
       - "8080:8080"
+      # API (FastAPI). The browser calls the API directly at API_URL
+      # (default http://127.0.0.1:8000); nginx does not proxy /api, so this port
+      # must be published for the dashboard to load data. The default CORS allow
+      # list already includes http://localhost:8080 and http://127.0.0.1:8080.
+      - "8000:8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
       interval: 30s
