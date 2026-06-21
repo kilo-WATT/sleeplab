@@ -12,7 +12,9 @@ Usage:
 Recommendations:
     SAFE_TO_ATTEMPT_IN_PLACE
     SAFE_BUT_REIMPORT_RECOMMENDED_FOR_CHUNKS
-    BLOCKED_CONFLICTING_1_4_MIGRATIONS
+    BRIDGEABLE_UPSTREAM_1_4_TO_2_0
+    BRIDGED_UPSTREAM_1_4_TO_2_0
+    BLOCKED_UNSUPPORTED_1_4_STATE
     MANUAL_REVIEW_REQUIRED
 
 Exit codes: 0 when a recommendation is produced (including BLOCKED), 2 when the
@@ -31,7 +33,9 @@ import psycopg2
 # Allow ``python scripts/check_2x_upgrade_readiness.py`` to import the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from api.upgrade_bridge import BRIDGE_KIND  # noqa: E402
 from api.upgrade_guard import (  # noqa: E402
+    UPSTREAM_1_4_ADHERENCE_COLUMNS,
     classify_upgrade_state,
     conflicting_migrations,
     foreign_migrations,
@@ -61,6 +65,28 @@ def _applied_migrations(cur) -> set[str]:
     return {row[0] for row in cur.fetchall()}
 
 
+def _bridge_recorded(cur) -> bool:
+    """Return whether a completed upstream 1.4 -> 2.0 bridge marker exists."""
+    if not _table_exists(cur, "schema_compatibility"):
+        return False
+    cur.execute("SELECT 1 FROM schema_compatibility WHERE kind = %s LIMIT 1", (BRIDGE_KIND,))
+    return cur.fetchone() is not None
+
+
+def _adherence_columns_present(cur) -> bool:
+    """Return whether ``user_import_settings`` carries the upstream 1.4 columns."""
+    if not _table_exists(cur, "user_import_settings"):
+        return False
+    cur.execute(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'user_import_settings'
+        """
+    )
+    present = {row[0] for row in cur.fetchall()}
+    return UPSTREAM_1_4_ADHERENCE_COLUMNS.issubset(present)
+
+
 def _exists(count: int | None) -> bool:
     """Return whether a count indicates at least one row."""
     return bool(count)
@@ -86,6 +112,8 @@ def collect_and_report(conn, *, verbose: bool) -> str:
         conflicts = conflicting_migrations(applied)
         local = local_migration_filenames()
         foreign = foreign_migrations(applied, local)
+        already_bridged = _bridge_recorded(cur)
+        adherence_present = _adherence_columns_present(cur)
 
         sessions_count = _count(cur, "sessions")
         events_count = _count(cur, "session_events")
@@ -100,6 +128,7 @@ def collect_and_report(conn, *, verbose: bool) -> str:
         applied,
         has_chunk_waveforms=has_chunk_waveforms,
         has_row_waveforms=has_row_waveforms,
+        bridge_recorded=already_bridged,
         local=local,
     )
 
@@ -110,10 +139,12 @@ def collect_and_report(conn, *, verbose: bool) -> str:
     print("=" * 60)
     line("database reachable:", "yes")
     line("schema_migrations entries:", len(applied) if applied else 0)
-    line("conflicting upstream 1.4 migrations:", _yesno(bool(conflicts)))
+    line("upstream 1.4 migrations present:", _yesno(bool(conflicts)))
+    line("upstream 1.4 adherence columns:", _yesno(adherence_present))
+    line("upstream 1.4 -> 2.0 bridge recorded:", _yesno(already_bridged))
     if verbose and conflicts:
         for name in sorted(conflicts):
-            line("  conflict:", name)
+            line("  upstream 1.4 migration:", name)
     if verbose and foreign:
         line("unrecognized migrations:", len(foreign))
     line("sessions table count:", "absent" if sessions_count is None else sessions_count)

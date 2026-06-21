@@ -4,7 +4,8 @@ from sqlalchemy import text
 
 from api.database import engine
 from api.main import app  # noqa: F401 — imported for uvicorn
-from api.upgrade_guard import evaluate_startup
+from api.upgrade_bridge import bridge_recorded, ensure_compatibility_table, perform_bridge
+from api.upgrade_guard import ACTION_BRIDGE, evaluate_startup
 
 
 def run_migrations() -> None:
@@ -37,18 +38,28 @@ def run_migrations() -> None:
                     )
             conn.commit()
 
-        # Preservation-first guard: stop before applying any 2.0 migration if the
-        # database already recorded upstream 1.4 migrations whose numbers collide
-        # with the 2.0 history. Blocking here keeps an unrecoverable schema mixup
-        # from ever being written. Fresh installs, valid 2.0 betas, and known-safe
-        # 1.3.x databases pass through untouched.
+        # Durable, inspectable record of any 1.x -> 2.x compatibility bridging.
+        ensure_compatibility_table(conn)
+
+        # Preservation-first guard. A clean upstream 1.4 database is reconciled by
+        # the bridge and carried forward; a partial/mixed 1.4 state is stopped
+        # before any migration write. Fresh installs, valid 2.0 betas, known-safe
+        # 1.3.x databases, and already-bridged databases pass through untouched.
         applied_filenames = {
             row[0]
             for row in conn.execute(text("SELECT filename FROM schema_migrations")).all()
         }
-        decision = evaluate_startup(applied_filenames)
+        decision = evaluate_startup(
+            applied_filenames, bridge_recorded=bridge_recorded(conn)
+        )
         if decision.blocked:
             raise RuntimeError(decision.message)
+        if decision.action == ACTION_BRIDGE:
+            # Verifies the live schema and records the bridge marker before the
+            # normal apply loop. Raises a clear error (no write) if unsafe.
+            print("[migrations] bridging upstream 1.4 database to SleepLab 2.0")
+            perform_bridge(conn)
+            print("[migrations] upstream 1.4 -> 2.0 bridge recorded")
 
         for path in sql_files:
             filename = path.name

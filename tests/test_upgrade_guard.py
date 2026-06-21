@@ -1,26 +1,28 @@
-"""Tests for the 1.x -> 2.x upgrade safety guard.
+"""Tests for the 1.x -> 2.x upgrade guard policy (pure, no database).
 
-The classification and block decisions are pure functions, so most of this suite
-runs without a database. Two storage-layer checks (legacy waveform survival and
-row/chunk coexistence) require Postgres and skip cleanly without it, matching the
-rest of the DB-backed suite.
+These cover the bridge-aware startup decision and the readiness classification.
+The decisions are pure functions of the recorded migration filenames plus a few
+boolean facts, so the whole module runs without Postgres. DB-backed runtime
+behavior of the bridge itself lives in ``tests/test_upgrade_bridge.py``.
 """
 
 from __future__ import annotations
 
 import re
-import uuid
 from pathlib import Path
 
-from sqlalchemy import text
-
 from api.upgrade_guard import (
-    BLOCKED_CONFLICTING_1_4_MIGRATIONS,
+    ACTION_BRIDGE,
+    ACTION_NONE,
+    BLOCKED_UNSUPPORTED_1_4_STATE,
+    BRIDGEABLE_UPSTREAM_1_4_TO_2_0,
+    BRIDGED_UPSTREAM_1_4_TO_2_0,
     MANUAL_REVIEW_REQUIRED,
     SAFE_BUT_REIMPORT_RECOMMENDED_FOR_CHUNKS,
     SAFE_TO_ATTEMPT_IN_PLACE,
     UPSTREAM_1_4_CONFLICT_MIGRATIONS,
     classify_upgrade_state,
+    divergent_2_0_migrations,
     evaluate_startup,
     local_migration_filenames,
 )
@@ -47,52 +49,86 @@ def _full_2_0_history() -> set[str]:
 
 
 def _upstream_1_4_history() -> set[str]:
-    """Shared baseline plus the upstream 1.4 adherence migrations (the conflict)."""
+    """Shared baseline plus the upstream 1.4 adherence migrations (clean 1.4 DB)."""
     return _shared_baseline() | set(UPSTREAM_1_4_CONFLICT_MIGRATIONS)
 
 
-# -- Startup block decision -------------------------------------------------
+def _bridged_history() -> set[str]:
+    """A bridged database: upstream 1.4 entries plus the applied 2.0 migrations."""
+    return _full_2_0_history() | set(UPSTREAM_1_4_CONFLICT_MIGRATIONS)
+
+
+# -- Startup decision: non-1.4 databases ------------------------------------
 
 
 def test_fresh_database_is_not_blocked():
-    """A fresh install (nothing recorded yet) must pass through."""
-    assert evaluate_startup(set()).blocked is False
+    """A fresh install (nothing recorded yet) must pass through with no action."""
+    decision = evaluate_startup(set())
+    assert decision.blocked is False
+    assert decision.action == ACTION_NONE
 
 
 def test_valid_2_0_database_is_not_blocked():
-    """A fully-migrated 2.0 database must not be blocked."""
-    assert evaluate_startup(_full_2_0_history()).blocked is False
+    """A fully-migrated 2.0 database must not be blocked and needs no bridge."""
+    decision = evaluate_startup(_full_2_0_history())
+    assert decision.blocked is False
+    assert decision.action == ACTION_NONE
 
 
 def test_known_safe_legacy_database_is_not_blocked():
     """A known-safe 1.3.x-style database (shared baseline only) is not blocked."""
-    assert evaluate_startup(_shared_baseline()).blocked is False
+    decision = evaluate_startup(_shared_baseline())
+    assert decision.blocked is False
+    assert decision.action == ACTION_NONE
 
 
-def test_conflicting_upstream_1_4_database_is_blocked():
-    """An upstream 1.4 database (collision migrations recorded) is blocked."""
+# -- Startup decision: upstream 1.4 ------------------------------------------
+
+
+def test_clean_upstream_1_4_is_bridgeable_not_blocked():
+    """A clean upstream 1.4 database is bridged, not blocked."""
     decision = evaluate_startup(_upstream_1_4_history())
-    assert decision.blocked is True
+    assert decision.blocked is False
+    assert decision.action == ACTION_BRIDGE
+    assert decision.state == BRIDGEABLE_UPSTREAM_1_4_TO_2_0
     assert sorted(UPSTREAM_1_4_CONFLICT_MIGRATIONS) == decision.conflicts
 
 
+def test_already_bridged_upstream_1_4_is_not_blocked_and_needs_no_action():
+    """Once bridged, the database proceeds normally with no further bridge step."""
+    decision = evaluate_startup(_bridged_history(), bridge_recorded=True)
+    assert decision.blocked is False
+    assert decision.action == ACTION_NONE
+    assert decision.state == BRIDGED_UPSTREAM_1_4_TO_2_0
+
+
+def test_partial_upstream_1_4_is_blocked():
+    """Only one of the two adherence migrations recorded -> unsafe, blocked."""
+    applied = _shared_baseline() | {"022_add_adherence_settings.sql"}
+    decision = evaluate_startup(applied)
+    assert decision.blocked is True
+    assert decision.state == BLOCKED_UNSUPPORTED_1_4_STATE
+
+
+def test_mixed_upstream_1_4_without_bridge_is_blocked():
+    """Upstream 1.4 entries plus 2.0-divergent migrations, with no recorded bridge."""
+    one_divergent = sorted(divergent_2_0_migrations())[0]
+    applied = _upstream_1_4_history() | {one_divergent}
+    decision = evaluate_startup(applied, bridge_recorded=False)
+    assert decision.blocked is True
+    assert decision.state == BLOCKED_UNSUPPORTED_1_4_STATE
+
+
 def test_block_message_is_clear_and_actionable():
-    """The block message names the conflict, warns against data loss, and guides recovery."""
-    message = evaluate_startup(_upstream_1_4_history()).message
+    """The unsupported-state message guides backup, readiness, and recovery."""
+    applied = _shared_baseline() | {"022_add_adherence_settings.sql"}
+    message = evaluate_startup(applied).message
     assert "blocked" in message.lower()
     assert "022_add_adherence_settings.sql" in message
-    assert "023_add_adherence_enabled.sql" in message
     assert "pg_dump" in message
     assert "check_2x_upgrade_readiness.py" in message
-    # No data has been touched, and the user is warned off destructive resets.
     assert "No data has been modified" in message
     assert "back" in message.lower()
-
-
-def test_single_conflict_entry_still_blocks():
-    """Even one upstream 1.4 conflict migration is enough to block."""
-    applied = _shared_baseline() | {"022_add_adherence_settings.sql"}
-    assert evaluate_startup(applied).blocked is True
 
 
 # -- Readiness classification -----------------------------------------------
@@ -124,34 +160,56 @@ def test_classify_legacy_rows_only_recommends_reimport():
     )
 
 
-def test_classify_conflict_is_blocked():
+def test_classify_clean_upstream_1_4_is_bridgeable():
     assert (
         classify_upgrade_state(
             _upstream_1_4_history(), has_chunk_waveforms=False, has_row_waveforms=True
         )
-        == BLOCKED_CONFLICTING_1_4_MIGRATIONS
+        == BRIDGEABLE_UPSTREAM_1_4_TO_2_0
+    )
+
+
+def test_classify_bridged_upstream_1_4():
+    assert (
+        classify_upgrade_state(
+            _bridged_history(),
+            has_chunk_waveforms=False,
+            has_row_waveforms=True,
+            bridge_recorded=True,
+        )
+        == BRIDGED_UPSTREAM_1_4_TO_2_0
+    )
+
+
+def test_classify_partial_1_4_is_blocked_unsupported():
+    applied = _shared_baseline() | {"023_add_adherence_enabled.sql"}
+    assert (
+        classify_upgrade_state(
+            applied, has_chunk_waveforms=False, has_row_waveforms=False
+        )
+        == BLOCKED_UNSUPPORTED_1_4_STATE
+    )
+
+
+def test_classify_mixed_1_4_without_bridge_is_blocked_unsupported():
+    one_divergent = sorted(divergent_2_0_migrations())[0]
+    applied = _upstream_1_4_history() | {one_divergent}
+    assert (
+        classify_upgrade_state(
+            applied, has_chunk_waveforms=False, has_row_waveforms=False
+        )
+        == BLOCKED_UNSUPPORTED_1_4_STATE
     )
 
 
 def test_classify_unknown_migration_requires_manual_review():
-    """An unrecognized migration filename (not ours, not a known conflict) -> manual review."""
+    """An unrecognized filename (not ours, not a known 1.4 migration) -> manual review."""
     applied = _shared_baseline() | {"099_some_unknown_fork_migration.sql"}
     assert (
         classify_upgrade_state(
             applied, has_chunk_waveforms=False, has_row_waveforms=False
         )
         == MANUAL_REVIEW_REQUIRED
-    )
-
-
-def test_conflict_takes_precedence_over_unknown():
-    """A conflict outranks an unknown migration in the classification."""
-    applied = _upstream_1_4_history() | {"099_some_unknown_fork_migration.sql"}
-    assert (
-        classify_upgrade_state(
-            applied, has_chunk_waveforms=False, has_row_waveforms=False
-        )
-        == BLOCKED_CONFLICTING_1_4_MIGRATIONS
     )
 
 
@@ -182,71 +240,3 @@ def test_no_upgrade_migration_destroys_legacy_session_waveform():
         if destructive.search(path.read_text(encoding="utf-8")):
             offenders.append(path.name)
     assert offenders == [], f"destructive session_waveform statements in: {offenders}"
-
-
-# -- Storage-layer coexistence (requires Postgres) --------------------------
-
-
-def _seed_session(db, user_id: str, session_key: str) -> str:
-    """Insert one session and return its internal UUID id."""
-    return db.execute(
-        text("""
-            INSERT INTO sessions (
-                session_id, folder_date, start_datetime, pld_start_datetime,
-                duration_seconds, device_serial, manufacturer, user_id,
-                provenance_status
-            ) VALUES (
-                :session_id, DATE '2026-06-01', NOW(), NOW(), 3600,
-                'GUARD-COEXIST', 'ResMed', CAST(:uid AS uuid), 'legacy_backfilled'
-            )
-            RETURNING id::text
-        """),
-        {"session_id": session_key, "uid": user_id},
-    ).scalar_one()
-
-
-def test_legacy_and_chunk_waveforms_coexist(db, test_user):
-    """A session may carry both legacy row-backed and new chunk-backed waveforms.
-
-    This exercises the storage invariant the Event Inspector fallback relies on:
-    old ``session_waveform`` rows and new ``waveform_chunks`` rows for the same
-    session can be stored and read independently without conflict.
-    """
-    session_id = _seed_session(db, test_user["id"], f"coexist-{uuid.uuid4().hex[:8]}")
-
-    db.execute(
-        text("""
-            INSERT INTO session_waveform (session_id, ts, flow, pressure)
-            VALUES (CAST(:sid AS uuid), NOW(), 12.3456, 9.87)
-        """),
-        {"sid": session_id},
-    )
-    db.execute(
-        text("""
-            INSERT INTO waveform_chunks (
-                session_id, signal_name, unit, sample_rate_hz,
-                start_time, end_time, chunk_index, sample_count,
-                encoding, payload, uncompressed_bytes, compressed_bytes,
-                adapter_id
-            ) VALUES (
-                CAST(:sid AS uuid), 'flow_rate', 'L/min', 25.0,
-                NOW(), NOW() + INTERVAL '1 second', 0, 25,
-                'float32-le-zlib-v1', :payload, 100, 40,
-                'resmed-native-v2'
-            )
-        """),
-        {"sid": session_id, "payload": b"\x00\x01\x02\x03"},
-    )
-    db.commit()
-
-    row_count = db.execute(
-        text("SELECT COUNT(*) FROM session_waveform WHERE session_id = CAST(:sid AS uuid)"),
-        {"sid": session_id},
-    ).scalar_one()
-    chunk_count = db.execute(
-        text("SELECT COUNT(*) FROM waveform_chunks WHERE session_id = CAST(:sid AS uuid)"),
-        {"sid": session_id},
-    ).scalar_one()
-
-    assert row_count == 1
-    assert chunk_count == 1

@@ -7,7 +7,8 @@ have a backup — some history lives only in the database and cannot be rebuilt
 from the SD card.
 
 This guide covers the supported upgrade paths, what is preserved, what stays
-legacy-backed, when a reimport helps, and the one upstream history that is
+legacy-backed, when a reimport helps, the **upstream 1.4 → 2.0 bridge** that lets
+Josh's 1.4.x users upgrade in place, and the upstream states that remain
 **blocked on purpose**.
 
 ---
@@ -48,7 +49,9 @@ It prints, among other fields, a `RECOMMENDATION:` line that is one of:
 | --- | --- |
 | `SAFE_TO_ATTEMPT_IN_PLACE` | History is recognized; start 2.0 normally. |
 | `SAFE_BUT_REIMPORT_RECOMMENDED_FOR_CHUNKS` | Safe in-place, but your waveforms are still legacy row-backed; reimport from the SD card to enrich them (see §6). |
-| `BLOCKED_CONFLICTING_1_4_MIGRATIONS` | An upstream 1.4 history was detected that collides with 2.0; see §7. |
+| `BRIDGEABLE_UPSTREAM_1_4_TO_2_0` | A clean upstream 1.4 database. The 1.4 → 2.0 bridge will reconcile it automatically on the next start; see §7. |
+| `BRIDGED_UPSTREAM_1_4_TO_2_0` | An upstream 1.4 database that has already been bridged and is now on the 2.0 line; see §7. |
+| `BLOCKED_UNSUPPORTED_1_4_STATE` | A partial or mixed upstream 1.4 history the bridge cannot safely handle; blocked before any write; see §7–§8. |
 | `MANUAL_REVIEW_REQUIRED` | An unrecognized migration history was found; ask before upgrading. |
 
 ---
@@ -57,13 +60,18 @@ It prints, among other fields, a `RECOMMENDATION:` line that is one of:
 
 1. Take the `pg_dump` backup (§1).
 2. Run the readiness check (§2).
-3. If the recommendation is `SAFE_TO_ATTEMPT_IN_PLACE` or
-   `SAFE_BUT_REIMPORT_RECOMMENDED_FOR_CHUNKS`, start SleepLab 2.0 against the
-   **same** database. Migrations apply automatically and additively.
+3. If the recommendation is `SAFE_TO_ATTEMPT_IN_PLACE`,
+   `SAFE_BUT_REIMPORT_RECOMMENDED_FOR_CHUNKS`, or
+   `BRIDGEABLE_UPSTREAM_1_4_TO_2_0`, start SleepLab 2.0 against the **same**
+   database. Migrations apply automatically and additively; an upstream 1.4
+   database is bridged first (see §7).
 4. Verify your old nights still load, then (optionally) reimport from the SD card
    to enrich waveforms (§6).
 
 Keep the backup until you have confirmed everything you care about is present.
+A fresh database + reimport is an *optional* convenience, never the only
+preservation path — the in-place upgrade (including the 1.4 bridge) keeps your
+database-only history.
 
 ---
 
@@ -80,7 +88,11 @@ On startup the migration runner:
 
 - creates `schema_migrations` if missing and adopts an existing pre-tracking
   schema by marking the baseline migrations as already applied;
-- runs an **upgrade safety guard** *before* applying any 2.0 migration (see §7);
+- ensures a durable `schema_compatibility` table that records any 1.x → 2.x
+  bridging applied to the database;
+- runs an **upgrade safety guard** *before* applying any 2.0 migration. A clean
+  upstream 1.4 database is reconciled by the **bridge** (see §7); a partial/mixed
+  1.4 state is blocked before any write;
 - applies migrations `022`–`032` additively (new tables and columns; backfill of
   legacy sessions into the new CPAP data model). No existing session, event,
   metric, note, tag, or waveform row is deleted.
@@ -131,39 +143,70 @@ why the backup in §1 matters.
 
 ---
 
-## 7. Blocked: conflicting upstream 1.4 history
+## 7. The upstream 1.4 → 2.0 bridge
 
 The upstream 1.4.x line (`joshuamyers-dev/main`) and the SleepLab 2.0 line share
 an identical migration baseline through `021_add_session_manufacturer`, then
 **reuse the same migration numbers for different changes**:
 
 - upstream 1.4: `022_add_adherence_settings`, `023_add_adherence_enabled`
+  (these only add nullable `adherence_*` columns to `user_import_settings`)
 - SleepLab 2.0: `022_add_session_leak_semantics` … `032_add_import_result_summary`
+  (leak semantics, the CPAP data foundation, `waveform_chunks`, and more)
 
-Because migrations are tracked by filename, a database that already recorded the
-upstream 022/023 files would otherwise have 2.0's own 022/023+ layered on top of
-a schema the runner never modeled — an unrecoverable mixup.
+Migrations are tracked by filename, so the two 022/023 entries collide *by name*.
+But the actual schema changes are **orthogonal**: upstream 1.4 only touches
+adherence columns on `user_import_settings`, while 2.0 only adds new tables and
+columns elsewhere. SleepLab 2.0's own adherence analytics use a fixed policy and
+never read those upstream columns, so they are simply preserved.
 
-To prevent this, **SleepLab 2.0 refuses to start** when it detects those upstream
-1.4 migrations and stops *before changing anything*. You will see a message
-naming the conflicting migrations and pointing here. **No data is modified.**
+### How the bridge works
 
-This is the `BLOCKED_CONFLICTING_1_4_MIGRATIONS` state. Direct upgrade from
-upstream 1.4 is **not supported** in this release. If you are in this state:
+When SleepLab 2.0 starts against a **clean upstream 1.4 database** — both
+adherence migrations recorded, the matching adherence columns actually present,
+and nothing else divergent — it:
 
-1. Take a backup (§1) if you have not already.
-2. Do **not** attempt to hand-edit `schema_migrations` to bypass the guard.
-3. Open an issue with the readiness output (run with `--verbose` to include the
-   conflicting migration names) so a supported migration can be planned.
+1. **Verifies the live schema** matches the expected upstream 1.4 shape (baseline
+   tables present, `user_import_settings` adherence columns present). If it does
+   not, it stops before writing (see below).
+2. **Records a bridge marker** in the durable `schema_compatibility` table,
+   documenting the upstream migrations it recognized and the adherence columns it
+   preserved. It does **not** fake any 2.0 migration it has not run.
+3. **Continues the normal 2.0 migration path**, applying `022`–`032` additively on
+   top. Your upstream 1.4 adherence settings/toggles, sessions, events, metrics,
+   notes/tags, machines, import history, and old `session_waveform` rows are all
+   preserved.
+
+The readiness script reports `BRIDGEABLE_UPSTREAM_1_4_TO_2_0` before the bridge
+runs and `BRIDGED_UPSTREAM_1_4_TO_2_0` afterward. The bridge is idempotent — once
+recorded, later starts skip it and simply continue.
+
+After bridging, your waveforms are still legacy row-backed (`session_waveform`).
+They remain fully readable; reimport from the SD card (see §6) optionally enriches
+them with `waveform_chunks`.
+
+### Blocked: unsupported 1.4 states
+
+The bridge only handles a *clean* upstream 1.4 database. It refuses, **before any
+write**, when the history is:
+
+- **partial** — only one of the two adherence migrations recorded; or
+- **mixed** — the adherence migrations plus 2.0-divergent or unrecognized
+  migrations, with no recorded bridge; or
+- **schema-mismatched** — the adherence migrations are recorded but the expected
+  adherence columns are not actually present.
+
+These surface as `BLOCKED_UNSUPPORTED_1_4_STATE`, and startup stops with a clear
+message naming what was found. **No data is modified.**
 
 ---
 
 ## 8. Recovering if startup is blocked
 
-If 2.0 stops at startup with the conflict message:
+If 2.0 stops at startup with a `BLOCKED_UNSUPPORTED_1_4_STATE` message:
 
-- **Nothing was changed** — the guard runs before any migration is applied, so
-  your database is exactly as it was.
+- **Nothing was changed** — the guard and the bridge both run before any migration
+  is applied, so your database is exactly as it was.
 - Make sure you have the `pg_dump` backup from §1.
 - Run the readiness check for a summary you can share:
 
@@ -171,10 +214,12 @@ If 2.0 stops at startup with the conflict message:
   DATABASE_URL="$DATABASE_URL" python scripts/check_2x_upgrade_readiness.py --verbose
   ```
 
-- Stay on your current SleepLab version until a supported path is available.
-  Re-pointing 2.0 at a **fresh** database will start cleanly, but **do not delete
-  your old volume** — keep it (and the backup) so the historical data can be
-  migrated later.
+- Do **not** hand-edit `schema_migrations` or `schema_compatibility` to bypass the
+  guard.
+- Stay on your current SleepLab version and open an issue with the readiness
+  output so a supported migration can be planned. Re-pointing 2.0 at a **fresh**
+  database will start cleanly, but **do not delete your old volume** — keep it
+  (and the backup) so the historical data can be migrated later.
 
 ---
 
