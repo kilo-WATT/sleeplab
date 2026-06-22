@@ -130,8 +130,24 @@ data instead.
   `waveform_chunks`.
 - **The two coexist safely.** A session can hold both legacy rows and new chunks;
   they are stored and read independently.
-- **Reimport enriches, but only for nights still on the card.** Reimporting from
-  the SD card adds chunk-backed waveforms (and full-night flow) for those nights.
+- **Reimport adds chunk-backed data, for nights still on the card.** Reimporting
+  from the SD card writes `waveform_chunks` (and full-night flow) for those nights.
+
+### Known limitation: reimport does not merge into a legacy/bridged night
+
+A parser reimport resolves its device as a **new** `cpap_machines` row
+(`resmed-native-v2:serial:…`), which is distinct from the synthetic
+`legacy-session-v1` machine the 1.x backfill (and the 1.4 bridge) records. Because
+sessions dedupe on `(machine_id, source_session_key)`, a reimported night lands on
+a **new parser session under that new machine** rather than enriching the existing
+`legacy_backfilled` session in place. Both are preserved — nothing is deleted or
+destructively duplicated, the parser write is idempotent on its own machine, and
+legacy row-backed and parser chunk-backed waveforms coexist — but the night may
+appear under **two machines** (legacy + parser) until a future merge step
+reconciles them. If you want a single clean parser-owned history for a device,
+reimport the nights that are still on the card; the legacy sessions remain
+available for the older nights that are not. This behavior is locked in by
+`tests/test_bridge_reimport_enrichment.py`.
 
 ### Why reimport alone is not enough
 
