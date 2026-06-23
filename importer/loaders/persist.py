@@ -142,6 +142,7 @@ def persist_import_run(
     # persisting, keeping ``import importer.loaders`` cheap for detection-only
     # and test contexts.
     from importer.db import (
+        canonicalize_legacy_resmed_machine,
         replace_derived_values,
         replace_session_events,
         source_file_id,
@@ -151,6 +152,17 @@ def persist_import_run(
     )
 
     from .incremental import detailed_dates
+
+    # Fold any migration-023 legacy ResMed machine for this serial into the modern
+    # machine *before* the session loop, so the per-night legacy backfill rows are
+    # on this machine and ``upsert_session`` can enrich them in place instead of
+    # creating duplicate-looking nights. No-op when there is no legacy machine.
+    canonicalize_legacy_resmed_machine(
+        db_conn,
+        user_id=user_id,
+        serial_number=run.machine.serial_number,
+        modern_machine_id=machine_id,
+    )
 
     machine_tz_name, machine_tz = _resolve_machine_tz(db_conn, user_id)
 

@@ -3,6 +3,7 @@ PostgreSQL connection and upsert helpers for the CPAP importer.
 """
 
 import json
+import logging
 import os
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -10,6 +11,14 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
+
+logger = logging.getLogger(__name__)
+
+#: Adapter ids of the synthetic machine that migration 023 backfills 1.x history
+#: under, and the modern ResMed native/parser adapters whose imports should
+#: reconcile with it for the same user + serial.
+_LEGACY_ADAPTER_ID = "legacy-session-v1"
+_MODERN_RESMED_ADAPTERS = frozenset({"resmed-native-v2", "resmed-cpap-parser-v1"})
 
 
 def _load_dotenv() -> None:
@@ -75,7 +84,101 @@ def reconcile_machine(
             """,
             (user_id, manufacturer, serial, adapter_id, identity_key, "probable" if serial else "none"),
         )
-        return str(cur.fetchone()[0])
+        machine_id = str(cur.fetchone()[0])
+
+    # A modern ResMed import for a serial that still carries a migration-023
+    # legacy backfill machine represents the *same physical device*; fold the
+    # legacy machine's history into this one so the device is not duplicated.
+    if adapter_id in _MODERN_RESMED_ADAPTERS and serial:
+        canonicalize_legacy_resmed_machine(
+            conn,
+            user_id=user_id,
+            serial_number=serial,
+            modern_machine_id=machine_id,
+        )
+    return machine_id
+
+
+def canonicalize_legacy_resmed_machine(
+    conn: Any,
+    *,
+    user_id: str,
+    serial_number: str | None,
+    modern_machine_id: str,
+) -> int:
+    """Fold a migration-023 legacy ResMed machine into the modern machine.
+
+    After a 1.x -> 2.0 upgrade, migration 023 files historical sessions under a
+    synthetic ``legacy-session-v1:serial:X`` machine. When a parser/native ResMed
+    import later resolves the modern ``resmed-native-v2``/``resmed-cpap-parser-v1``
+    machine for the same user + serial, the two rows describe one physical device.
+    This re-points every legacy session — and its settings/derived/import-run links,
+    all keyed on ``machine_id`` — onto the modern machine and retires the now-empty
+    legacy machine row, so the device stops looking duplicated in the UI.
+
+    Conservative by construction:
+
+    * matches on user + serial (case-insensitive) and only the
+      ``legacy-session-v1`` adapter, so it never touches a parser machine;
+    * requires a ResMed-compatible legacy manufacturer (``NULL`` is treated as
+      ResMed, matching the migration-023 backfill), so a different vendor that
+      happens to share a serial is never folded in;
+    * re-points child rows *before* deleting the legacy machine, so no
+      ``ON DELETE`` rule (SET NULL on sessions/derived/runs, CASCADE on settings)
+      can orphan or drop preserved data.
+
+    Returns the number of sessions re-pointed (0 when there is nothing to do). The
+    caller owns the transaction.
+    """
+    serial = serial_number.strip() if serial_number and serial_number.strip() else None
+    if not serial:
+        return 0
+
+    repointed = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id FROM cpap_machines
+            WHERE user_id = CAST(%s AS uuid)
+              AND adapter_id = %s
+              AND id <> CAST(%s AS uuid)
+              AND LOWER(BTRIM(serial_number)) = LOWER(BTRIM(%s))
+              AND COALESCE(NULLIF(BTRIM(manufacturer), ''), 'ResMed') ILIKE 'ResMed'
+            """,
+            (user_id, _LEGACY_ADAPTER_ID, modern_machine_id, serial),
+        )
+        legacy_ids = [row[0] for row in cur.fetchall()]
+        for legacy_id in legacy_ids:
+            # Re-point every machine_id reference before retiring the row. Order
+            # is irrelevant; the legacy delete happens only once all are moved.
+            cur.execute(
+                "UPDATE settings_snapshots SET machine_id = CAST(%s AS uuid) WHERE machine_id = %s",
+                (modern_machine_id, legacy_id),
+            )
+            cur.execute(
+                "UPDATE derived_values SET machine_id = CAST(%s AS uuid) WHERE machine_id = %s",
+                (modern_machine_id, legacy_id),
+            )
+            cur.execute(
+                "UPDATE import_runs SET machine_id = CAST(%s AS uuid) WHERE machine_id = %s",
+                (modern_machine_id, legacy_id),
+            )
+            cur.execute(
+                "UPDATE sessions SET machine_id = CAST(%s AS uuid) WHERE machine_id = %s",
+                (modern_machine_id, legacy_id),
+            )
+            moved = cur.rowcount
+            repointed += moved
+            cur.execute("DELETE FROM cpap_machines WHERE id = %s", (legacy_id,))
+            logger.info(
+                "Reconciled legacy ResMed machine %s into %s (serial %s): "
+                "%d sessions re-pointed.",
+                legacy_id,
+                modern_machine_id,
+                serial,
+                moved,
+            )
+    return repointed
 
 
 def finish_import_run(
@@ -365,6 +468,9 @@ def upsert_session(conn: Any, data: dict) -> int:
     # p95_leak is only computed by the cpap-parser path; older/legacy callers
     # omit it, so default it here rather than requiring every caller to supply it.
     data.setdefault("p95_leak", None)
+    # Enrich (don't duplicate) a matching legacy-backfilled night: rekey it to the
+    # incoming source key so the ON CONFLICT below updates that row in place.
+    _reconcile_legacy_session_key(conn, data)
     sql = """
     INSERT INTO sessions (
         session_id, folder_date, block_index, start_datetime, pld_start_datetime,
@@ -430,6 +536,93 @@ def upsert_session(conn: Any, data: dict) -> int:
     with conn.cursor() as cur:
         cur.execute(sql, data)
         return cur.fetchone()[0]
+
+
+def _reconcile_legacy_session_key(conn: Any, data: dict) -> None:
+    """Fold a parser/native ResMed write onto a matching legacy-backfilled night.
+
+    When a parser/native ResMed import writes a night that already exists as a
+    single migration-023 ``legacy_*`` session on the *same machine and folder
+    date*, rekey that legacy row's ``source_session_key`` to the incoming one so
+    the caller's ``ON CONFLICT (machine_id, source_session_key)`` updates it in
+    place. The night is enriched rather than duplicated, and the existing row's
+    id is preserved — so its row-backed ``session_waveform`` samples, events,
+    notes and tags survive while the parser's summary/provenance/chunks attach to
+    the same session.
+
+    Deliberately conservative — leaves both rows untouched unless the match is
+    unambiguous:
+
+    * the incoming write is parser/native ResMed (``provenance_status`` starts
+      with ``native_resmed``); other callers are never reconciled;
+    * exactly one existing ``legacy_*`` session shares the machine and folder
+      date — several block-fragment legacy rows for the night are ambiguous and
+      kept separate;
+    * the incoming key is not already present on the machine, so a prior parser
+      session is never clobbered (its night stays as-is).
+
+    Machine identity already encodes user + serial, so "same machine" means same
+    user and same device. The caller owns the transaction.
+    """
+    provenance = str(data.get("provenance_status") or "")
+    machine_id = data.get("machine_id")
+    source_key = data.get("source_session_key")
+    folder_date = data.get("folder_date")
+    if not (machine_id and source_key and folder_date):
+        return
+    if not provenance.startswith("native_resmed"):
+        return
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, source_session_key FROM sessions
+            WHERE machine_id = %s AND folder_date = %s
+              AND provenance_status LIKE 'legacy%%'
+            """,
+            (machine_id, folder_date),
+        )
+        candidates = cur.fetchall()
+        if len(candidates) != 1:
+            if len(candidates) > 1:
+                logger.info(
+                    "Skipping legacy session reconciliation for machine %s night %s: "
+                    "%d ambiguous legacy sessions kept separate.",
+                    machine_id,
+                    folder_date,
+                    len(candidates),
+                )
+            return
+        legacy_id, legacy_key = candidates[0]
+        if legacy_key == source_key:
+            return  # already the same row; the upsert updates it in place.
+
+        # Never rekey onto a key that already exists for this machine — that would
+        # collide with (and would otherwise clobber) an existing parser session.
+        cur.execute(
+            "SELECT 1 FROM sessions WHERE machine_id = %s AND source_session_key = %s",
+            (machine_id, source_key),
+        )
+        if cur.fetchone() is not None:
+            logger.info(
+                "Skipping legacy session reconciliation for machine %s night %s: "
+                "a parser session already exists for that key; kept separate.",
+                machine_id,
+                folder_date,
+            )
+            return
+
+        cur.execute(
+            "UPDATE sessions SET source_session_key = %s WHERE id = %s",
+            (source_key, legacy_id),
+        )
+        logger.info(
+            "Reconciled legacy session %s into parser key %s on machine %s (night %s).",
+            legacy_id,
+            source_key,
+            machine_id,
+            folder_date,
+        )
 
 
 def replace_session_events(

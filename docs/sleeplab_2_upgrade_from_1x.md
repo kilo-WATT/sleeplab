@@ -133,20 +133,35 @@ data instead.
 - **Reimport adds chunk-backed data, for nights still on the card.** Reimporting
   from the SD card writes `waveform_chunks` (and full-night flow) for those nights.
 
-### Known limitation: reimport does not merge into a legacy/bridged night
+### Reimport reconciles matching legacy/bridged nights
 
-A parser reimport resolves its device as a **new** `cpap_machines` row
-(`resmed-native-v2:serial:…`), which is distinct from the synthetic
-`legacy-session-v1` machine the 1.x backfill (and the 1.4 bridge) records. Because
-sessions dedupe on `(machine_id, source_session_key)`, a reimported night lands on
-a **new parser session under that new machine** rather than enriching the existing
-`legacy_backfilled` session in place. Both are preserved — nothing is deleted or
-destructively duplicated, the parser write is idempotent on its own machine, and
-legacy row-backed and parser chunk-backed waveforms coexist — but the night may
-appear under **two machines** (legacy + parser) until a future merge step
-reconciles them. If you want a single clean parser-owned history for a device,
-reimport the nights that are still on the card; the legacy sessions remain
-available for the older nights that are not. This behavior is locked in by
+When you reimport an SD card for a device that already has 1.x/bridged history,
+SleepLab 2.0 now **reconciles** the legacy data into the modern device instead of
+leaving a duplicate:
+
+- **Machine reconciliation.** The 1.x backfill (and the 1.4 bridge) files history
+  under a synthetic `legacy-session-v1:serial:…` machine. A parser/native ResMed
+  import for the **same serial** folds that legacy machine into the modern
+  `resmed-native-v2:serial:…` machine — its sessions, settings, and import-run
+  links are re-pointed and the empty legacy machine row is retired, so the device
+  stops appearing twice.
+- **Session reconciliation.** When a reimported night matches a single
+  `legacy_backfilled` night on that device (same machine, same date), the parser
+  write **enriches that existing session in place** rather than creating a second
+  one. The original session keeps its id, so its row-backed `session_waveform`
+  samples, notes, and tags survive while the parser's summary, provenance, and
+  `waveform_chunks` attach to the same night. Legacy row-backed and parser
+  chunk-backed waveforms coexist on the one session.
+- **Reimport stays idempotent.** Running the same import again updates the session
+  in place — no duplicate session, no duplicate chunks.
+
+**Ambiguous matches are preserved, never destructively merged.** Nights are only
+merged when the evidence is unambiguous — same user, same ResMed serial/device,
+and the same night with exactly one legacy candidate. A different serial, several
+legacy block-fragments for one night, or a night that already has its own parser
+session are all left as separate rows (nothing is deleted), and the skip is
+logged. Database-only nights with no card data simply stay legacy-backed and
+fully readable. This behavior is locked in by
 `tests/test_bridge_reimport_enrichment.py`.
 
 ### Why reimport alone is not enough
